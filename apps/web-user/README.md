@@ -28,11 +28,11 @@
 - 服务台上传区按用途区分通用附件与 ICP 材料，并支持移除已暂存文件，避免工单/退款附件误进入备案表单
 - 类型化 API client 与服务层占位（auth/chat/billing/service-desk/research/marketing/user/files/citations）
 - live 写接口统一补齐稳定 `X-Request-Id`，并为会话/聊天/任务/附件等重复点击风险路径生成确定性 `Idempotency-Key`
-- 默认 mock 数据，便于在后端未完成前联调 UI
+- 默认走 live API；mock 仅作为显式开发 / 测试开关保留
 - 个人中心页面，覆盖资料更新、密码修改与权限展示
 - 修改密码成功后会强制退出并回到登录页，且 mock 模式也会真实更新本地密码基线，符合 spec `20.15.1`
 - 引用详情抽屉，可从聊天消息直接查看 citation 片段
-- live 模式下的本地任务跟踪，用于补足研究/海报历史列表尚未落地时的可用性
+- live 模式下优先读取研究/海报真实历史列表；本地任务跟踪仅在列表暂不可用或存在短暂一致性缺口时做补回
 - 研究报告文件预览入口，可根据 `report_file_id` 拉取导出文件信息
 - Docker + Nginx 容器化基线，可直接构建 SPA 发布镜像
 - 容器启动时自动生成 `runtime-config.js`，支持在不重新构建镜像的情况下覆盖 API 地址、标题、版本、mock 开关与超时配置
@@ -54,24 +54,32 @@ cd apps/web-user
 npm run test:e2e
 ```
 
+默认每次都会重新拉起本地 mock API 和 Vite dev server，避免修改代码后误复用旧进程造成假失败；仅在你明确需要复用现有服务时再手动加上：
+
+```bash
+PLAYWRIGHT_REUSE_SERVER=1 npm run test:e2e
+```
+
 当前已真实浏览器验证的主链路：
 - 登录并进入用户工作台总览
 - 找回密码 challenge + 重置密码，并使用新密码重新登录
+- 聊天重试上一轮，并把会话上下文 / trace 预填到协助工单草稿
 - 聊天发起、SSE 一次中断后的自动重连、引用详情打开
 - 引用详情 `403` 权限错误展示
 - 账单页一次性 `401` 后静默刷新恢复
 - 营销页权限拒绝 UX 与 `429` 结构化 API 错误展示
-- 营销文案生成、海报任务创建、研究任务创建
+- 营销文案生成、海报任务创建、研究任务创建，并在清空浏览器任务注册表后仍可从 live 历史列表重新读回
+- `/runtime-config.js` 覆盖标题、版本、API 基址与 SSE 心跳后，登录页和应用壳会按运行时配置渲染
 - `/orders` 订单详情抽屉、退款申请与刷新后的退款时间线可见性
 - `/profile` 资料更新、密码修改、强制重新登录
+- 研究任务完成、报告文件预览，以及报告文件 `404` 错误展示
 - `/sessions` 重命名 / 归档 / 恢复 / 删除
 - 工单创建
 - `/service-desk` 综合工作台的附件分流、工单创建、ICP 预检与提交联动
 - ICP 上传登记、材料预检查、提交备案申请
 
 当前仍属 baseline-only、尚未进入 Playwright 覆盖的 owned 能力：
-- 研究报告文件预览
-- runtime-config 容器覆盖路径
+- Docker / Nginx entrypoint 生成 `runtime-config.js` 的容器内注入路径
 
 ## 容器构建
 因为 `tsconfig.json` 依赖仓库根目录的 `tsconfig.base.json`，Docker 构建需要使用仓库根目录作为 build context。
@@ -118,7 +126,7 @@ docker run --rm -p 38080:80 \
 | `VITE_APP_TITLE` | `SmartCloud-X User Console` | 页面标题与侧栏品牌 |
 | `VITE_APP_VERSION` | `0.1.0` | 页面展示版本号，并透传到 `X-Client-Version` 请求头 |
 | `VITE_API_BASE_URL` | `http://localhost:8000` | 网关地址 |
-| `VITE_USE_MOCK_API` | `true` | 是否启用本地 mock 数据与流式模拟 |
+| `VITE_USE_MOCK_API` | `false` | 是否启用本地 mock 数据与流式模拟；默认关闭，需显式打开 |
 | `VITE_REQUEST_TIMEOUT_MS` | `30000` | JSON API 超时 |
 | `VITE_SSE_HEARTBEAT_SECONDS` | `15` | 与主规范一致的 SSE 心跳间隔 |
 
@@ -164,8 +172,8 @@ tests/
 ```
 
 ## 联调说明
-- 默认 `mock` 模式可直接演示用户流。
-- 关闭 `VITE_USE_MOCK_API` 后，服务层会按主规范请求 `/api/v1/**` 接口。
+- 默认关闭 `VITE_USE_MOCK_API`，服务层会按主规范请求 `/api/v1/**` 接口。
+- 需要纯前端演示或本地离线调试时，再显式设置 `VITE_USE_MOCK_API=true`。
 - 登录页现在覆盖 `POST /api/v1/auth/send-code`、`POST /api/v1/auth/password/forgot`、`POST /api/v1/auth/password/reset` 的完整找回密码链路。
 - 短信验证码登录仅接受手机号，邮箱验证码登录仅接受邮箱，前端会在调用 auth API 前先做约束校验。
 - 聊天流式事件同时兼容 baseline/mock 事件与主规范 `message.started` / `agent.routed` / `tool.started` / `message.completed` 等 canonical 事件。
@@ -175,7 +183,7 @@ tests/
 - `/chat/:conversationId` 现在会先拉取会话详情再加载消息；如果会话已删除或不存在，页面会展示空态并引导返回 `/sessions` 或重新发起对话。
 - chat 页面支持点击引用卡片查看 `citations/{citation_id}` 详情。
 - 无消息时会展示常用提问模板，可一键写入场景与问题草稿，提升 baseline 的开箱可用性。
-- live 模式下，研究任务与海报任务列表会优先展示当前浏览器曾创建/跟踪过的任务详情，避免缺少 history list 接口时页面完全空白。
+- live 模式下，研究任务与海报任务列表优先读取 `/api/v1/research/tasks` 与 `/api/v1/marketing/posters`；若列表暂不可用或未及时返回最新任务，前端才回补当前浏览器最近跟踪的详情。
 - live 模式下，账单工作区改为部分失败降级：若明细/发票/订单/工单中的某一分区暂不可用，页面仍会保留其余已成功分区并明确提示缺失域。
 - live 模式下，营销海报任务会自动轮询 3 秒/次，最长 10 分钟；超过窗口后停止后台轮询并引导手动刷新，贴近 spec `20.15.1`。
 - live 模式下，服务台中的 ICP 申请历史会优先展示当前浏览器已提交并跟踪过的 `application_no`，因为主规范当前只冻结了详情接口。
@@ -193,7 +201,7 @@ tests/
 
 ## 当前集成注意事项
 1. foundation 已明确：用户侧外部接口使用 canonical `code/message/data/request_id/timestamp` envelope，当前 app-local client 仍保留对 internal `ApiEnvelope<T>` 的兼容解析，便于网关迁移期联调。
-2. 营销海报仅在主规范中定义了创建与详情接口，列表页目前依赖 mock 数据保留历史展示能力。
+2. 研究任务与营销海报历史已改为优先使用 live 列表接口；本地任务注册表现在只作为回补兜底，不再是默认来源。
 3. ICP 申请历史在主规范中仍缺少列表接口，live 模式只能基于本地已跟踪的申请号回填详情。
 4. 订单详情与退款详情页已接好 `/orders/{order_no}`、`/refunds/{refund_no}` 占位；若后端尚未落地，前端会降级回列表级信息。
 5. 真实附件上传与 cancel 的高级 UX 仍保留客户端占位；聊天 retry 已按当前会话级合同接通，但更丰富的恢复/重放策略仍取决于后端后续能力。

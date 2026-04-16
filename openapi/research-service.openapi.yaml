@@ -14,6 +14,7 @@ paths:
       tags: [health]
       operationId: research_healthz
       summary: Check research service liveness.
+      description: Liveness-only health contract. Backend-selection proof is not yet surfaced on this route; when research publishes additive runtime backend evidence, it should follow `docs/contracts/shared/runtime-health.md`.
       x-owner-service: research-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]

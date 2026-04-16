@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 
 const apiBaseUrl = process.env.TEST_API_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_API_PORT ?? '38090'}`;
+const runtimeConfigRoutePattern = '**/runtime-config.js';
 
 interface ResetApiOptions {
   profile?: 'full' | 'limited_marketing';
@@ -12,6 +13,15 @@ interface ResetApiOptions {
     | 'research_task_completes_with_report'
     | 'research_report_file_missing'
   >;
+}
+
+interface RuntimeConfigOverrides {
+  VITE_APP_TITLE?: string;
+  VITE_APP_VERSION?: string;
+  VITE_API_BASE_URL?: string;
+  VITE_REQUEST_TIMEOUT_MS?: string;
+  VITE_SSE_HEARTBEAT_SECONDS?: string;
+  VITE_USE_MOCK_API?: string;
 }
 
 export async function resetApi(options: ResetApiOptions = {}): Promise<void> {
@@ -37,6 +47,16 @@ export async function login(page: Page, account = 'demo@smartcloud.local', passw
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading', { name: '用户工作台总览' })).toBeVisible();
   await expect(page.getByText('Live API')).toBeVisible();
+}
+
+export async function applyRuntimeConfig(page: Page, overrides: RuntimeConfigOverrides): Promise<void> {
+  await page.route(runtimeConfigRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/javascript; charset=utf-8',
+      body: `window.__SMARTCLOUD_RUNTIME_CONFIG__ = Object.assign({}, window.__SMARTCLOUD_RUNTIME_CONFIG__ || {}, ${JSON.stringify(overrides)});`
+    });
+  });
 }
 
 export async function openAppPage(page: Page, path: string, heading: string): Promise<void> {

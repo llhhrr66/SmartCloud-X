@@ -11,7 +11,7 @@ Current baseline:
   - `SupervisorName` / `supervisorNames` / type guards covering the full ownership registry
 - internal caller names for all in-repo service identities plus the gateway entrypoint
 - shared request and response header names used across internal contracts, including tool-call propagation headers and the admin operator-reason audit header
-- frozen-path and shared env-key constants for downstream integration checks, including configurable tool-call/idempotency/operator-reason header names, provider-backed internal prefix override keys, and the shared browser CORS allow-list key
+- frozen-path and shared env-key constants for downstream integration checks, including configurable tool-call/idempotency/operator-reason header names, provider-backed internal prefix override keys, the shared browser CORS allow-list key, shared MySQL/Redis connector names, and shared MinIO raw-object connector names
 - root-level import aliases reserved via `tsconfig.base.json`
 
 This package stays intentionally lightweight. Domain DTOs belong in `@smartcloud-x/common-schemas`.

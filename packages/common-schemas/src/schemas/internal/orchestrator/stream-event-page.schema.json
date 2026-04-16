@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-event-page.schema.json",
+  "title": "StreamEventPage",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "message_id",
+    "items",
+    "has_more"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "./stream-event-record.schema.json"
+      }
+    },
+    "next_event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "has_more": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

@@ -19,7 +19,7 @@ configure_logging(settings.log_level)
 app = FastAPI(
     title="SmartCloud-X Marketing Service",
     version=settings.app_version,
-    description="Baseline marketing task service with campaign browsing, copy generation, promotion links, and poster placeholders.",
+    description="Database-backed marketing service baseline with campaign browsing, copy generation, promotion links, and object-storage-friendly poster placeholders.",
 )
 app.add_middleware(
     CORSMiddleware,

@@ -39,12 +39,13 @@ FastAPI baseline for user auth, profile management, admin auth bootstrap, and in
 - Starter verification code for local development: `123456`
 
 ## Runtime notes
-- Persistent local JSON store path: `AUTH_USER_SERVICE_DATA_PATH`
+- Primary runtime persistence now uses `AUTH_USER_SERVICE_DATABASE_URL` with shared `SMARTCLOUD_MYSQL_DSN` fallback; local/test runs may still point that setting at SQLite.
+- `AUTH_USER_SERVICE_BOOTSTRAP_PATH` (legacy alias: `AUTH_USER_SERVICE_DATA_PATH`) is now migration/bootstrap input only, not the authoritative runtime store.
 - JWT signing uses shared `SMARTCLOUD_JWT_SECRET`
 - Internal caller allow-list now honors the shared `ALLOWED_INTERNAL_CALLERS` env key and still accepts the legacy `AUTH_USER_SERVICE_ALLOWED_INTERNAL_CALLERS` override for compatibility.
 - Public access tokens are accepted by the owned `research-service` and `marketing-service` baselines when they use the same shared secret and issuer/audience env values.
 - `research-service` and `marketing-service` can also opt into strict current-state validation against `GET /internal/v1/auth/validate-token` by configuring their owned `*_AUTH_VALIDATION_MODE=strict` and `*_AUTH_VALIDATE_TOKEN_URL` env vars.
-- Refresh rotation is bound to the persisted refresh-session record; tampered session bindings and access-token payloads passed to logout are rejected.
+- Refresh rotation, token revocation, verification codes, and password-reset challenges are now persisted in database tables; tampered session bindings and access-token payloads passed to logout are rejected.
 - Logout now also revokes the caller's current access token immediately, so the same bearer token can no longer read `/auth/me` or pass internal token validation after logout.
 - Internal auth routes require an allow-listed `X-Caller-Service`; missing or unlisted callers now fail with `403 AUTH_CALLER_FORBIDDEN` before token introspection proceeds.
 - Internal `GET /internal/v1/auth/validate-token` now also enforces current subject token-version state and refresh-session revocation, so stale user/admin tokens do not validate after password rotation or explicit refresh-session logout.

@@ -14,12 +14,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SERVICE_ROOTS = {
     "auth-user-service": REPO_ROOT / "apps" / "auth-user-service",
+    "business-tools-service": REPO_ROOT / "apps" / "business-tools",
     "marketing-service": REPO_ROOT / "apps" / "marketing-service",
     "research-service": REPO_ROOT / "apps" / "research-service",
     "orchestrator-service": REPO_ROOT / "apps" / "orchestrator-service",
     "tool-hub-service": REPO_ROOT / "apps" / "tool-hub-service",
     "knowledge-service": REPO_ROOT / "apps" / "knowledge-service",
     "rag-service": REPO_ROOT / "apps" / "rag-service",
+}
+SERVICE_MODULES = {
+    "business-tools-service": "business_tools_service.main",
 }
 BUSINESS_TOOLS_SRC = REPO_ROOT / "apps" / "business-tools" / "src"
 PROMETHEUS_DEFAULT_PREFIXES = ("python_", "process_", "platform_")
@@ -72,7 +76,9 @@ def service_test_client(
     original_sys_path = list(sys.path)
     root = SERVICE_ROOTS[service_name]
     additions = [str(root)]
-    if service_name in {"orchestrator-service", "tool-hub-service"}:
+    if service_name == "business-tools-service":
+        additions.insert(0, str(BUSINESS_TOOLS_SRC))
+    elif service_name in {"orchestrator-service", "tool-hub-service"}:
         additions.append(str(BUSINESS_TOOLS_SRC))
 
     _clear_modules()
@@ -81,7 +87,7 @@ def service_test_client(
 
     try:
         with _patched_environ(env_overrides or {}):
-            module = importlib.import_module("app.main")
+            module = importlib.import_module(SERVICE_MODULES.get(service_name, "app.main"))
             app = getattr(module, "app")
             with TestClient(app) as client:
                 yield client

@@ -4,6 +4,7 @@ import time
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.routes import health as health_routes
 from app.api.routes import orchestration as orchestration_routes
 from app.services.agent_runtime import AgentRuntime
 
@@ -37,6 +38,85 @@ class _SlowToolHubClient:
         self._clock.advance(0.6)
         return self._client.invoke_plan(*args, **kwargs)
 
+
+def test_healthz_reports_run_control_backend() -> None:
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert "runControl" in runtime
+    assert runtime["runControl"]["backend"] in {"redis-lock", "memory"}
+    assert runtime["conversationStore"]["runtimeCache"]["backend"] in {"redis-json", "memory"}
+    assert runtime["stateStore"]["runtimeCache"]["backend"] in {"redis-json", "memory"}
+    assert runtime["agentConfigStore"]["runtimeCache"]["backend"] in {"redis-json", "memory"}
+    assert runtime["toolHubTransport"]["transport"] in {"local", "http"}
+    assert "degradedLocalFallbackEnabled" in runtime["toolHubTransport"]
+    if runtime["toolHubTransport"]["transport"] == "http":
+        assert runtime["businessToolsIdempotency"]["active"] is False
+        assert runtime["businessToolsIdempotency"]["backend"] == "inactive"
+        assert runtime["businessToolsIdempotency"]["redisNamespace"].endswith(":idempotency")
+        assert runtime["businessToolsIdempotency"]["fallbackPath"].endswith(".json")
+        assert runtime["businessToolsQueryCache"]["active"] is False
+        assert runtime["businessToolsQueryCache"]["redisNamespace"].endswith(":query-cache")
+        assert runtime["businessToolsQueryCache"]["fallbackPath"].endswith(".json")
+
+
+def test_readyz_reports_ready_when_runtime_is_healthy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "conversationStore": {"backend": "mysql", "configured": True},
+            "stateStore": {
+                "backend": "mysql",
+                "configured": True,
+                "runtimeCache": {"backend": "redis-json", "configured": True},
+            },
+            "sseStore": {"backend": "redis-list", "configured": True},
+            "agentConfigStore": {
+                "backend": "mysql",
+                "configured": True,
+                "runtimeCache": {"backend": "redis-json", "configured": True},
+            },
+            "runControl": {"backend": "redis-lock", "configured": True},
+            "toolHubTransport": {
+                "transport": "http",
+                "dependencyReadiness": {"ready": True, "status": "ready"},
+            },
+        },
+    )
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["not_ready_components"] == []
+
+
+def test_readyz_reports_not_ready_when_tool_hub_dependency_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "conversationStore": {"backend": "mysql", "configured": True},
+            "stateStore": {"backend": "mysql", "configured": True},
+            "sseStore": {"backend": "redis-list", "configured": True},
+            "agentConfigStore": {"backend": "mysql", "configured": True},
+            "runControl": {"backend": "redis-lock", "configured": True},
+            "toolHubTransport": {
+                "transport": "http",
+                "dependencyReadiness": {"ready": False, "status": "unreachable"},
+            },
+        },
+    )
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "not_ready"
+    assert payload["not_ready_components"] == ["toolHubTransport"]
 
 
 def test_internal_orchestrator_chat_requires_allowed_caller() -> None:
@@ -96,6 +176,82 @@ def test_internal_orchestrator_chat_executes_finance_flow() -> None:
     assert payload["agent_name"] == "finance_order_agent"
     assert payload["tool_calls"][0]["tool_name"] == "billing.query_statement"
     assert payload["state_snapshot"]["checkpoints"]
+
+
+def test_internal_orchestrator_chat_executes_instance_cost_followup() -> None:
+    response = client.post(
+        "/internal/v1/orchestrator/chat",
+        headers={"X-Caller-Service": "gateway-service"},
+        json={
+            "request_id": "req-instance-2",
+            "trace_id": "trace-instance-2",
+            "tenant_id": "tenant-a",
+            "user": {
+                "user_id": "u-1",
+                "roles": ["end_user"],
+                "permissions": ["user:chat.use", "user:billing.read"],
+                "account_id": "acct-1",
+            },
+            "chat_request": {
+                "conversation_id": "conv-instance-2",
+                "message_id": "msg-instance-2",
+                "user_input": "帮我查下这台实例费用",
+                "stream": False,
+                "scene": "billing",
+                "attachments": [],
+                "session_context": {
+                    "attributes": {
+                        "primary_instance_id": "gpu-cn-sh2-01",
+                        "billing_cycle": "2026-04",
+                    }
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["agent_name"] == "finance_order_agent"
+    assert payload["tool_calls"][0]["tool_name"] == "billing.query_instance_cost"
+    assert payload["final_answer"].startswith("实例 gpu-cn-sh2-01")
+
+
+def test_internal_orchestrator_chat_executes_service_status_followup() -> None:
+    response = client.post(
+        "/internal/v1/orchestrator/chat",
+        headers={"X-Caller-Service": "gateway-service"},
+        json={
+            "request_id": "req-service-status-2",
+            "trace_id": "trace-service-status-2",
+            "tenant_id": "tenant-a",
+            "user": {
+                "user_id": "u-1",
+                "roles": ["end_user"],
+                "permissions": ["user:chat.use"],
+                "account_id": "acct-1",
+            },
+            "chat_request": {
+                "conversation_id": "conv-service-status-2",
+                "message_id": "msg-service-status-2",
+                "user_input": "帮我查下这台实例现在是不是故障了",
+                "stream": False,
+                "scene": "technical_support",
+                "attachments": [],
+                "session_context": {
+                    "attributes": {
+                        "primary_instance_id": "gpu-cn-sh2-01",
+                    }
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["agent_name"] == "product_tech_agent"
+    assert payload["tool_calls"][0]["tool_name"] == "support.query_service_status"
+    assert payload["state_snapshot"]["session_context"]["attributes"]["service_status"] == "degraded"
+    assert "INC-" in payload["final_answer"]
 
 
 def test_admin_agent_routes_list_and_patch_overrides() -> None:
@@ -374,6 +530,65 @@ def test_continue_session_accepts_dotted_icp_contact_fields() -> None:
     )
 
 
+def test_continue_session_accepts_user_profile_patch_and_persists_auth_profile() -> None:
+    first = client.post(
+        "/api/v1/sessions/conv-continue-auth/messages",
+        json={
+            "user_query": "帮我查本月账单",
+            "scene": "billing",
+            "user_profile": {
+                "user_id": "u-1",
+            },
+        },
+    )
+    assert first.status_code == 200
+    first_payload = first.json()["data"]
+    assert first_payload["next_action"] == "collect-user-input"
+    assert first_payload["pending_actions"] == ["collect-auth-context"]
+    assert first_payload["executions"][0]["tool_calls"][0]["status"] == "auth-required"
+    assert first_payload["pending_user_actions"][0]["user_profile_bindings"] == {
+        "account_id": ["account_id"],
+        "permissions": ["permissions"],
+    }
+
+    resumed = client.post(
+        "/api/v1/chat/sessions/conv-continue-auth/continue",
+        json={
+            "user_profile_patch": {
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            }
+        },
+    )
+    assert resumed.status_code == 200
+    resumed_payload = resumed.json()["data"]
+    assert resumed_payload["status"] == "success"
+    assert resumed_payload["tool_calls"][0]["status"] == "completed"
+    assert resumed_payload["response"]["state_snapshot"]["session_context"]["attributes"]["auth_profile"] == {
+        "user_id": "u-1",
+        "account_id": "acct-1",
+        "tenant_id": "default",
+        "locale": "zh-CN",
+        "channel": "web",
+        "vip_level": "normal",
+        "roles": ["user"],
+        "permissions": ["user:billing.read"],
+    }
+
+    followup = client.post(
+        "/api/v1/sessions/conv-continue-auth/messages",
+        json={
+            "user_query": "再查上个月账单",
+            "scene": "billing",
+        },
+    )
+    assert followup.status_code == 200
+    followup_payload = followup.json()["data"]
+    assert followup_payload["next_action"] == "respond-with-agent-summary"
+    assert followup_payload["executions"][0]["tool_calls"][0]["status"] == "completed"
+    assert followup_payload["executions"][0]["tool_calls"][0]["payload"]["billing_cycle"] == "2026-03"
+
+
 def test_continue_session_applies_confirm_tool_names() -> None:
     first = client.post(
         "/api/v1/sessions/conv-continue-confirm/messages",
@@ -477,6 +692,29 @@ def test_orchestrate_message_hydrates_invoice_inputs_from_same_turn_query_result
     assert tool_calls[1]["payload"]["invoice_no"].startswith("inv_")
 
 
+def test_orchestrate_message_returns_product_instance_recommendation() -> None:
+    response = client.post(
+        "/api/v1/sessions/conv-product-sizing/messages",
+        json={
+            "user_query": "我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例规格",
+            "scene": "technical_support",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["next_action"] == "respond-with-agent-summary"
+    assert "gi4.2xlarge" in payload["final_response_summary"]
+    assert payload["review"]["status"] == "approved"
+    tool_calls = payload["executions"][0]["tool_calls"]
+    assert [tool_call["tool_name"] for tool_call in tool_calls] == [
+        "product.catalog_lookup",
+        "product.recommend_instance",
+    ]
+    attributes = payload["state_snapshot"]["session_context"]["attributes"]
+    assert attributes["recommended_instance_type"] == "gi4.2xlarge"
+    assert attributes["recommended_gpu_model"] == "NVIDIA L40S"
+
+
 def test_orchestrate_message_generates_promotion_link_after_campaign_lookup() -> None:
     response = client.post(
         "/api/v1/sessions/conv-promotion-link/messages",
@@ -557,6 +795,71 @@ def test_orchestrate_message_generates_marketing_copy_after_campaign_lookup() ->
     ]
     assert tool_calls[-1]["payload"]["headline"].startswith("GPU 新客满减")
     assert payload["state_snapshot"]["session_context"]["attributes"]["last_marketing_copy_campaign_name"] == "GPU 新客满减"
+
+
+def test_orchestrate_message_runs_product_to_marketing_handoff_for_gpu_copy_request() -> None:
+    response = client.post(
+        "/api/v1/sessions/conv-product-marketing-copy/messages",
+        json={
+            "user_query": "帮我给 GPU 实例写一段营销文案",
+            "scene": "marketing",
+            "user_profile": {
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read", "user:marketing.write"],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert [execution["agent"] for execution in payload["executions"]] == [
+        "product_tech_agent",
+        "ops_marketing_agent",
+    ]
+    assert payload["executions"][0]["status"] == "handoff"
+    assert payload["executions"][0]["tool_calls"][-1]["tool_name"] == "product.recommend_instance"
+    assert payload["executions"][1]["tool_calls"][-1]["tool_name"] == "marketing.generate_copy"
+    assert (
+        payload["executions"][1]["tool_calls"][-1]["payload"]["product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
+    assert payload["state_snapshot"]["session_context"]["attributes"]["recommended_instance_summary"] == (
+        "gi4.2xlarge / NVIDIA L40S x2"
+    )
+    assert payload["state_snapshot"]["session_context"]["attributes"]["last_marketing_product_summary"] == (
+        "gi4.2xlarge / NVIDIA L40S x2"
+    )
+
+
+def test_orchestrate_message_reuses_recommended_instance_summary_for_marketing_followup() -> None:
+    response = client.post(
+        "/api/v1/sessions/conv-product-marketing-followup/messages",
+        json={
+            "user_query": "把刚才推荐的 GPU 实例写成营销文案",
+            "scene": "marketing",
+            "user_profile": {
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read", "user:marketing.write"],
+            },
+            "session_context": {
+                "active_products": ["GPU 实例"],
+                "attributes": {
+                    "recommended_instance_summary": "gi4.2xlarge / NVIDIA L40S x2",
+                    "recommended_instance_type": "gi4.2xlarge",
+                    "recommended_gpu_model": "NVIDIA L40S",
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert [execution["agent"] for execution in payload["executions"]] == ["ops_marketing_agent"]
+    tool_calls = payload["executions"][0]["tool_calls"]
+    assert [tool_call["tool_name"] for tool_call in tool_calls] == [
+        "marketing.campaign_lookup",
+        "marketing.generate_copy",
+    ]
+    assert tool_calls[-1]["payload"]["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert "gi4.2xlarge / NVIDIA L40S x2" in tool_calls[-1]["payload"]["headline"]
 
 
 def test_orchestrate_message_exports_research_report() -> None:
@@ -643,6 +946,10 @@ def test_orchestrate_message_finishes_completed_multi_agent_chain_without_pendin
     assert payload["executions"][0]["status"] == "handoff"
     assert payload["executions"][-1]["status"] == "success"
     assert payload["next_action"] == "respond-with-agent-summary"
+    assert any(
+        tool_call["tool_name"] == "product.recommend_instance"
+        for tool_call in payload["executions"][0]["tool_calls"]
+    )
     agent_routes = payload["state_snapshot"]["agent_routes"]
     assert [item["status"] for item in agent_routes] == ["handoff", "success"]
     assert agent_routes[0]["handoff_to"] == "ops_marketing_agent"
@@ -672,6 +979,24 @@ def test_orchestrate_message_marks_blocked_agent_routes_after_user_input_pause()
     assert agent_routes[0]["status"] == "need_user_input"
     assert agent_routes[0]["action_required"] == "clarify-tool-input"
     assert agent_routes[1]["status"] == "blocked"
+
+
+def test_orchestrate_message_persists_handoff_brief_for_human_escalation() -> None:
+    response = client.post(
+        "/api/v1/sessions/conv-human-handoff/messages",
+        json={
+            "user_query": "服务异常我要转人工",
+            "scene": "technical_support",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["executions"][0]["status"] == "handoff"
+    assert payload["executions"][0]["action_required"] == "handoff-to-human-operator"
+    assert payload["executions"][0]["tool_calls"][0]["tool_name"] == "support.handoff_brief"
+    assert payload["state_snapshot"]["session_context"]["attributes"]["human_handoff_queue"] == "technical-support-l2"
+    assert payload["state_snapshot"]["session_context"]["attributes"]["human_handoff_reason"] == "service_exception"
+    assert payload["next_action"] == "handoff-to-human"
 
 
 def test_chat_session_agent_routes_endpoint_returns_state_journal() -> None:
@@ -1308,6 +1633,51 @@ def test_chat_session_followup_uses_persisted_invoice_context_for_status_query()
     assert payload["state_snapshot"]["version"] == 2
 
 
+def test_chat_session_followup_uses_persisted_primary_instance_for_cost_query() -> None:
+    create_response = client.post("/api/v1/chat/sessions", json={"scene": "billing", "title": "实例费用续接"})
+    conversation_id = create_response.json()["data"]["conversation_id"]
+
+    billing_response = client.post(
+        "/api/v1/chat/completions",
+        json={
+            "conversation_id": conversation_id,
+            "message_id": "msg-billing-1",
+            "user_input": "帮我查本月账单",
+            "scene": "billing",
+            "user_profile": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+        },
+    )
+    assert billing_response.status_code == 200
+    first_attributes = billing_response.json()["data"]["response"]["state_snapshot"]["session_context"]["attributes"]
+    assert first_attributes["primary_instance_id"] == "gpu-cn-sh2-01"
+
+    instance_response = client.post(
+        "/api/v1/chat/completions",
+        json={
+            "conversation_id": conversation_id,
+            "message_id": "msg-billing-2",
+            "user_input": "帮我查下这台实例费用",
+            "scene": "billing",
+            "user_profile": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+        },
+    )
+    assert instance_response.status_code == 200
+    payload = instance_response.json()["data"]["response"]
+    assert payload["next_action"] == "respond-with-agent-summary"
+    assert payload["executions"][0]["tool_calls"][0]["tool_name"] == "billing.query_instance_cost"
+    assert payload["final_response_summary"].startswith("实例 gpu-cn-sh2-01")
+    assert payload["state_snapshot"]["session_context"]["attributes"]["last_instance_cost_total"] == 412.68
+    assert payload["state_snapshot"]["version"] == 2
+
+
 def test_chat_session_followup_uses_persisted_icp_verification_context_for_submit() -> None:
     create_response = client.post("/api/v1/chat/sessions", json={"scene": "icp", "title": "ICP备案续接"})
     conversation_id = create_response.json()["data"]["conversation_id"]
@@ -1409,6 +1779,34 @@ def test_session_context_persists_open_ticket_id_for_followup_reply() -> None:
     assert second_payload["executions"][0]["tool_calls"][0]["tool_name"] == "ticket.reply"
     assert second_payload["executions"][0]["tool_calls"][0]["payload"]["ticket_no"] == ticket_no
     assert second_payload["state_snapshot"]["version"] == 2
+
+
+def test_orchestrate_message_creates_ticket_after_technical_handoff_brief() -> None:
+    response = client.post(
+        "/api/v1/sessions/conv-human-ticket/messages",
+        json={
+            "user_query": "GPU 实例异常帮我转人工并创建工单",
+            "scene": "technical_support",
+            "user_profile": {
+                "user_id": "u-1",
+                "permissions": ["user:ticket.write"],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["next_action"] == "handoff-to-human"
+    assert [execution["agent"] for execution in payload["executions"]] == [
+        "product_tech_agent",
+        "finance_order_agent",
+    ]
+    assert payload["executions"][0]["tool_calls"][0]["tool_name"] == "support.query_service_status"
+    assert payload["executions"][1]["tool_calls"][0]["tool_name"] == "ticket.create"
+    assert payload["executions"][1]["tool_calls"][0]["payload"]["queue"] == "technical-support-l2"
+    assert "工单 tk_technical-support_001 已创建" in payload["final_response_summary"]
+    assert payload["state_snapshot"]["session_context"]["open_ticket_id"] == "tk_technical-support_001"
+    assert payload["state_snapshot"]["session_context"]["attributes"]["human_handoff_queue"] == "technical-support-l2"
+    assert payload["state_snapshot"]["session_context"]["attributes"]["ticket_incident_code"].startswith("INC-")
 
 
 def test_orchestrate_message_honors_explicit_tool_candidates_across_agents() -> None:

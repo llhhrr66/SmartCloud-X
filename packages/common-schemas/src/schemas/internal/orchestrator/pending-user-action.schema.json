@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/pending-user-action.schema.json",
   "title": "PendingUserAction",
+  "description": "Advisory continuation metadata aggregated by orchestrator from tool-level `user_action_hint` records. Auth-related actions may carry `user_profile_bindings` so continuation clients know which `/continue.user_profile_patch` fields can satisfy the pending requirement.",
   "type": "object",
   "required": [
     "tool_name",
@@ -84,6 +85,17 @@
         }
       }
     },
+    "user_profile_bindings": {
+      "type": "object",
+      "description": "Maps additive `/continue.user_profile_patch` fields onto the user/account/role/permission inputs that can satisfy the pending auth requirement.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "confirm_tool_names": {
       "type": "array",
       "items": {
@@ -92,5 +104,29 @@
       }
     }
   },
+  "examples": [
+    {
+      "tool_name": "billing.create_invoice",
+      "tool_call_id": "tc-auth-1",
+      "action": "collect-auth-context",
+      "message": "billing.create_invoice 执行前需补充鉴权上下文。",
+      "missing_auth_context": [
+        "account_id",
+        "permission:user:billing.read"
+      ],
+      "required_permissions": [
+        "user:billing.read"
+      ],
+      "requires_account_context": true,
+      "user_profile_bindings": {
+        "account_id": [
+          "account_id"
+        ],
+        "permissions": [
+          "permissions"
+        ]
+      }
+    }
+  ],
   "additionalProperties": false
 }

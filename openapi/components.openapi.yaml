@@ -156,6 +156,12 @@ components:
       $ref: ../packages/common-schemas/src/schemas/health-status.schema.json
     PaginationMeta:
       $ref: ../packages/common-schemas/src/schemas/pagination-meta.schema.json
+    RuntimeDependencyReadiness:
+      $ref: ../packages/common-schemas/src/schemas/runtime-dependency-readiness.schema.json
+    RuntimeHealthStatus:
+      $ref: ../packages/common-schemas/src/schemas/runtime-health-status.schema.json
+    RuntimeReadinessStatus:
+      $ref: ../packages/common-schemas/src/schemas/runtime-readiness-status.schema.json
     ServiceCallerContext:
       $ref: ../packages/common-schemas/src/schemas/service-caller-context.schema.json
     TraceContext:
@@ -210,6 +216,12 @@ components:
       $ref: ../packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-request.schema.json
     AdminActionConfirmationResponseData:
       $ref: ../packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-response-data.schema.json
+    AdminAgentConfigUpdateRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-agent-config-update-request.schema.json
+    AdminAgentListData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-agent-list-data.schema.json
+    AdminAgentRecord:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-agent-record.schema.json
     AdminAuditRecord:
       $ref: ../packages/common-schemas/src/schemas/external/admin/admin-audit-record.schema.json
     AdminAuditListData:
@@ -328,6 +340,10 @@ components:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/saga-compensation-step.schema.json
     SceneName:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/scene-name.schema.json
+    UserProfile:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/user-profile.schema.json
+    UserProfilePatch:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/user-profile-patch.schema.json
     SessionCreateRequest:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-create-request.schema.json
     SessionCancelRequest:
@@ -360,6 +376,10 @@ components:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-done-event-data.schema.json
     OrchestratorStreamEvent:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-event.schema.json
+    OrchestratorStreamEventPage:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-event-page.schema.json
+    OrchestratorStreamEventRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-event-record.schema.json
     OrchestratorStreamMetaEventData:
       $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-meta-event-data.schema.json
     OrchestratorStreamReasoningEventData:

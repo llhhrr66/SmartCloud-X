@@ -308,6 +308,16 @@ def main() -> int:
             "filters": {"tags": ["gpu", "launch"]},
         },
     )
+    empty_answer = request(
+        "POST",
+        f"{RAG_API}/answer",
+        {
+            "query": "这个标签下没有结果",
+            "topK": 3,
+            "style": "brief",
+            "filters": {"tags": ["__smoke_missing_tag__"]},
+        },
+    )
     knowledge_metrics = request_text("GET", f"{KNOWLEDGE_ROOT}/metrics")
     rag_metrics = request_text("GET", f"{RAG_ROOT}/metrics")
     missing_knowledge_metrics = [
@@ -377,8 +387,47 @@ def main() -> int:
         raise RuntimeError(f"knowledge snapshot did not include the created knowledge base: {snapshot}")
     if int(snapshot.get("counts", {}).get("documents", 0)) < 1:
         raise RuntimeError(f"knowledge snapshot did not include any documents: {snapshot}")
+    if int(snapshot.get("counts", {}).get("knowledgeBases", 0)) != len(snapshot.get("knowledgeBases", [])):
+        raise RuntimeError(f"snapshot knowledge-base count drifted from payload rows: {snapshot}")
+    if int(snapshot.get("counts", {}).get("documentProfiles", 0)) != len(snapshot.get("documentProfiles", [])):
+        raise RuntimeError(f"snapshot document-profile count drifted from payload rows: {snapshot}")
     if len(snapshot.get("recentAuditRecords", [])) < 1:
         raise RuntimeError(f"knowledge snapshot did not include recent audit records: {snapshot}")
+    snapshot_knowledge_base = next(
+        (
+            item
+            for item in snapshot.get("knowledgeBases", [])
+            if item.get("kb_id") == knowledge_base.get("kb_id")
+        ),
+        None,
+    )
+    if snapshot_knowledge_base is None:
+        raise RuntimeError(f"snapshot was missing the updated knowledge base row: {snapshot}")
+    if snapshot_knowledge_base.get("status") != "disabled":
+        raise RuntimeError(f"snapshot knowledge-base status drifted from admin state: {snapshot_knowledge_base}")
+    if snapshot_knowledge_base.get("retrieval_mode") != "hybrid-tightened":
+        raise RuntimeError(
+            f"snapshot knowledge-base retrieval mode drifted from admin state: {snapshot_knowledge_base}"
+        )
+    snapshot_document_profile = next(
+        (
+            item
+            for item in snapshot.get("documentProfiles", [])
+            if item.get("doc_id") == admin_document.get("doc_id")
+        ),
+        None,
+    )
+    if snapshot_document_profile is None:
+        raise RuntimeError(f"snapshot was missing the admin document profile row: {snapshot}")
+    if snapshot_document_profile.get("latest_job_id") != admin_reindex_job.get("job_id"):
+        raise RuntimeError(
+            "snapshot document profile did not reflect the latest reindex job: "
+            f"{snapshot_document_profile}"
+        )
+    if snapshot_document_profile.get("source_type") != "filesystem":
+        raise RuntimeError(
+            f"snapshot document profile lost the filesystem source type: {snapshot_document_profile}"
+        )
     integrations = snapshot.get("integrations", {})
     for connector_name in (
         "rawStorage",
@@ -393,6 +442,18 @@ def main() -> int:
             raise RuntimeError(
                 f"snapshot connector {connector_name} was not configured in the compose baseline: {snapshot}"
             )
+    if integrations.get("rawStorage", {}).get("backend") != "minio-mirror" and integrations.get("rawStorage", {}).get("backend") != "minio":
+        raise RuntimeError(f"snapshot raw storage backend was not MinIO-oriented: {snapshot}")
+    if integrations.get("metadataStore", {}).get("backend") != "mysql":
+        raise RuntimeError(f"snapshot metadata store backend was not MySQL-backed: {snapshot}")
+    if integrations.get("vectorStore", {}).get("backend") != "qdrant":
+        raise RuntimeError(f"snapshot vector store backend was not Qdrant-backed: {snapshot}")
+    if integrations.get("bm25Store", {}).get("backend") != "opensearch":
+        raise RuntimeError(f"snapshot BM25 store backend was not OpenSearch-backed: {snapshot}")
+    if integrations.get("cache", {}).get("backend") not in {"redis-configured", "redis-ttl"}:
+        raise RuntimeError(f"snapshot cache backend was not Redis-oriented: {snapshot}")
+    if integrations.get("taskQueue", {}).get("backend") != "redis-list-primary":
+        raise RuntimeError(f"snapshot task queue backend was not Redis-primary: {snapshot}")
     if int(integrations.get("eventCounters", {}).get("completed", 0)) < 1:
         raise RuntimeError(f"snapshot integration counters did not report completed events: {snapshot}")
     if processed_snapshot_event.get("status") != "completed":
@@ -404,6 +465,11 @@ def main() -> int:
         )
     if any(result.get("status") != "succeeded" for result in connector_results):
         raise RuntimeError(f"snapshot worker event had failed connector steps: {processed_snapshot_event}")
+    if processed_snapshot_event.get("rawObject", {}).get("sourceUri") != snapshot_document_profile.get("source_uri"):
+        raise RuntimeError(
+            "snapshot raw-object source URI drifted from the exported document profile: "
+            f"{processed_snapshot_event}"
+        )
     if missing_knowledge_metrics:
         raise RuntimeError(f"knowledge-service metrics missing expected signals: {missing_knowledge_metrics}")
     if missing_rag_metrics:
@@ -416,6 +482,12 @@ def main() -> int:
         raise RuntimeError("rag-service readiness gauge did not report ready on /metrics")
     if "rag_upstream_ready_state 1.0" not in rag_metrics:
         raise RuntimeError("rag-service upstream readiness gauge did not report ready on /metrics")
+    if empty_answer.get("degraded") is not False:
+        raise RuntimeError(f"empty-answer path unexpectedly reported degraded: {empty_answer}")
+    if empty_answer.get("citations") != []:
+        raise RuntimeError(f"empty-answer path unexpectedly returned citations: {empty_answer}")
+    if "没有检索到可引用知识" not in empty_answer.get("answer", ""):
+        raise RuntimeError(f"empty-answer path did not return the empty-result guidance: {empty_answer}")
 
     summary = {
         "bootstrap": bootstrap,
@@ -468,6 +540,13 @@ def main() -> int:
             "queryTokens": search.get("queryTokens"),
             "sourceBreakdown": search.get("sourceBreakdown"),
             "total": search.get("total"),
+        },
+        "rag": {
+            "answerCitations": len(answer.get("citations", [])),
+            "emptyAnswer": {
+                "degraded": empty_answer.get("degraded"),
+                "coverageNotes": empty_answer.get("coverageNotes"),
+            },
         },
         "admin": {
             "knowledgeBase": {

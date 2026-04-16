@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/user-profile-patch.schema.json",
+  "title": "UserProfilePatch",
+  "description": "Additive auth/profile context that trusted continuation callers may submit to resume auth-required steps. Orchestrator may persist the collected values into `session_context.attributes.auth_profile` as a runtime convenience layer for later turns.",
+  "type": "object",
+  "properties": {
+    "user_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "account_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "locale": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "channel": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "vip_level": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  },
+  "examples": [
+    {
+      "account_id": "acct-1001",
+      "roles": [
+        "user"
+      ],
+      "permissions": [
+        "user:billing.read"
+      ]
+    }
+  ],
+  "additionalProperties": false
+}

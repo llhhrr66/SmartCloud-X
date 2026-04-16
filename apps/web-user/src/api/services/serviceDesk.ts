@@ -1,12 +1,12 @@
 import { appEnv } from '../../config/env';
-import { createIdempotencyKey } from '../../lib/request-meta';
-import { listTaskIds, rememberTask } from '../../lib/task-registry';
 import type {
   CheckIcpMaterialsRequest,
   CreateIcpApplicationRequest,
   CreateRefundRequest,
   CreateTicketRequest,
   IcpApplication,
+  IcpApplicationListQuery,
+  IcpApplicationListResult,
   IcpMaterialCheckResult,
   OrderDetail,
   ReplyTicketRequest,
@@ -16,8 +16,8 @@ import type {
   TicketReply,
   TicketRecord
 } from '../../types/domain';
-import { createServiceDeskApi } from '../../shared-sdk';
-import { apiClient } from '../client';
+import { buildIcpApplicationListResult, paginateBusinessItems } from '../../shared-sdk';
+import { liveBusinessApis } from '../business-sdk';
 import {
   mockCheckIcpMaterials,
   mockCreateIcpApplication,
@@ -31,30 +31,33 @@ import {
   mockReplyTicket
 } from '../mock';
 
-const liveServiceDeskService = createServiceDeskApi({
-  client: apiClient,
-  createIdempotencyKey,
-  icpTrackingStore: {
-    list: () => listTaskIds('icp'),
-    remember: (applicationNo) => rememberTask('icp', applicationNo)
-  }
-});
-
 export const serviceDeskService = {
   async getWorkspace(): Promise<ServiceWorkspaceData> {
     if (appEnv.useMockApi) {
       return mockGetServiceWorkspace();
     }
 
-    return liveServiceDeskService.getWorkspace();
+    return liveBusinessApis.serviceDesk.getWorkspace();
   },
 
-  async listIcpApplications(): Promise<IcpApplication[]> {
+  async listIcpApplications(query: IcpApplicationListQuery = {}): Promise<IcpApplication[]> {
     if (appEnv.useMockApi) {
-      return mockListIcpApplications();
+      return paginateBusinessItems(await mockListIcpApplications(), query).items;
     }
 
-    return liveServiceDeskService.listIcpApplications();
+    return liveBusinessApis.icp.listIcpApplications(query);
+  },
+
+  async listIcpApplicationPage(
+    query: IcpApplicationListQuery = {}
+  ): Promise<IcpApplicationListResult> {
+    if (appEnv.useMockApi) {
+      return buildIcpApplicationListResult(
+        paginateBusinessItems(await mockListIcpApplications(), query)
+      );
+    }
+
+    return liveBusinessApis.icp.listIcpApplicationPage(query);
   },
 
   async getTicketDetail(ticketNo: string): Promise<TicketDetail> {
@@ -62,7 +65,7 @@ export const serviceDeskService = {
       return mockGetTicketDetail(ticketNo);
     }
 
-    return liveServiceDeskService.getTicketDetail(ticketNo);
+    return liveBusinessApis.tickets.getTicketDetail(ticketNo);
   },
 
   async getOrderDetail(orderNo: string): Promise<OrderDetail> {
@@ -70,7 +73,7 @@ export const serviceDeskService = {
       return mockGetOrderDetail(orderNo);
     }
 
-    return liveServiceDeskService.getOrderDetail(orderNo);
+    return liveBusinessApis.orders.getOrderDetail(orderNo);
   },
 
   async getRefundDetail(refundNo: string): Promise<RefundRecord> {
@@ -78,7 +81,7 @@ export const serviceDeskService = {
       return mockGetRefundDetail(refundNo);
     }
 
-    return liveServiceDeskService.getRefundDetail(refundNo);
+    return liveBusinessApis.orders.getRefundDetail(refundNo);
   },
 
   async createTicket(input: CreateTicketRequest): Promise<TicketRecord> {
@@ -86,7 +89,7 @@ export const serviceDeskService = {
       return mockCreateTicket(input);
     }
 
-    return liveServiceDeskService.createTicket(input);
+    return liveBusinessApis.tickets.createTicket(input);
   },
 
   async replyTicket(ticketNo: string, input: ReplyTicketRequest): Promise<TicketReply> {
@@ -94,7 +97,7 @@ export const serviceDeskService = {
       return mockReplyTicket(ticketNo, input);
     }
 
-    return liveServiceDeskService.replyTicket(ticketNo, input);
+    return liveBusinessApis.tickets.replyTicket(ticketNo, input);
   },
 
   async createRefund(input: CreateRefundRequest): Promise<RefundRecord> {
@@ -102,7 +105,7 @@ export const serviceDeskService = {
       return mockCreateRefund(input);
     }
 
-    return liveServiceDeskService.createRefund(input);
+    return liveBusinessApis.orders.createRefund(input);
   },
 
   async checkIcpMaterials(input: CheckIcpMaterialsRequest): Promise<IcpMaterialCheckResult> {
@@ -110,7 +113,7 @@ export const serviceDeskService = {
       return mockCheckIcpMaterials(input);
     }
 
-    return liveServiceDeskService.checkIcpMaterials(input);
+    return liveBusinessApis.icp.checkIcpMaterials(input);
   },
 
   async createIcpApplication(input: CreateIcpApplicationRequest): Promise<IcpApplication> {
@@ -118,6 +121,6 @@ export const serviceDeskService = {
       return mockCreateIcpApplication(input);
     }
 
-    return liveServiceDeskService.createIcpApplication(input);
+    return liveBusinessApis.icp.createIcpApplication(input);
   }
 };

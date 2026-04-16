@@ -1,5 +1,6 @@
 import { createApiClient, type FrontendApiClient } from '../core/http';
-import { extractEnvelopeCode } from '../core/envelope';
+import { ApiError, classifyApiError, extractEnvelopeCode } from '../core/envelope';
+import { isRecord } from '../core/utils';
 import { buildWebUserHeaders, type WebUserRuntimeConfig } from './session';
 import type { AuthSession } from './types';
 
@@ -32,6 +33,16 @@ function shouldAttemptSessionRefresh(
 
   if (code === 4010002 || code === '4010002' || codeName === 'AUTH_UNAUTHORIZED') {
     return true;
+  }
+
+  const kind = isRecord(payload)
+    ? classifyApiError({
+        status,
+        ...payload
+      })
+    : classifyApiError(new ApiError('Request failed', status, code));
+  if (kind !== 'unknown') {
+    return kind === 'unauthorized';
   }
 
   return status === 401;

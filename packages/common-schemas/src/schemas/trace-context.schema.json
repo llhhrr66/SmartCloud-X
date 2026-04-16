@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://smartcloud-x.local/schemas/trace-context.schema.json",
   "title": "TraceContext",
+  "description": "Shared correlation context for internal ApiEnvelope responses. Optional scope members may be omitted or explicit null when the current response has no conversation, user, tenant, caller-service, tool-call, idempotency, or operator-reason context.",
   "type": "object",
   "required": [
     "traceId"
@@ -16,17 +17,29 @@
       "minLength": 1
     },
     "conversationId": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 1
     },
     "userId": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "tenantId": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "callerService": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "tags": {
       "type": "array",
@@ -35,18 +48,36 @@
       }
     },
     "toolCallId": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 1
     },
     "idempotencyKey": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 1
     },
     "operatorReason": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 3,
       "maxLength": 500
     }
   },
+  "examples": [
+    {
+      "requestId": "6e0e0c5b-af7f-4322-885b-45103788869f",
+      "traceId": "6e0e0c5b-af7f-4322-885b-45103788869f",
+      "conversationId": null,
+      "tenantId": null,
+      "callerService": null
+    }
+  ],
   "additionalProperties": false
 }

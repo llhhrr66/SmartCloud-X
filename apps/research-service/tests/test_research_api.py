@@ -147,6 +147,7 @@ def test_research_task_can_surface_running_state_before_auto_completion(
     assert running_result.status_code == 200
     assert running_result.json()["data"]["result_ready"] is False
 
+    task = store._snapshot.tasks[0]
     task.created_at = (service_modules["models"].utc_now() - timedelta(seconds=11)).isoformat()
     task.updated_at = task.created_at
     store._persist()
@@ -523,3 +524,27 @@ def test_openapi_publishes_status_and_result_routes(client) -> None:
     paths = response.json()["paths"]
     assert "/api/v1/research/tasks/{task_id}/status" in paths
     assert "/api/v1/research/tasks/{task_id}/result" in paths
+
+
+def test_research_database_persists_tasks_across_store_reload(client, token_codec, service_modules) -> None:
+    created = client.post(
+        "/api/v1/research/tasks",
+        headers=_user_headers(
+            token_codec,
+            "user:research.write",
+            extra={"Idempotency-Key": "research-db-persist"},
+        ),
+        json={
+            "topic": "数据库持久化调研",
+            "scope": "验证跨 store reload 持久化",
+            "depth": "lite",
+            "output_format": "markdown",
+            "reference_urls": [],
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.json()["data"]["task_id"]
+
+    service_modules["store"].get_research_store.cache_clear()
+    reloaded_store = service_modules["store"].get_research_store()
+    assert any(item.task_id == task_id for item in reloaded_store._snapshot.tasks)

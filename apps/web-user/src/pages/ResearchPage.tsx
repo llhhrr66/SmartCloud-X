@@ -140,7 +140,7 @@ export function ResearchPage(): JSX.Element {
         eyebrow="Deep Research"
         title="研究中心"
         description="用于创建研究任务、追踪状态，并在报告完成后预览导出文件信息。"
-        actions={!isMock ? <Badge tone="info">Live 模式仅展示本浏览器已跟踪任务</Badge> : undefined}
+        actions={!isMock ? <Badge tone="info">Live 历史列表优先</Badge> : undefined}
       />
 
       {pageError ? <div className="error-banner">{pageError}</div> : null}
@@ -220,7 +220,11 @@ export function ResearchPage(): JSX.Element {
               </div>
             ))
           ) : (
-            <p className="muted">暂无研究任务，先创建一条任务试试。</p>
+            <p className="muted">
+              {isMock
+                ? '暂无研究任务，先创建一条任务试试。'
+                : '暂无研究任务。页面会优先读取后端历史列表，必要时才回补当前浏览器最近跟踪的任务详情。'}
+            </p>
           )}
         </div>
       </div>

@@ -60,3 +60,11 @@ Priority continuation tasks for this run:
    - readiness/reporting updates in `docs/reviews/known-issues.md` and owned QA docs so they reflect the current real gaps and fixes
    - environment/runner stabilization so QA does not rely on ad hoc missing dependencies more than necessary
 4. Keep changes inside owned QA paths only; if a missing frozen/shared contract blocks stronger QA, file change requests instead of editing frozen files directly.
+
+Current override priority (2026-04-16, prove real infra paths):
+1. Add/upgrade QA so it proves services are using real databases/middleware rather than only local JSON/mock/file-backed baselines.
+2. Prioritize validations for:
+   - knowledge-service persistence/reload through MySQL/Redis/MinIO/Qdrant/OpenSearch-linked flows
+   - orchestrator/tool-hub/business-tools persistence through DB/Redis-backed paths
+   - auth/research/marketing persistence beyond local JSON files
+3. Favor acceptance checks that verify persistence survives process restart and that data lands in the intended backend, not only in local files.

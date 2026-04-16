@@ -17,6 +17,7 @@
 - 已补齐 tool session-context 绑定 / 依赖元数据，以及 orchestrator tool-plan/handoff 依赖就绪度共享 schema 基线
 - 已对齐 7 supervisor ownership model 与共享 service registry，补全 `supervisor-auth-marketing-research` / `supervisor-frontend-sdk` / `supervisor-integration-qa` 的根级校验一致性
 - 已补齐 marketing copy / promotion-link 用户合同、orchestrator continue / cancel 共享合同，以及 business-tools provider-backed discovery / preflight 冻结合同
+- 已补齐共享持久化/运行态基线，包括 `SMARTCLOUD_MYSQL_DSN` / `SMARTCLOUD_REDIS_URL` / `SMARTCLOUD_MINIO_*` 根级约定、服务级 persistence matrix、runtime-health/readiness 文档、以及 orchestrator/tool-hub/business-tools `/readyz` 合同
 
 ## 开发规范来源
 - `/home/ljr/SmartCloud/kaifawendang.md`

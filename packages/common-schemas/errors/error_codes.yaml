@@ -70,6 +70,13 @@ codes:
     owner: supervisor-foundation
     category: orchestrator
     message: Running message was cooperatively cancelled before completion.
+  - code: CHAT_STREAM_EVENTS_NOT_FOUND
+    numeric_code: 4042110
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: No stored stream-event replay data exists for the requested chat message.
   - code: BUSINESS_TOOLS_CALLER_FORBIDDEN
     numeric_code: 4033201
     http_status: 403
@@ -105,6 +112,13 @@ codes:
     owner: supervisor-foundation
     category: orchestrator
     message: Internal caller is not allowed to access the published orchestrator internal contract.
+  - code: ORCH_AGENT_NOT_FOUND
+    numeric_code: 4042102
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Requested orchestrator agent configuration record does not exist.
   - code: ORCH_ROUTE_FAILED
     numeric_code: 5002102
     http_status: 500

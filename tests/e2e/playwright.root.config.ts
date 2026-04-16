@@ -16,7 +16,7 @@ process.env.TEST_API_BASE_URL = apiUrl;
 
 export default defineConfig({
   testDir: configDir,
-  testMatch: ['test_browser_entry.spec.ts'],
+  testMatch: ['app-smoke.spec.ts', 'playwright_smoke.spec.ts', 'test_browser_entry.spec.ts'],
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

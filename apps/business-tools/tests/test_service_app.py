@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from business_tools_service.main import app
+from business_tools_service.api.routes import health as health_routes
 from business_tools_service.api.routes import tools as tools_routes
 
 
@@ -41,10 +42,136 @@ def test_business_tools_service_executes_internal_query_tool() -> None:
     assert payload["session_context_patch"]["attributes"]["statement_no"] == "stmt_2026_04_001"
 
 
+def test_business_tools_service_executes_instance_cost_query_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/billing.query_instance_cost",
+        headers={
+            "X-Trace-Id": "trace-instance-cost-1",
+            "X-Tool-Call-Id": "tc-instance-cost-1",
+            "X-Tenant-Id": "tenant-a",
+        },
+        json={
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "subject": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "tenant_id": "tenant-a",
+                "permissions": ["user:billing.read"],
+            },
+            "payload": {"instance_id": "gpu-cn-sh2-01", "range": "this_month"},
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["tool_name"] == "billing.query_instance_cost"
+    assert payload["status"] == "completed"
+    assert payload["result"]["total_amount"] == 412.68
+    assert payload["session_context_patch"]["attributes"]["instance_id"] == "gpu-cn-sh2-01"
+    assert payload["session_context_patch"]["attributes"]["instance_statement_no"] == "stmt_2026_04_001"
+
+
+def test_business_tools_service_executes_product_recommendation_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/product.recommend_instance",
+        headers={
+            "X-Trace-Id": "trace-product-1",
+            "X-Tool-Call-Id": "tc-product-1",
+        },
+        json={
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "subject": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例",
+                "workload": "inference",
+                "model_family": "llm",
+                "budget_level": "balanced",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["tool_name"] == "product.recommend_instance"
+    assert payload["status"] == "completed"
+    assert payload["result"]["recommended_instance_type"] == "gi4.2xlarge"
+    assert payload["session_context_patch"]["attributes"]["recommended_gpu_model"] == "NVIDIA L40S"
+
+
+def test_business_tools_service_executes_service_status_query_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/support.query_service_status",
+        headers={
+            "X-Trace-Id": "trace-service-status-1",
+            "X-Tool-Call-Id": "tc-service-status-1",
+        },
+        json={
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "subject": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "gpu-cn-sh2-01 网络异常，帮我查下服务状态",
+                "instance_id": "gpu-cn-sh2-01",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["tool_name"] == "support.query_service_status"
+    assert payload["status"] == "completed"
+    assert payload["result"]["status"] == "degraded"
+    assert payload["result"]["region"] == "cn-shanghai-2"
+    assert payload["session_context_patch"]["attributes"]["service_status"] == "degraded"
+    assert payload["session_context_patch"]["attributes"]["service_affected_instance_id"] == "gpu-cn-sh2-01"
+
+
+def test_business_tools_service_executes_handoff_brief_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/support.handoff_brief",
+        headers={
+            "X-Trace-Id": "trace-handoff-1",
+            "X-Tool-Call-Id": "tc-handoff-1",
+        },
+        json={
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "subject": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "服务异常我要转人工",
+                "scene": "technical_support",
+                "urgency": "high",
+                "conversation_summary": "用户反馈 GPU 推理服务不可用。",
+                "related_resources": ["GPU 实例", "gpu-cn-sh2-01"],
+                "service_status": "degraded",
+                "incident_code": "INC-CNSHANGHAI2-GPUINSTANCE-042",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议尽快处理。",
+                "recommended_action": "建议优先检查网络和安全组，并安排值班支持跟进。",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["tool_name"] == "support.handoff_brief"
+    assert payload["status"] == "completed"
+    assert payload["result"]["queue"] == "technical-support-l2"
+    assert payload["result"]["incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+    assert payload["session_context_patch"]["attributes"]["human_handoff_severity"] == "high"
+    assert payload["session_context_patch"]["attributes"]["human_handoff_incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+
+
 def test_business_tools_service_lists_input_field_hints() -> None:
     response = internal_client.get("/internal/v1/tools")
     assert response.status_code == 200
     tools = response.json()["tools"]
+    instance_cost_tool = next(tool for tool in tools if tool["name"] == "billing.query_instance_cost")
+    product_recommend_tool = next(tool for tool in tools if tool["name"] == "product.recommend_instance")
+    service_status_tool = next(tool for tool in tools if tool["name"] == "support.query_service_status")
+    handoff_tool = next(tool for tool in tools if tool["name"] == "support.handoff_brief")
+    ticket_create_tool = next(tool for tool in tools if tool["name"] == "ticket.create")
     refund_tool = next(tool for tool in tools if tool["name"] == "order.create_refund")
     order_query_tool = next(tool for tool in tools if tool["name"] == "order.query_order")
     billing_tool = next(tool for tool in tools if tool["name"] == "billing.query_statement")
@@ -56,6 +183,37 @@ def test_business_tools_service_lists_input_field_hints() -> None:
     copy_tool = next(tool for tool in tools if tool["name"] == "marketing.generate_copy")
     promotion_tool = next(tool for tool in tools if tool["name"] == "marketing.generate_promotion_link")
     poster_tool = next(tool for tool in tools if tool["name"] == "marketing.generate_poster")
+    assert product_recommend_tool["session_context_bindings"]["workload"] == [
+        "attributes.recommended_workload"
+    ]
+    assert instance_cost_tool["session_context_bindings"]["instance_id"] == [
+        "attributes.instance_id",
+        "attributes.primary_instance_id",
+    ]
+    assert "attributes.last_instance_cost_total" in instance_cost_tool["session_context_output_keys"]
+    assert "attributes.recommended_instance_type" in product_recommend_tool["session_context_output_keys"]
+    assert service_status_tool["session_context_bindings"]["instance_id"] == [
+        "attributes.instance_id",
+        "attributes.primary_instance_id",
+        "attributes.service_affected_instance_id",
+    ]
+    assert "attributes.service_status_summary" in service_status_tool["session_context_output_keys"]
+    assert handoff_tool["session_context_bindings"]["conversation_summary"] == ["history_summary"]
+    assert handoff_tool["session_context_bindings"]["related_resources"] == ["active_products"]
+    assert handoff_tool["session_context_bindings"]["service_status"] == ["attributes.service_status"]
+    assert handoff_tool["session_context_bindings"]["incident_code"] == ["attributes.service_incident_code"]
+    assert "attributes.human_handoff_summary" in handoff_tool["session_context_output_keys"]
+    assert "attributes.human_handoff_incident_code" in handoff_tool["session_context_output_keys"]
+    assert ticket_create_tool["session_context_bindings"]["subject"] == [
+        "attributes.human_handoff_summary",
+        "attributes.service_status_summary",
+        "attributes.ticket_subject",
+    ]
+    assert ticket_create_tool["session_context_bindings"]["incident_code"] == [
+        "attributes.human_handoff_incident_code",
+        "attributes.service_incident_code",
+    ]
+    assert "attributes.ticket_queue" in ticket_create_tool["session_context_output_keys"]
     assert billing_tool["session_context_bindings"]["range"] == ["attributes.billing_range"]
     assert order_query_tool["session_context_bindings"]["order_no"] == [
         "attributes.order_no",
@@ -90,12 +248,35 @@ def test_business_tools_service_lists_input_field_hints() -> None:
     assert invoice_tool["prerequisite_tool_names"] == ["billing.query_statement"]
     assert "attributes.invoice_no" in invoice_tool["session_context_output_keys"]
     assert invoice_query_tool["session_context_bindings"]["invoice_no"] == ["attributes.invoice_no"]
+    campaign_tool = next(tool for tool in tools if tool["name"] == "marketing.campaign_lookup")
+    assert campaign_tool["session_context_bindings"]["product"] == [
+        "attributes.recommended_instance_type",
+        "attributes.recommended_instance_family",
+        "active_products",
+    ]
+    assert campaign_tool["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert copy_tool["prerequisite_tool_names"] == ["marketing.campaign_lookup"]
     assert copy_tool["session_context_bindings"]["campaign_name"] == ["attributes.last_campaign_name"]
+    assert copy_tool["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert promotion_tool["prerequisite_tool_names"] == ["marketing.campaign_lookup"]
     assert promotion_tool["session_context_bindings"]["campaign_name"] == ["attributes.last_campaign_name"]
+    poster_brief_tool = next(tool for tool in tools if tool["name"] == "marketing.poster_brief")
+    assert poster_brief_tool["session_context_bindings"]["theme"] == [
+        "attributes.poster_theme",
+        "attributes.recommended_instance_summary",
+    ]
     assert poster_tool["prerequisite_tool_names"] == ["marketing.poster_brief"]
     assert poster_tool["session_context_bindings"]["theme"] == ["attributes.poster_theme"]
+    assert poster_tool["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert "attributes.poster_asset_id" in poster_tool["session_context_output_keys"]
 
 
@@ -360,6 +541,41 @@ def test_business_tools_service_returns_auth_required_for_ticket_write_without_p
     assert "permission:user:ticket.write" in payload["error_detail"]["missing_context"]
     assert payload["user_action_hint"]["action"] == "collect-auth-context"
     assert payload["user_action_hint"]["required_permissions"] == ["user:ticket.write"]
+    assert payload["user_action_hint"]["user_profile_bindings"] == {"permissions": ["permissions"]}
+
+
+def test_business_tools_service_executes_ticket_create_with_handoff_context() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/ticket.create",
+        headers={"X-Tool-Call-Id": "tc-ticket-handoff-1"},
+        json={
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "subject": {
+                "user_id": "u-1",
+                "permissions": ["user:ticket.write"],
+            },
+            "payload": {
+                "scene": "technical_support",
+                "subject": "gpu-cn-sh2-01 异常工单",
+                "content": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "queue": "technical-support-l2",
+                "incident_code": "INC-CNSHANGHAI2-GPUINSTANCE-042",
+                "service_status": "degraded",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "related_resources": ["gpu-cn-sh2-01", "GPU 实例服务"],
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["tool_name"] == "ticket.create"
+    assert payload["result"]["queue"] == "technical-support-l2"
+    assert payload["result"]["incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+    assert payload["result"]["subject"].startswith("gpu-cn-sh2-01 异常工单")
+    assert payload["session_context_patch"]["attributes"]["ticket_queue"] == "technical-support-l2"
+    assert payload["session_context_patch"]["attributes"]["ticket_incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
 
 
 def test_business_tools_service_returns_compensation_for_confirmed_write() -> None:
@@ -455,6 +671,7 @@ def test_business_tools_service_generates_marketing_copy() -> None:
             "payload": {
                 "campaign_name": "GPU 新客满减",
                 "product": "GPU 实例",
+                "product_summary": "gi4.2xlarge / NVIDIA L40S x2",
                 "channel": "wechat",
             },
             "operation": "execute",
@@ -464,7 +681,39 @@ def test_business_tools_service_generates_marketing_copy() -> None:
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"]["headline"].startswith("GPU 新客满减")
+    assert payload["data"]["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
     assert payload["session_context_patch"]["attributes"]["last_marketing_copy_headline"] == payload["data"]["headline"]
+    assert (
+        payload["session_context_patch"]["attributes"]["last_marketing_product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
+
+
+def test_business_tools_service_campaign_lookup_uses_recommended_product_summary() -> None:
+    response = internal_client.post(
+        "/internal/v1/execute/marketing.campaign_lookup",
+        headers={"X-Tool-Call-Id": "tc-campaign-summary-1"},
+        json={
+            "operator": {"type": "agent", "id": "Ops_Marketing_Agent"},
+            "subject": {
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read"],
+            },
+            "payload": {
+                "product_summary": "gi4.2xlarge / NVIDIA L40S x2",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["matched_product"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert payload["data"]["campaigns"][0]["segment"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert (
+        payload["session_context_patch"]["attributes"]["last_marketing_product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
 
 
 def test_business_tools_service_exports_research_report() -> None:
@@ -592,3 +841,41 @@ def test_business_tools_service_requires_allowed_caller() -> None:
     response = client.get("/internal/v1/tools")
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "BUSINESS_TOOLS_CALLER_FORBIDDEN"
+
+
+def test_business_tools_healthz_and_readyz_report_runtime_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "idempotency": {"backend": "redis", "configured": True},
+            "queryCache": {"backend": "redis-ttl", "configured": True},
+        },
+    )
+
+    health_response = client.get("/healthz")
+    ready_response = client.get("/readyz")
+
+    assert health_response.status_code == 200
+    assert health_response.json()["status"] == "ok"
+    assert ready_response.status_code == 200
+    assert ready_response.json()["status"] == "ready"
+    assert ready_response.json()["not_ready_components"] == []
+
+
+def test_business_tools_readyz_reports_degraded_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "idempotency": {"backend": "json-file", "degradedFrom": "redis"},
+            "queryCache": {"backend": "redis-ttl", "configured": True},
+        },
+    )
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "not_ready"
+    assert payload["not_ready_components"] == ["idempotency"]

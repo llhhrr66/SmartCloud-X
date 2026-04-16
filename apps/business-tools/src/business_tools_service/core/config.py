@@ -15,6 +15,8 @@ ENV_ALIASES = {
     "DEFAULT_TIMEZONE": ("DEFAULT_TIMEZONE", "SMARTCLOUD_TIMEZONE"),
     "DEFAULT_LANGUAGE": ("DEFAULT_LANGUAGE", "SMARTCLOUD_DEFAULT_LOCALE"),
     "REQUEST_TIMEOUT_MS": ("REQUEST_TIMEOUT_MS", "SMARTCLOUD_REQUEST_TIMEOUT_MS"),
+    "BUSINESS_TOOLS_RUNTIME_DIR": ("BUSINESS_TOOLS_RUNTIME_DIR",),
+    "SMARTCLOUD_REDIS_URL": ("SMARTCLOUD_REDIS_URL",),
 }
 
 
@@ -83,6 +85,9 @@ class Settings(BaseModel):
         default_factory=lambda: ["tool-hub-service"],
         alias="ALLOWED_INTERNAL_CALLERS",
     )
+    runtime_data_dir: str | None = Field(default=None, alias="BUSINESS_TOOLS_RUNTIME_DIR")
+    redis_url: str | None = Field(default=None, alias="SMARTCLOUD_REDIS_URL")
+    redis_namespace: str = Field(default="smartcloud:business-tools", alias="BUSINESS_TOOLS_REDIS_NAMESPACE")
     tool_query_cache_enabled: bool = Field(default=True, alias="TOOL_QUERY_CACHE_ENABLED")
     tool_query_cache_ttl_cap_seconds: int = Field(default=300, alias="TOOL_QUERY_CACHE_TTL_CAP_SECONDS")
     idempotency_store_path: str | None = Field(default=None, alias="BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH")
@@ -133,6 +138,10 @@ class Settings(BaseModel):
     def _validate_prod(self) -> "Settings":
         if self.app_env == "prod" and self.log_level == "DEBUG":
             raise ValueError("DEBUG logging is not allowed in prod.")
+        if self.app_env in {"staging", "prod"} and not self.redis_url:
+            raise ValueError(
+                f"{self.app_env} requires middleware-backed business-tools runtime config: SMARTCLOUD_REDIS_URL."
+            )
         return self
 
 
@@ -169,12 +178,27 @@ def build_settings(service_root: Path | None = None, environ: dict[str, str] | N
         "ALLOWED_INTERNAL_CALLERS",
         "TOOL_QUERY_CACHE_ENABLED",
         "TOOL_QUERY_CACHE_TTL_CAP_SECONDS",
+        "BUSINESS_TOOLS_RUNTIME_DIR",
+        "SMARTCLOUD_REDIS_URL",
+        "BUSINESS_TOOLS_REDIS_NAMESPACE",
         "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
         "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
     }
     for key in passthrough_keys:
         if key in env and env[key] not in {"", None}:
             merged[key] = _coerce_value(str(env[key]))
+
+    runtime_dir = Path(str(merged.get("BUSINESS_TOOLS_RUNTIME_DIR") or (root / ".tmp" / "business-tools-service"))).expanduser()
+    merged.setdefault("BUSINESS_TOOLS_RUNTIME_DIR", str(runtime_dir))
+    if merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
+        merged.setdefault(
+            "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
+            str(runtime_dir / "degraded-idempotency-store.json"),
+        )
+        merged.setdefault(
+            "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
+            str(runtime_dir / "degraded-query-cache-store.json"),
+        )
 
     merged.setdefault("APP_ENV", app_env)
     return Settings.model_validate(merged)

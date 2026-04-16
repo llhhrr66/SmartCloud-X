@@ -17,7 +17,11 @@ ENV_ALIASES = {
     "DEFAULT_LANGUAGE": ("DEFAULT_LANGUAGE", "SMARTCLOUD_DEFAULT_LOCALE"),
     "REQUEST_TIMEOUT_MS": ("REQUEST_TIMEOUT_MS", "SMARTCLOUD_REQUEST_TIMEOUT_MS"),
     "SSE_HEARTBEAT_INTERVAL": ("SSE_HEARTBEAT_INTERVAL", "SMARTCLOUD_SSE_HEARTBEAT_INTERVAL_SECONDS"),
+    "SSE_EVENT_TTL_SECONDS": ("SSE_EVENT_TTL_SECONDS",),
     "MCP_GATEWAY_URL": ("MCP_GATEWAY_URL",),
+    "ORCHESTRATOR_RUNTIME_DIR": ("ORCHESTRATOR_RUNTIME_DIR",),
+    "SMARTCLOUD_MYSQL_DSN": ("SMARTCLOUD_MYSQL_DSN",),
+    "SMARTCLOUD_REDIS_URL": ("SMARTCLOUD_REDIS_URL",),
 }
 
 
@@ -76,6 +80,7 @@ class Settings(BaseModel):
     default_language: str = Field(default="zh-CN", alias="DEFAULT_LANGUAGE")
     request_timeout_ms: int = Field(default=30000, alias="REQUEST_TIMEOUT_MS")
     sse_heartbeat_interval: int = Field(default=15, alias="SSE_HEARTBEAT_INTERVAL")
+    sse_event_ttl_seconds: int = Field(default=86400, alias="SSE_EVENT_TTL_SECONDS")
     request_id_header: str = Field(default="X-Request-Id", alias="SMARTCLOUD_REQUEST_ID_HEADER")
     trace_id_header: str = Field(default="X-Trace-Id", alias="SMARTCLOUD_TRACE_ID_HEADER")
     conversation_id_header: str = Field(default="X-Conversation-Id", alias="SMARTCLOUD_CONVERSATION_ID_HEADER")
@@ -102,6 +107,10 @@ class Settings(BaseModel):
         default=True,
         alias="REVIEW_REQUIRE_CITATIONS_WHEN_RETRIEVAL",
     )
+    runtime_data_dir: str | None = Field(default=None, alias="ORCHESTRATOR_RUNTIME_DIR")
+    mysql_dsn: str | None = Field(default=None, alias="SMARTCLOUD_MYSQL_DSN")
+    redis_url: str | None = Field(default=None, alias="SMARTCLOUD_REDIS_URL")
+    redis_namespace: str = Field(default="smartcloud:orchestrator", alias="ORCHESTRATOR_REDIS_NAMESPACE")
     conversation_store_path: str | None = Field(default=None, alias="CONVERSATION_STORE_PATH")
     state_store_path: str | None = Field(default=None, alias="STATE_STORE_PATH")
     sse_event_store_path: str | None = Field(default=None, alias="SSE_EVENT_STORE_PATH")
@@ -114,6 +123,10 @@ class Settings(BaseModel):
         default=None,
         alias="BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
     )
+    business_tools_redis_namespace: str = Field(
+        default="smartcloud:business-tools",
+        alias="BUSINESS_TOOLS_REDIS_NAMESPACE",
+    )
 
     @field_validator("api_prefix", "legacy_api_prefix", "internal_api_prefix", "tool_hub_internal_api_prefix")
     @classmethod
@@ -125,6 +138,7 @@ class Settings(BaseModel):
     @field_validator(
         "request_timeout_ms",
         "sse_heartbeat_interval",
+        "sse_event_ttl_seconds",
         "max_history_turns",
         "max_handoff_steps",
         "max_tool_calls_per_agent",
@@ -164,6 +178,20 @@ class Settings(BaseModel):
             raise ValueError("MCP_GATEWAY_URL must be a valid http(s) URL.")
         return value.rstrip("/")
 
+    @field_validator("mysql_dsn")
+    @classmethod
+    def _validate_mysql_dsn(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        effective = normalized.replace("mysql://", "mysql+pymysql://", 1) if normalized.startswith("mysql://") else normalized
+        parsed = urlparse(effective)
+        if parsed.scheme not in {"mysql", "mysql+pymysql"} or not parsed.hostname or not parsed.path.lstrip("/"):
+            raise ValueError("SMARTCLOUD_MYSQL_DSN must be a valid mysql DSN.")
+        return normalized
+
     @field_validator("allowed_internal_callers", mode="before")
     @classmethod
     def _validate_callers(cls, value: list[str] | str) -> list[str]:
@@ -178,6 +206,17 @@ class Settings(BaseModel):
     def _validate_prod(self) -> "Settings":
         if self.app_env == "prod" and self.log_level == "DEBUG":
             raise ValueError("DEBUG logging is not allowed in prod.")
+        if self.app_env in {"staging", "prod"}:
+            missing: list[str] = []
+            if not self.mysql_dsn:
+                missing.append("SMARTCLOUD_MYSQL_DSN")
+            if not self.redis_url:
+                missing.append("SMARTCLOUD_REDIS_URL")
+            if missing:
+                joined = ", ".join(missing)
+                raise ValueError(f"{self.app_env} requires middleware-backed orchestrator runtime config: {joined}.")
+            if self.tool_hub_transport != "http":
+                raise ValueError(f"{self.app_env} requires TOOL_HUB_TRANSPORT=http for service-to-service orchestration.")
         return self
 
 
@@ -207,6 +246,7 @@ def build_settings(
         "DEFAULT_LANGUAGE",
         "REQUEST_TIMEOUT_MS",
         "SSE_HEARTBEAT_INTERVAL",
+        "SSE_EVENT_TTL_SECONDS",
         "SMARTCLOUD_REQUEST_ID_HEADER",
         "SMARTCLOUD_TRACE_ID_HEADER",
         "SMARTCLOUD_CONVERSATION_ID_HEADER",
@@ -229,16 +269,38 @@ def build_settings(
         "REVIEW_REASONING_SUMMARY_MAX_CHARS",
         "REVIEW_FINAL_ANSWER_MAX_CHARS",
         "REVIEW_REQUIRE_CITATIONS_WHEN_RETRIEVAL",
+        "ORCHESTRATOR_RUNTIME_DIR",
+        "SMARTCLOUD_MYSQL_DSN",
+        "SMARTCLOUD_REDIS_URL",
+        "ORCHESTRATOR_REDIS_NAMESPACE",
         "CONVERSATION_STORE_PATH",
         "STATE_STORE_PATH",
         "SSE_EVENT_STORE_PATH",
         "AGENT_CONFIG_STORE_PATH",
         "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
         "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
+        "BUSINESS_TOOLS_REDIS_NAMESPACE",
     }
     for key in passthrough_keys:
         if key in env and env[key] not in {"", None}:
             merged[key] = _coerce_value(str(env[key]))
+
+    runtime_dir = Path(str(merged.get("ORCHESTRATOR_RUNTIME_DIR") or (root / ".tmp" / "orchestrator-service"))).expanduser()
+    merged.setdefault("ORCHESTRATOR_RUNTIME_DIR", str(runtime_dir))
+    if merged.get("SMARTCLOUD_MYSQL_DSN") not in {None, ""}:
+        merged.setdefault("CONVERSATION_STORE_PATH", str(runtime_dir / "degraded-conversation-store.json"))
+        merged.setdefault("STATE_STORE_PATH", str(runtime_dir / "degraded-state-store.json"))
+        merged.setdefault("AGENT_CONFIG_STORE_PATH", str(runtime_dir / "degraded-agent-config-store.json"))
+    if merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
+        merged.setdefault("SSE_EVENT_STORE_PATH", str(runtime_dir / "degraded-sse-event-store.json"))
+        merged.setdefault(
+            "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
+            str(runtime_dir / "degraded-business-tools-idempotency.json"),
+        )
+        merged.setdefault(
+            "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
+            str(runtime_dir / "degraded-business-tools-query-cache.json"),
+        )
 
     merged.setdefault("APP_ENV", app_env)
     return Settings.model_validate(merged)

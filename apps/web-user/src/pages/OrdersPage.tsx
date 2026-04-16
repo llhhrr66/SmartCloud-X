@@ -6,7 +6,22 @@ import { useAuth } from '../auth/AuthContext';
 import { Badge } from '../components/Badge';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
-import { formatCurrency, formatDateTime, orderStatusLabel, refundStatusLabel } from '../lib/format';
+import {
+  buildChatAttachmentFromFileRecord,
+  buildOrderDetailFallback,
+  mergeOrderDetailWithRefunds,
+  resolveSharedLoadStateRetryAfterMs,
+  selectSharedLoadStateDomains,
+  sortRefundRecordsByCreatedAt,
+  upsertChatAttachment
+} from '../shared-sdk';
+import {
+  formatCurrency,
+  formatDateTime,
+  formatRetryAfterHint,
+  orderStatusLabel,
+  refundStatusLabel
+} from '../lib/format';
 import type { ChatAttachment, OrderDetail, OrderRecord, RefundRecord, ServiceWorkspaceData, UploadPolicy } from '../types/domain';
 
 const emptyWorkspace: ServiceWorkspaceData = {
@@ -27,19 +42,11 @@ const initialRefundForm = {
   reason: '套餐资源与当前业务需求不匹配，申请退回未使用部分。'
 };
 
-function sortByCreatedAt<T extends { createdAt: string }>(items: T[]): T[] {
-  return [...items].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-}
-
-function mergeRefunds(primary: RefundRecord[], secondary: RefundRecord[]): RefundRecord[] {
-  const merged = new Map<string, RefundRecord>();
-
-  for (const refund of [...primary, ...secondary]) {
-    merged.set(refund.refundNo, refund);
-  }
-
-  return sortByCreatedAt([...merged.values()]);
-}
+const workspaceFailureLabels: Record<'orders' | 'refunds', string> = {
+  orders: '订单列表',
+  refunds: '退款记录'
+};
+const visibleWorkspaceDomains = ['orders', 'refunds'] as const;
 
 export function OrdersPage(): JSX.Element {
   const { isMock } = useAuth();
@@ -131,9 +138,19 @@ export function OrdersPage(): JSX.Element {
     () => workspace.orders.find((item) => item.orderNo === selectedOrderNo) ?? null,
     [selectedOrderNo, workspace.orders]
   );
+  const degradedWorkspaceDomainKeys = selectSharedLoadStateDomains(
+    workspace.loadState,
+    visibleWorkspaceDomains
+  );
+  const unavailableWorkspaceDomains = degradedWorkspaceDomainKeys.map(
+    (item) => workspaceFailureLabels[item]
+  );
+  const workspaceRetryAfterHint = formatRetryAfterHint(
+    resolveSharedLoadStateRetryAfterMs(workspace.loadState, degradedWorkspaceDomainKeys)
+  );
 
   const fallbackRefunds = useMemo(
-    () => sortByCreatedAt(workspace.refunds.filter((item) => item.orderNo === selectedOrderNo)),
+    () => sortRefundRecordsByCreatedAt(workspace.refunds.filter((item) => item.orderNo === selectedOrderNo)),
     [selectedOrderNo, workspace.refunds]
   );
 
@@ -168,31 +185,20 @@ export function OrdersPage(): JSX.Element {
 
       try {
         const detail = await serviceDeskService.getOrderDetail(selectedOrderNo);
-        const mergedRefunds = mergeRefunds(detail.refunds, fallbackRefunds);
+        const mergedDetail = mergeOrderDetailWithRefunds(detail, fallbackRefunds);
 
         if (mounted) {
-          setOrderDetail({
-            ...detail,
-            refunds: mergedRefunds
-          });
+          setOrderDetail(mergedDetail);
           setSelectedRefundNo((previous) =>
-            previous && mergedRefunds.some((item) => item.refundNo === previous)
+            previous && mergedDetail.refunds.some((item) => item.refundNo === previous)
               ? previous
-              : mergedRefunds[0]?.refundNo ?? null
+              : mergedDetail.refunds[0]?.refundNo ?? null
           );
         }
       } catch (error) {
         if (mounted) {
           setDetailError(error instanceof Error ? error.message : '加载订单详情失败，已展示列表级数据。');
-          setOrderDetail(
-            selectedOrder
-              ? {
-                  order: selectedOrder,
-                  configurationSummary: [],
-                  refunds: fallbackRefunds
-                }
-              : null
-          );
+          setOrderDetail(buildOrderDetailFallback(selectedOrder, fallbackRefunds));
           setSelectedRefundNo((previous) =>
             previous && fallbackRefunds.some((item) => item.refundNo === previous) ? previous : fallbackRefunds[0]?.refundNo ?? null
           );
@@ -291,14 +297,9 @@ export function OrdersPage(): JSX.Element {
         size: Number(uploadForm.size)
       });
 
-      const attachment: ChatAttachment = {
-        fileId: file.fileId,
-        fileName: file.fileName,
-        mimeType: file.mimeType,
-        size: file.size
-      };
+      const attachment = buildChatAttachmentFromFileRecord(file);
 
-      setAvailableAttachments((previous) => [attachment, ...previous.filter((item) => item.fileId !== attachment.fileId)]);
+      setAvailableAttachments((previous) => upsertChatAttachment(previous, attachment));
       setSuccessMessage('退款附件已完成模拟上传。');
     } catch (error) {
       setPageError(error instanceof Error ? error.message : '模拟上传失败');
@@ -363,6 +364,13 @@ export function OrdersPage(): JSX.Element {
       />
 
       {pageError ? <div className="error-banner">{pageError}</div> : null}
+      {!pageError && unavailableWorkspaceDomains.length ? (
+        <div className="error-banner">
+          部分订单工作区数据暂不可用，当前以下分区加载失败：
+          <strong>{` ${unavailableWorkspaceDomains.join(' / ')}`}</strong>
+          {workspaceRetryAfterHint ? ` ${workspaceRetryAfterHint}` : ''}
+        </div>
+      ) : null}
       {successMessage ? <div className="success-banner">{successMessage}</div> : null}
 
       <div className="grid grid--3">

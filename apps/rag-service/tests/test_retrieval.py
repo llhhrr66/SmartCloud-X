@@ -468,6 +468,25 @@ def test_answer_falls_back_when_no_citations() -> None:
     assert counter_value(DEGRADED_RETRIEVALS_TOTAL) == degraded_before + 1
 
 
+def test_answer_route_returns_guidance_when_no_candidates(monkeypatch) -> None:
+    monkeypatch.setattr(rag_routes, "get_knowledge_client", lambda: FakeKnowledgeClient([]))
+    monkeypatch.setattr(rag_routes, "get_retrieval_service", lambda: RetrievalService(QueryRewriter()))
+    client = TestClient(service_app)
+
+    response = client.post(
+        "/api/rag/v1/answer",
+        headers={"X-Request-Id": "req-rag-empty-1"},
+        json={"query": "不存在的知识", "topK": 3, "filters": {"tags": ["missing-tag"]}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["degraded"] is False
+    assert payload["citations"] == []
+    assert payload["coverageNotes"][0] == "未检索到匹配知识，请先补充知识库文档或放宽过滤条件。"
+    assert "没有检索到可引用知识" in payload["answer"]
+
+
 def test_upstream_headers_preserve_trace_context() -> None:
     with use_span(
         NonRecordingSpan(

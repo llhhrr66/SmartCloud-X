@@ -3,10 +3,17 @@ import {
   createApiError,
   parseResponsePayload,
   parseSseBlock,
+  resolveEnvelopeStatus,
   unwrapEnvelope,
   type RawSseEvent
 } from './envelope';
-import { createRequestId, isAbortError, joinUrl, shouldDefaultJsonContentType } from './utils';
+import {
+  createRequestId,
+  isAbortError,
+  isNetworkErrorLike,
+  joinUrl,
+  shouldDefaultJsonContentType
+} from './utils';
 
 export interface HeaderBuildContext {
   path: string;
@@ -22,6 +29,22 @@ export interface FrontendApiClientOptions {
   shouldRefreshSession?: (status: number, payload: unknown) => boolean;
   refreshSession?: () => Promise<unknown>;
   requestIdPrefix?: string;
+}
+
+export function createTransportApiError(
+  error: unknown,
+  requestId: string | undefined,
+  fallbackMessage: string,
+  status = 500
+): ApiError {
+  const resolvedStatus = isNetworkErrorLike(error) ? 503 : status;
+  return new ApiError(
+    error instanceof Error ? `${fallbackMessage}: ${error.message}` : fallbackMessage,
+    resolvedStatus,
+    undefined,
+    error,
+    requestId
+  );
 }
 
 export class FrontendApiClient {
@@ -94,13 +117,7 @@ export class FrontendApiClient {
     fallbackMessage: string,
     status = 500
   ): ApiError {
-    return new ApiError(
-      error instanceof Error ? `${fallbackMessage}: ${error.message}` : fallbackMessage,
-      status,
-      undefined,
-      error,
-      requestId
-    );
+    return createTransportApiError(error, requestId, fallbackMessage, status);
   }
 
   async request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
@@ -125,15 +142,16 @@ export class FrontendApiClient {
       });
 
       const payload = await parseResponsePayload(response);
-      if (await this.maybeRefreshSession(response.status, payload, allowRefresh)) {
+      const refreshStatus = resolveEnvelopeStatus(payload, response.status);
+      if (await this.maybeRefreshSession(refreshStatus, payload, allowRefresh)) {
         return this.request<T>(path, init, false);
       }
 
       if (!response.ok) {
-        throw createApiError(payload, response.status, response);
+        throw createApiError(payload, response.status, response, undefined, requestId);
       }
 
-      return unwrapEnvelope<T>(payload, response.status, response);
+      return unwrapEnvelope<T>(payload, response.status, response, requestId);
     } catch (error) {
       if (error instanceof ApiError) {
         throw error;
@@ -169,17 +187,30 @@ export class FrontendApiClient {
       throw this.createTransportError(error, requestId, 'SSE stream request failed', 503);
     }
 
-    if (allowRefresh && response.status === 401) {
-      const initialPayload = await parseResponsePayload(response.clone());
-      if (await this.maybeRefreshSession(response.status, initialPayload, allowRefresh)) {
+    const responseContentType = (response.headers.get('content-type') ?? '').toLowerCase();
+    const isJsonEnvelopeResponse = responseContentType.includes('json');
+
+    if (!response.ok || isJsonEnvelopeResponse) {
+      const payload = await parseResponsePayload(response);
+      const refreshStatus = resolveEnvelopeStatus(payload, response.status);
+
+      if (await this.maybeRefreshSession(refreshStatus, payload, allowRefresh)) {
         yield* this.stream(path, init, false);
         return;
       }
-    }
 
-    if (!response.ok) {
-      const payload = await parseResponsePayload(response);
-      throw createApiError(payload, response.status, response);
+      if (!response.ok) {
+        throw createApiError(payload, response.status, response, undefined, requestId);
+      }
+
+      unwrapEnvelope<unknown>(payload, response.status, response, requestId);
+      throw createApiError(
+        payload,
+        refreshStatus,
+        response,
+        'Expected SSE stream response',
+        requestId
+      );
     }
 
     if (!response.body) {
@@ -198,7 +229,7 @@ export class FrontendApiClient {
         }
 
         buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split(/\n\n/);
+        const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop() ?? '';
 
         for (const block of blocks) {
@@ -208,6 +239,8 @@ export class FrontendApiClient {
           }
         }
       }
+
+      buffer += decoder.decode();
 
       if (buffer.trim()) {
         const parsed = parseSseBlock(buffer);

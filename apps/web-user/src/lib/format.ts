@@ -106,3 +106,11 @@ export function icpApplicationStatusLabel(status: IcpApplicationStatus): string 
 export function truncate(value: string, maxLength = 72): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 }
+
+export function formatRetryAfterHint(retryAfterMs?: number): string | null {
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return null;
+  }
+
+  return `建议约 ${Math.max(1, Math.ceil(retryAfterMs / 1000))} 秒后重试。`;
+}

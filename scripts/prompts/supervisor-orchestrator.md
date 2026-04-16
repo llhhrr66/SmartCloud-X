@@ -27,3 +27,15 @@ Mission:
 6. End with a concise summary of completed work, blockers, and integration points.
 
 Make real changes in owned directories and move the implementation materially forward.
+
+Current override priority (2026-04-16, real infra migration):
+1. Stop leaving orchestrator/tool-hub/business-tools on process-local JSON/file-backed persistence as the main path.
+2. Orchestrator scope:
+   - move conversation/state authoritative persistence toward MySQL + Redis-backed runtime paths
+   - move SSE event buffering/replay toward Redis stream/list style storage instead of file-only stores
+   - move agent config persistence toward database-backed storage where practical
+3. Tool-hub scope:
+   - move tool-call audit storage away from JSON-file primary storage toward MySQL/log-system friendly persistence
+4. Business-tools scope:
+   - migrate idempotency and query-cache behavior toward Redis-backed storage
+5. Preserve safe fallbacks only for migration/degraded mode; the target of this run is real middleware-backed mainline behavior, not additional mock/file-backed baselines.

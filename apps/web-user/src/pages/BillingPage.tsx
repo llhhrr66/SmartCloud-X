@@ -3,7 +3,11 @@ import { Link } from 'react-router-dom';
 import { billingService } from '../api/services/billing';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
-import { formatCurrency, formatDateTime } from '../lib/format';
+import { formatCurrency, formatDateTime, formatRetryAfterHint } from '../lib/format';
+import {
+  resolveSharedLoadStateRetryAfterMs,
+  selectSharedLoadStateDomains
+} from '../shared-sdk';
 import type { BillingDashboard } from '../types/domain';
 
 const degradedDomainLabels: Record<string, string> = {
@@ -50,8 +54,15 @@ export function BillingPage(): JSX.Element {
   const hasRecords = Boolean(
     dashboard && (dashboard.details.length || dashboard.invoices.length || dashboard.orders.length || dashboard.tickets.length)
   );
-  const failedDomainSet = new Set(dashboard?.loadState?.failedDomains ?? []);
-  const degradedDomains = [...failedDomainSet].map((item) => degradedDomainLabels[item] ?? item);
+  const degradedDomainKeys = selectSharedLoadStateDomains(
+    dashboard?.loadState,
+    ['summary', 'details', 'invoices', 'orders', 'tickets'] as const
+  );
+  const failedDomainSet = new Set(degradedDomainKeys);
+  const unavailableDomains = degradedDomainKeys.map((item) => degradedDomainLabels[item] ?? item);
+  const retryAfterHint = formatRetryAfterHint(
+    resolveSharedLoadStateRetryAfterMs(dashboard?.loadState, degradedDomainKeys)
+  );
 
   return (
     <>
@@ -77,8 +88,9 @@ export function BillingPage(): JSX.Element {
       {pageError ? <div className="error-banner">{pageError}</div> : null}
       {!pageError && dashboard?.loadState?.degraded ? (
         <div className="error-banner">
-          部分账单数据暂不可用，当前已展示可成功加载的分区：
-          <strong>{` ${degradedDomains.join(' / ')}`}</strong>
+          部分账单数据暂不可用，当前以下分区加载失败：
+          <strong>{` ${unavailableDomains.join(' / ')}`}</strong>
+          {retryAfterHint ? ` ${retryAfterHint}` : ''}
         </div>
       ) : null}
 

@@ -477,7 +477,7 @@ paths:
       tags: [knowledge]
       operationId: knowledge_bootstrapCatalog
       summary: Seed the knowledge repository with the starter catalog baseline.
-      description: Concrete bootstrap result details remain downstream-owned.
+      description: Concrete bootstrap result details remain downstream-owned. The shared `TraceContext` baseline now treats optional scope members such as `conversationId`, `tenantId`, and `callerService` as equivalent when omitted or explicit `null`, matching the live bootstrap/admin response shape.
       x-owner-service: knowledge-service
       x-permission-code: service:internal.call
       x-error-codes: []
@@ -493,6 +493,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ObjectEnvelope'
+              example:
+                success: true
+                requestId: req_catalog_bootstrap
+                trace:
+                  requestId: req_catalog_bootstrap
+                  traceId: req_catalog_bootstrap
+                  conversationId: null
+                  tenantId: null
+                  callerService: null
+                data:
+                  status: seeded
   /api/knowledge/v1/search:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader

@@ -14,6 +14,11 @@ test('creates marketing outputs and a research task in the browser', async ({ pa
   await expect(page.getByText('工业级上云活动')).toBeVisible();
   await expect(page.getByText('queued')).toBeVisible();
 
+  await page.evaluate(() => window.localStorage.removeItem('smartcloud-x:web-user:task-registry'));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '营销中心', exact: true })).toBeVisible();
+  await expect(page.getByText('工业级上云活动')).toBeVisible();
+
   await openAppPage(page, '/research', '研究中心');
   await page.getByLabel('主题').fill('E2E LangGraph 调研');
   await page.getByLabel('范围').fill('验证浏览器端研究任务创建和历史卡片展示。');
@@ -21,4 +26,9 @@ test('creates marketing outputs and a research task in the browser', async ({ pa
 
   await expect(page.getByText('E2E LangGraph 调研')).toBeVisible();
   await expect(page.getByText('研究任务已创建，等待后端服务完成生成。')).toBeVisible();
+
+  await page.evaluate(() => window.localStorage.removeItem('smartcloud-x:web-user:task-registry'));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '研究中心', exact: true })).toBeVisible();
+  await expect(page.getByText('E2E LangGraph 调研')).toBeVisible();
 });

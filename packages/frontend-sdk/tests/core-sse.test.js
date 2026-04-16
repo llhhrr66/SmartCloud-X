@@ -68,6 +68,57 @@ test('consumeSseStreamWithReconnect does not retry structured unauthorized failu
   );
 });
 
+test('consumeSseStreamWithReconnect does not retry shared stream-events not-found failures', async () => {
+  let reconnectCount = 0;
+
+  await assert.rejects(
+    consumeSseStreamWithReconnect({
+      connect: async function* () {
+        throw new ApiError('stream events missing', 500, 'CHAT_STREAM_EVENTS_NOT_FOUND');
+      },
+      consumeEvent: async () => undefined,
+      maxReconnectAttempts: 3,
+      onBeforeReconnect: async () => {
+        reconnectCount += 1;
+      },
+      waitForDelay: async () => undefined
+    }),
+    (error) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.code, 'CHAT_STREAM_EVENTS_NOT_FOUND');
+      assert.equal(reconnectCount, 0);
+      return true;
+    }
+  );
+});
+
+test('consumeSseStreamWithReconnect does not retry structured unauthorized envelope failures without ApiError wrapping', async () => {
+  let reconnectCount = 0;
+  const envelope = {
+    error_code: 'AUTH_UNAUTHORIZED',
+    error_message: 'session expired'
+  };
+
+  await assert.rejects(
+    consumeSseStreamWithReconnect({
+      connect: async function* () {
+        throw envelope;
+      },
+      consumeEvent: async () => undefined,
+      maxReconnectAttempts: 3,
+      onBeforeReconnect: async () => {
+        reconnectCount += 1;
+      },
+      waitForDelay: async () => undefined
+    }),
+    (error) => {
+      assert.equal(error, envelope);
+      assert.equal(reconnectCount, 0);
+      return true;
+    }
+  );
+});
+
 test('consumeSseStreamWithReconnect does not retry structured forbidden envelope failures', async () => {
   let reconnectCount = 0;
   const envelope = {
@@ -124,6 +175,108 @@ test('consumeSseStreamWithReconnect does not retry structured conflict envelope 
   );
 });
 
+test('consumeSseStreamWithReconnect does not retry actionable server-shaped envelopes with explicit user-action hints', async () => {
+  let reconnectCount = 0;
+  const envelope = {
+    status: 500,
+    error: {
+      code: 'SERVICE_UNAVAILABLE'
+    },
+    user_action_hint: {
+      action: 'collect-auth-context',
+      message: '请先补充账号上下文',
+      missing_auth_context: ['account_id'],
+      required_permissions: ['user:billing.read']
+    }
+  };
+
+  await assert.rejects(
+    consumeSseStreamWithReconnect({
+      connect: async function* () {
+        throw envelope;
+      },
+      consumeEvent: async () => undefined,
+      maxReconnectAttempts: 3,
+      onBeforeReconnect: async () => {
+        reconnectCount += 1;
+      },
+      waitForDelay: async () => undefined
+    }),
+    (error) => {
+      assert.equal(error, envelope);
+      assert.equal(reconnectCount, 0);
+      return true;
+    }
+  );
+});
+
+test('consumeSseStreamWithReconnect does not retry server-shaped envelopes carrying pending_user_actions metadata', async () => {
+  let reconnectCount = 0;
+  const envelope = {
+    status: 500,
+    error: {
+      code: 'SERVICE_UNAVAILABLE'
+    },
+    pending_user_actions: [
+      {
+        tool_name: 'billing.create_invoice',
+        tool_call_id: 'tc_auth_002',
+        action: 'collect-auth-context',
+        message: '请补充账号上下文',
+        missing_auth_context: ['account_id'],
+        required_permissions: ['user:billing.read']
+      }
+    ]
+  };
+
+  await assert.rejects(
+    consumeSseStreamWithReconnect({
+      connect: async function* () {
+        throw envelope;
+      },
+      consumeEvent: async () => undefined,
+      maxReconnectAttempts: 3,
+      onBeforeReconnect: async () => {
+        reconnectCount += 1;
+      },
+      waitForDelay: async () => undefined
+    }),
+    (error) => {
+      assert.equal(error, envelope);
+      assert.equal(reconnectCount, 0);
+      return true;
+    }
+  );
+});
+
+test('consumeSseStreamWithReconnect does not retry mislabeled 401 envelopes when the shared code resolves them to forbidden', async () => {
+  let reconnectCount = 0;
+  const envelope = {
+    status: 401,
+    error_code: 'TOOL_HUB_CALLER_FORBIDDEN',
+    error_message: 'forbidden despite transport mismatch'
+  };
+
+  await assert.rejects(
+    consumeSseStreamWithReconnect({
+      connect: async function* () {
+        throw envelope;
+      },
+      consumeEvent: async () => undefined,
+      maxReconnectAttempts: 3,
+      onBeforeReconnect: async () => {
+        reconnectCount += 1;
+      },
+      waitForDelay: async () => undefined
+    }),
+    (error) => {
+      assert.equal(error, envelope);
+      assert.equal(reconnectCount, 0);
+      return true;
+    }
+  );
+});
+
 test('consumeSseStreamWithReconnect retries graceful stream closes when the caller marks them reconnectable', async () => {
   const consumed = [];
   const reconnects = [];
@@ -154,6 +307,38 @@ test('consumeSseStreamWithReconnect retries graceful stream closes when the call
     { event: 'delta', data: { chunk: 2 } }
   ]);
   assert.equal(reconnects[0].reason, 'close');
+});
+
+test('consumeSseStreamWithReconnect reuses the latest SSE retry hint on graceful reconnects', async () => {
+  const reconnects = [];
+  let connectCount = 0;
+
+  const result = await consumeSseStreamWithReconnect({
+    connect: async function* () {
+      connectCount += 1;
+      if (connectCount === 1) {
+        yield { event: 'ping', data: {}, retry: 1750 };
+        return;
+      }
+
+      yield { event: 'delta', data: { content: 'ok' } };
+    },
+    consumeEvent: async () => undefined,
+    shouldReconnectOnClose: () => connectCount < 2,
+    maxReconnectAttempts: 1,
+    defaultDelayMs: 25,
+    maxDelayMs: 25,
+    onBeforeReconnect: async (context) => {
+      reconnects.push(context.delayMs);
+    },
+    waitForDelay: async (delayMs) => {
+      reconnects.push(delayMs);
+    }
+  });
+
+  assert.equal(result.reconnectAttempts, 1);
+  assert.equal(connectCount, 2);
+  assert.deepEqual(reconnects, [1750, 1750]);
 });
 
 test('consumeSseStreamWithReconnect honors retry_after metadata from structured rate-limit errors', async () => {
@@ -209,6 +394,36 @@ test('consumeSseStreamWithReconnect honors retry_after metadata from structured 
   assert.equal(result.reconnectAttempts, 1);
   assert.equal(connectCount, 2);
   assert.deepEqual(delays, [2000, 2000]);
+});
+
+test('consumeSseStreamWithReconnect still reconnects mislabeled 401 envelopes when the shared code resolves them to rate limited', async () => {
+  const delays = [];
+  let connectCount = 0;
+
+  const result = await consumeSseStreamWithReconnect({
+    connect: async function* () {
+      connectCount += 1;
+      if (connectCount === 1) {
+        throw {
+          status: 401,
+          error_code: 'RATE_LIMITED',
+          retry_after: 3
+        };
+      }
+    },
+    consumeEvent: async () => undefined,
+    maxReconnectAttempts: 1,
+    onBeforeReconnect: async (context) => {
+      delays.push(context.delayMs);
+    },
+    waitForDelay: async (delayMs) => {
+      delays.push(delayMs);
+    }
+  });
+
+  assert.equal(result.reconnectAttempts, 1);
+  assert.equal(connectCount, 2);
+  assert.deepEqual(delays, [3000, 3000]);
 });
 
 test('consumeSseStreamWithReconnect uses the caller disconnect error after exhausting close retries', async () => {

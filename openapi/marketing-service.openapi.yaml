@@ -14,6 +14,7 @@ paths:
       tags: [health]
       operationId: marketing_healthz
       summary: Check marketing service liveness.
+      description: Liveness-only health contract. Backend-selection proof is not yet surfaced on this route; when marketing publishes additive MySQL/MinIO runtime evidence, it should follow `docs/contracts/shared/runtime-health.md`.
       x-owner-service: marketing-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]

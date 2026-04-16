@@ -60,15 +60,44 @@ from app.services.tool_context import apply_tool_input_bindings, write_session_c
 router = APIRouter(tags=["orchestration"])
 internal_router = APIRouter(tags=["internal-orchestration"])
 _settings = get_settings()
-_agent_config_store = AgentConfigStore(file_path=_settings.agent_config_store_path)
+_agent_config_store = AgentConfigStore(
+    file_path=_settings.agent_config_store_path,
+    mysql_dsn=_settings.mysql_dsn,
+    redis_url=_settings.redis_url,
+    redis_namespace=f"{_settings.redis_namespace}:agent-config",
+)
 _router = AgentRouter(agent_config_store=_agent_config_store)
 _runtime = AgentRuntime(agent_config_store=_agent_config_store)
 _reviewer = ResponseReviewService()
 _tool_catalog = build_catalog()
-_state_store = OrchestrationStateStore(file_path=_settings.state_store_path)
-_conversation_store = ConversationStore(file_path=_settings.conversation_store_path)
-_sse_event_store = SseEventStore(file_path=_settings.sse_event_store_path)
-_run_control = OrchestrationRunControl()
+_state_store = OrchestrationStateStore(
+    file_path=_settings.state_store_path,
+    mysql_dsn=_settings.mysql_dsn,
+    redis_url=_settings.redis_url,
+    redis_namespace=f"{_settings.redis_namespace}:state",
+)
+_conversation_store = ConversationStore(
+    file_path=_settings.conversation_store_path,
+    mysql_dsn=_settings.mysql_dsn,
+    redis_url=_settings.redis_url,
+    redis_namespace=f"{_settings.redis_namespace}:conversation",
+)
+_sse_event_store = SseEventStore(
+    file_path=_settings.sse_event_store_path,
+    redis_url=_settings.redis_url,
+    redis_namespace=f"{_settings.redis_namespace}:sse",
+    ttl_seconds=_settings.sse_event_ttl_seconds,
+)
+_run_control = OrchestrationRunControl(
+    redis_url=_settings.redis_url,
+    redis_namespace=f"{_settings.redis_namespace}:run-control",
+    lease_seconds=max(
+        (_settings.default_agent_timeout_seconds * max(_settings.max_handoff_steps, 1)) + 60,
+        max((_settings.request_timeout_ms + 999) // 1000, 1) + 60,
+        180,
+    ),
+)
+_AUTH_PROFILE_ATTRIBUTE_KEY = "auth_profile"
 
 
 @router.get("/agents", response_model=ApiEnvelope[list[AgentDescriptor]])
@@ -651,10 +680,15 @@ def _build_continue_request(
             )
         )
     _apply_continuation_field_values(session_context, payload.field_values)
+    user_profile = _apply_user_profile_patch(
+        base_request.user_profile,
+        payload.user_profile_patch,
+    )
     return base_request.model_copy(
         deep=True,
         update={
             "session_context": session_context,
+            "user_profile": user_profile,
             "message_id": None,
             "trace": None,
         },
@@ -900,6 +934,15 @@ def _execute_message(
             "session_context": _normalize_effective_session_context(
                 conversation_id,
                 effective_request,
+            ),
+        },
+    )
+    effective_request = effective_request.model_copy(
+        deep=True,
+        update={
+            "user_profile": _hydrate_user_profile_from_session_context(
+                effective_request.user_profile,
+                effective_request.session_context,
             )
         },
     )
@@ -1007,6 +1050,7 @@ def _run_orchestration(
         ),
         max_recent_messages=_conversation_store.max_recent_messages,
     )
+    _persist_user_profile_into_session_context(next_session_context, message_request.user_profile)
     state_snapshot = _state_store.save(
         _build_state_snapshot(
             route_request.conversation_id,
@@ -1142,10 +1186,116 @@ def _collect_pending_user_actions(
                         field: list(bindings)
                         for field, bindings in hint.session_context_bindings.items()
                     },
+                    user_profile_bindings={
+                        field: list(bindings)
+                        for field, bindings in hint.user_profile_bindings.items()
+                    },
                     confirm_tool_names=list(hint.confirm_tool_names),
                 )
             )
     return actions
+
+
+def _hydrate_user_profile_from_session_context(
+    user_profile: UserProfile,
+    session_context: SessionContext,
+) -> UserProfile:
+    auth_profile = session_context.attributes.get(_AUTH_PROFILE_ATTRIBUTE_KEY)
+    if not isinstance(auth_profile, dict):
+        return user_profile
+
+    hydrated = user_profile.model_copy(deep=True)
+    if not hydrated.user_id and auth_profile.get("user_id"):
+        hydrated.user_id = str(auth_profile["user_id"])
+    if not hydrated.account_id and auth_profile.get("account_id"):
+        hydrated.account_id = str(auth_profile["account_id"])
+    if hydrated.tenant_id == "default" and auth_profile.get("tenant_id"):
+        hydrated.tenant_id = str(auth_profile["tenant_id"])
+    if hydrated.locale == "zh-CN" and auth_profile.get("locale"):
+        hydrated.locale = str(auth_profile["locale"])
+    if hydrated.channel == "web" and auth_profile.get("channel"):
+        hydrated.channel = str(auth_profile["channel"])
+    if hydrated.vip_level == "normal" and auth_profile.get("vip_level"):
+        hydrated.vip_level = str(auth_profile["vip_level"])
+
+    roles = auth_profile.get("roles")
+    if hydrated.roles == ["user"] and isinstance(roles, list) and roles:
+        hydrated.roles = _dedupe_profile_list(roles)
+
+    permissions = auth_profile.get("permissions")
+    if not hydrated.permissions and isinstance(permissions, list) and permissions:
+        hydrated.permissions = _dedupe_profile_list(permissions)
+
+    return hydrated
+
+
+def _apply_user_profile_patch(
+    base_profile: UserProfile,
+    patch,
+) -> UserProfile:
+    updated = base_profile.model_copy(deep=True)
+    values = patch.model_dump(exclude_none=True)
+    if "user_id" in values:
+        updated.user_id = str(values["user_id"])
+    if "account_id" in values:
+        updated.account_id = str(values["account_id"])
+    if "tenant_id" in values:
+        updated.tenant_id = str(values["tenant_id"])
+    if "locale" in values:
+        updated.locale = str(values["locale"])
+    if "channel" in values:
+        updated.channel = str(values["channel"])
+    if "vip_level" in values:
+        updated.vip_level = str(values["vip_level"])
+    if "roles" in values and isinstance(values["roles"], list):
+        updated.roles = _dedupe_profile_list([*updated.roles, *values["roles"]])
+    if "permissions" in values and isinstance(values["permissions"], list):
+        updated.permissions = _dedupe_profile_list([*updated.permissions, *values["permissions"]])
+    return updated
+
+
+def _persist_user_profile_into_session_context(
+    session_context: SessionContext,
+    user_profile: UserProfile,
+) -> None:
+    auth_profile = session_context.attributes.get(_AUTH_PROFILE_ATTRIBUTE_KEY)
+    has_auth_values = bool(
+        user_profile.user_id
+        or user_profile.account_id
+        or user_profile.permissions
+        or user_profile.roles != ["user"]
+        or isinstance(auth_profile, dict)
+    )
+    if not has_auth_values:
+        return
+    merged = dict(auth_profile) if isinstance(auth_profile, dict) else {}
+    if user_profile.user_id:
+        merged["user_id"] = user_profile.user_id
+    if user_profile.account_id:
+        merged["account_id"] = user_profile.account_id
+    if user_profile.tenant_id:
+        merged["tenant_id"] = user_profile.tenant_id
+    if user_profile.locale:
+        merged["locale"] = user_profile.locale
+    if user_profile.channel:
+        merged["channel"] = user_profile.channel
+    if user_profile.vip_level:
+        merged["vip_level"] = user_profile.vip_level
+    if user_profile.roles:
+        merged["roles"] = _dedupe_profile_list(user_profile.roles)
+    if user_profile.permissions:
+        merged["permissions"] = _dedupe_profile_list(user_profile.permissions)
+    if merged:
+        session_context.attributes[_AUTH_PROFILE_ATTRIBUTE_KEY] = merged
+
+
+def _dedupe_profile_list(values: list[object]) -> list[str]:
+    deduped: list[str] = []
+    for value in values:
+        normalized = str(value).strip()
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
+    return deduped
 
 
 

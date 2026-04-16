@@ -1,4 +1,4 @@
-import { ApiError, resolveSseReconnectDelayMs } from './envelope';
+import { ApiError, extractEnvelopeRetryAfterMs, resolveSseReconnectDelayMs } from './envelope';
 import { isAbortError, waitForAbortableDelay } from './utils';
 
 export interface ConsumeSseStreamReconnectContext {
@@ -19,6 +19,7 @@ export interface ConsumeSseStreamWithReconnectOptions<TEvent> {
   shouldReconnectOnClose?: () => boolean;
   onBeforeReconnect?: (context: ConsumeSseStreamReconnectContext) => void | Promise<void>;
   waitForDelay?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  getReconnectDelayMsFromEvent?: (event: TEvent) => number | undefined;
   buildDisconnectError?: (context: {
     reconnectAttempts: number;
     maxReconnectAttempts: number;
@@ -54,12 +55,35 @@ function linkAbortSignal(parent: AbortSignal | undefined, controller: AbortContr
   return () => parent.removeEventListener('abort', handleAbort);
 }
 
+function resolveReconnectDelayFromEvent<TEvent>(
+  event: TEvent,
+  getReconnectDelayMsFromEvent?: (event: TEvent) => number | undefined
+): number | undefined {
+  const extracted = getReconnectDelayMsFromEvent?.(event);
+  if (typeof extracted === 'number' && Number.isFinite(extracted) && extracted >= 0) {
+    return extracted;
+  }
+
+  if (
+    typeof event === 'object' &&
+    event !== null &&
+    'retry' in event &&
+    typeof (event as { retry?: unknown }).retry === 'number'
+  ) {
+    const retry = (event as { retry: number }).retry;
+    return Number.isFinite(retry) && retry >= 0 ? retry : undefined;
+  }
+
+  return undefined;
+}
+
 export async function consumeSseStreamWithReconnect<TEvent>(
   options: ConsumeSseStreamWithReconnectOptions<TEvent>
 ): Promise<ConsumeSseStreamWithReconnectResult> {
   const maxReconnectAttempts = Math.max(options.maxReconnectAttempts ?? 0, 0);
   const waitForDelay = options.waitForDelay ?? waitForAbortableDelay;
   let reconnectAttempts = 0;
+  let reconnectDelayOverrideMs: number | undefined;
 
   while (true) {
     if (options.signal?.aborted) {
@@ -71,6 +95,13 @@ export async function consumeSseStreamWithReconnect<TEvent>(
 
     try {
       for await (const event of options.connect(controller.signal, reconnectAttempts)) {
+        const eventReconnectDelayMs = resolveReconnectDelayFromEvent(
+          event,
+          options.getReconnectDelayMsFromEvent
+        );
+        if (eventReconnectDelayMs !== undefined) {
+          reconnectDelayOverrideMs = eventReconnectDelayMs;
+        }
         await options.consumeEvent(event);
       }
     } catch (error) {
@@ -82,15 +113,18 @@ export async function consumeSseStreamWithReconnect<TEvent>(
         throw error;
       }
 
-      const delayMs = resolveSseReconnectDelayMs({
+      const explicitErrorDelayMs =
+        error instanceof ApiError ? error.retryAfterMs : extractEnvelopeRetryAfterMs(error);
+      const reconnectDelayMs = resolveSseReconnectDelayMs({
         attempt: reconnectAttempts + 1,
         defaultMs: options.defaultDelayMs,
         maxMs: options.maxDelayMs,
         error
       });
-      if (delayMs === null) {
+      if (reconnectDelayMs === null) {
         throw error;
       }
+      const delayMs = explicitErrorDelayMs ?? reconnectDelayOverrideMs ?? reconnectDelayMs;
 
       reconnectAttempts += 1;
       await options.onBeforeReconnect?.({
@@ -124,11 +158,13 @@ export async function consumeSseStreamWithReconnect<TEvent>(
       );
     }
 
-    const delayMs = resolveSseReconnectDelayMs({
-      attempt: reconnectAttempts + 1,
-      defaultMs: options.defaultDelayMs,
-      maxMs: options.maxDelayMs
-    });
+    const delayMs =
+      reconnectDelayOverrideMs ??
+      resolveSseReconnectDelayMs({
+        attempt: reconnectAttempts + 1,
+        defaultMs: options.defaultDelayMs,
+        maxMs: options.maxDelayMs
+      });
 
     reconnectAttempts += 1;
     await options.onBeforeReconnect?.({

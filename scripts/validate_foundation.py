@@ -23,6 +23,7 @@ REQUIRED_FILES = [
     ROOT / 'README.md',
     ROOT / 'docs/contracts/change-requests/CHANGE_REQUEST_TEMPLATE.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-chat-compat-delete-baseline.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-admin-agent-config-baseline.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-streaming-tool-audit-idempotency.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-session-context-patch-promotion.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-business-tools-execute-tool-result-alignment.md',
@@ -41,6 +42,7 @@ REQUIRED_FILES = [
     ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-agent-route-journal-internal-caller-policy.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-provider-backed-tool-contract-discovery-baseline.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-research-task-null-error-message-alignment.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-runtime-readiness-health-baseline.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-tool-hub-audit-status-completed-alignment.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-tool-hub-invoke-response-metadata-alignment.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-tool-session-context-dependency-metadata-promotion.md',
@@ -48,11 +50,22 @@ REQUIRED_FILES = [
     ROOT / 'docs/contracts/change-requests/2026-04-16-auth-marketing-research-marketing-generated-artifact-history.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-auth-marketing-research-alias-status-result-routes.md',
     ROOT / 'docs/contracts/change-requests/2026-04-16-auth-user-profile-avatar-nullability-alignment.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-auth-marketing-research-runtime-backend-health-baseline.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-business-tools-redis-namespace-alignment.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-frontend-sdk-foundation-error-code-export-alignment.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-frontend-sdk-chat-stream-events-not-found-promotion.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-frontend-sdk-icp-application-list-contract-promotion.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-orchestrator-auth-continuation-user-profile-patch.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-persistence-backend-contract-baseline.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-runtime-mysql-redis-config-promotion.md',
+    ROOT / 'docs/contracts/change-requests/2026-04-16-trace-context-nullability-alignment.md',
     ROOT / 'docs/contracts/foundation-baseline.md',
     ROOT / 'docs/contracts/shared/admin-api-baseline.md',
     ROOT / 'docs/contracts/shared/api-conventions.md',
     ROOT / 'docs/contracts/shared/auth-contract.md',
+    ROOT / 'docs/contracts/shared/persistence-backends.md',
     ROOT / 'docs/contracts/shared/runtime-config.md',
+    ROOT / 'docs/contracts/shared/runtime-health.md',
     ROOT / 'docs/contracts/shared/schema-catalog.md',
     ROOT / 'docs/status/supervisor-foundation-status.md',
     ROOT / 'logs/supervisor-foundation/blockers.log',
@@ -82,6 +95,9 @@ REQUIRED_FILES = [
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/session-cancel-response.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-request.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-response-data.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-config-update-request.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-list-data.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-record.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-audit-list-data.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-audit-record.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-login-request.schema.json',
@@ -117,6 +133,9 @@ REQUIRED_FILES = [
     ROOT / 'packages/common-schemas/src/schemas/external/user/promotion-link-result.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/user/research-task-result-data.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/external/user/research-task-status-data.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/runtime-dependency-readiness.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/runtime-health-status.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/runtime-readiness-status.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/auth/invalidate-subject-cache-request.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/auth/invalidate-subject-cache-response-data.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/auth/permission-check-request.schema.json',
@@ -133,8 +152,11 @@ REQUIRED_FILES = [
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/session-rollback-response.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/session-state-snapshot.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/stream-event.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/stream-event-page.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/stream-event-record.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/tool-plan-item.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/tool-context-item.schema.json',
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/user-profile-patch.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/tool-hub/compensation-call-request.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/tool-hub/compensation-call-response.schema.json',
     ROOT / 'packages/common-schemas/src/schemas/internal/tool-hub/tool-compensation-action.schema.json',
@@ -171,7 +193,9 @@ REQUIRED_ERROR_CODES = {
     'CHAT_MESSAGE_CANCELLED',
     'CHAT_MESSAGE_NOT_FOUND',
     'CHAT_MESSAGE_NOT_RUNNING',
+    'CHAT_STREAM_EVENTS_NOT_FOUND',
     'IDEMPOTENCY_CONFLICT',
+    'ORCH_AGENT_NOT_FOUND',
     'ORCH_SESSION_STATE_NOT_FOUND',
     'ORCH_TOOL_CALL_NOT_FOUND',
 }
@@ -220,6 +244,8 @@ COMMON_README_REQUIRED_STRINGS = {
 API_CONVENTIONS_REQUIRED_STRINGS = {
     'pending_user_actions[]',
     'user_action_hint',
+    'user_profile_bindings',
+    'user_profile_patch',
     'clarify-tool-input',
     'collect-auth-context',
     'user-confirmation',
@@ -231,18 +257,26 @@ FOUNDATION_BASELINE_REQUIRED_STRINGS = {
     'all seven supervisor run/prompt entrypoints',
     '`review_result` execution-event variant',
     '`review-answer` checkpoint marker',
+    '`FoundationErrorCode` / `foundationErrorCodes`',
+    '`user_profile_patch` continuation input',
+    'explicit `null` optional scope members',
+    'shared persistence/backend matrix',
+    '`CHAT_STREAM_EVENTS_NOT_FOUND`',
 }
 ORCHESTRATOR_OPENAPI_REQUIRED_STRINGS = {
     'review_result',
     'review-answer',
     'lightweight `review` metadata',
     'pending_user_actions',
+    'user_profile_patch',
 }
 TOOL_HUB_OPENAPI_REQUIRED_STRINGS = {
     'user_action_hint',
+    'user_profile_bindings',
 }
 BUSINESS_TOOLS_OPENAPI_REQUIRED_STRINGS = {
     'user_action_hint',
+    'user_profile_bindings',
 }
 COMMON_OWNER_ASSIGNMENT_CHECKS = {
     'auth-user-service': 'supervisor-auth-marketing-research',
@@ -282,6 +316,7 @@ REQUIRED_OPENAPI_PATHS = {
         '/internal/v1/auth/invalidate-subject-cache',
     ),
     'business-tools-service.openapi.yaml': (
+        '/readyz',
         '/internal/v1/tools/{tool_name}',
         '/internal/v1/execute/{tool_name}',
         '/internal/v1/preflight/{tool_name}',
@@ -309,6 +344,7 @@ REQUIRED_OPENAPI_PATHS = {
         '/api/knowledge/v1/catalog:bootstrap',
     ),
     'orchestrator-service.openapi.yaml': (
+        '/readyz',
         '/api/v1/chat/completions',
         '/api/v1/chat/sessions',
         '/api/v1/chat/sessions/{conversation_id}',
@@ -316,6 +352,8 @@ REQUIRED_OPENAPI_PATHS = {
         '/api/v1/chat/sessions/{conversation_id}/cancel',
         '/api/v1/chat/sessions/{conversation_id}/continue',
         '/api/v1/chat/sessions/{conversation_id}/messages',
+        '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events',
+        '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events/stream',
         '/api/v1/chat/sessions/{conversation_id}/retry',
         '/api/v1/sessions/{conversation_id}/messages/stream',
         '/api/v1/sessions/{conversation_id}/rollback',
@@ -329,6 +367,7 @@ REQUIRED_OPENAPI_PATHS = {
         '/api/v1/research/tasks/{task_id}/result',
     ),
     'tool-hub-service.openapi.yaml': (
+        '/readyz',
         '/api/v1/tool-calls',
         '/api/v1/tool-calls/{tool_call_id}',
         '/api/v1/tools/{tool_name}/invoke',
@@ -342,13 +381,17 @@ REQUIRED_OPENAPI_OPERATIONS = {
         '/api/v1/admin/knowledge-bases/{kb_id}': {'patch'},
     },
     'orchestrator-service.openapi.yaml': {
+        '/readyz': {'get'},
         '/api/v1/chat/completions': {'post'},
         '/api/v1/chat/sessions/{conversation_id}': {'delete', 'get', 'patch'},
         '/api/v1/chat/sessions/{conversation_id}/agent-routes': {'get'},
         '/api/v1/chat/sessions/{conversation_id}/cancel': {'post'},
         '/api/v1/chat/sessions/{conversation_id}/continue': {'post'},
+        '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events': {'get'},
+        '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events/stream': {'get'},
     },
     'business-tools-service.openapi.yaml': {
+        '/readyz': {'get'},
         '/internal/v1/tools/{tool_name}': {'get'},
         '/internal/v1/preflight/{tool_name}': {'post'},
     },
@@ -376,6 +419,7 @@ REQUIRED_OPENAPI_OPERATIONS = {
         '/api/knowledge/v1/snapshot': {'get'},
     },
     'tool-hub-service.openapi.yaml': {
+        '/readyz': {'get'},
         '/api/v1/tool-calls': {'get'},
         '/api/v1/tools/{tool_name}/invoke': {'post'},
         '/api/v1/tools/call': {'post'},
@@ -409,6 +453,14 @@ REQUIRED_OPENAPI_QUERY_PARAMS = {
         'sort_by',
         'sort_order',
     },
+    ('orchestrator-service.openapi.yaml', '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events', 'get'): {
+        'after_event_id',
+        'limit',
+    },
+    ('orchestrator-service.openapi.yaml', '/api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events/stream', 'get'): {
+        'after_event_id',
+        'limit',
+    },
     ('tool-hub-service.openapi.yaml', '/api/v1/tool-calls', 'get'): {
         'audit_tag',
         'conversation_id',
@@ -423,6 +475,27 @@ REQUIRED_OPENAPI_PARAMETER_ENUM_VALUES = {
     },
 }
 REQUIRED_SCHEMA_PROPERTIES = {
+    ROOT / 'packages/common-schemas/src/schemas/runtime-dependency-readiness.schema.json': {
+        'ready',
+        'status',
+        'mode',
+        'service',
+        'httpStatus',
+        'notReadyComponents',
+        'error',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/runtime-health-status.schema.json': {
+        'status',
+        'service',
+        'degraded_components',
+        'runtime',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/runtime-readiness-status.schema.json': {
+        'status',
+        'service',
+        'not_ready_components',
+        'runtime',
+    },
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/chat-completion-request.schema.json': {
         'context',
         'options',
@@ -443,6 +516,7 @@ REQUIRED_SCHEMA_PROPERTIES = {
         'action',
         'message',
         'session_context_bindings',
+        'user_profile_bindings',
         'confirm_tool_names',
     },
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/response-review-issue.schema.json': {
@@ -475,6 +549,21 @@ REQUIRED_SCHEMA_PROPERTIES = {
         'field_values',
         'confirm_tool_names',
         'session_context_patch',
+        'user_profile_patch',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/stream-event-record.schema.json': {
+        'event_id',
+        'sequence',
+        'event',
+        'data',
+        'created_at',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/stream-event-page.schema.json': {
+        'conversation_id',
+        'message_id',
+        'items',
+        'next_event_id',
+        'has_more',
     },
     ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/session-state-snapshot.schema.json': {
         'agent_routes',
@@ -594,7 +683,22 @@ REQUIRED_SCHEMA_PROPERTIES = {
         'requires_account_context',
         'confirmation_required',
         'session_context_bindings',
+        'user_profile_bindings',
         'confirm_tool_names',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/user-profile.schema.json': {
+        'locale',
+        'channel',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/internal/orchestrator/user-profile-patch.schema.json': {
+        'user_id',
+        'roles',
+        'permissions',
+        'account_id',
+        'tenant_id',
+        'locale',
+        'channel',
+        'vip_level',
     },
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-audit-record.schema.json': {
         'audit_id',
@@ -605,6 +709,26 @@ REQUIRED_SCHEMA_PROPERTIES = {
         'action',
         'reason',
         'created_at',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-record.schema.json': {
+        'name',
+        'code',
+        'display_name',
+        'domain',
+        'description',
+        'tool_whitelist',
+        'enabled',
+        'timeout_seconds',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-list-data.schema.json': {
+        'items',
+        'total',
+    },
+    ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-agent-config-update-request.schema.json': {
+        'enabled',
+        'max_tool_calls',
+        'fallback_agent',
+        'timeout_seconds',
     },
     ROOT / 'packages/common-schemas/src/schemas/external/admin/admin-audit-list-data.schema.json': {
         'items',
@@ -749,6 +873,18 @@ REQUIRED_SCHEMA_ROOT_ENUM_VALUES = {
     },
 }
 REQUIRED_SCHEMA_PROPERTY_ENUM_VALUES = {
+    (ROOT / 'packages/common-schemas/src/schemas/runtime-dependency-readiness.schema.json', 'mode'): {
+        'transport-local',
+        'http',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/runtime-health-status.schema.json', 'status'): {
+        'ok',
+        'degraded',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/runtime-readiness-status.schema.json', 'status'): {
+        'ready',
+        'not_ready',
+    },
     (ROOT / 'packages/common-schemas/src/schemas/internal/tool-hub/tool-call-audit-record.schema.json', 'status'): {
         'completed',
         'invalid-payload',
@@ -792,6 +928,36 @@ REQUIRED_SCHEMA_NESTED_PROPERTIES = {
     },
     (ROOT / 'packages/common-schemas/src/schemas/internal/business-tools/business-tool-execute-response.schema.json', 'error_detail'): {
         'missing_fields',
+    },
+}
+REQUIRED_SCHEMA_PROPERTY_TYPE_MEMBERS = {
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'conversationId'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'userId'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'tenantId'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'callerService'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'toolCallId'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'idempotencyKey'): {
+        'string',
+        'null',
+    },
+    (ROOT / 'packages/common-schemas/src/schemas/trace-context.schema.json', 'operatorReason'): {
+        'string',
+        'null',
     },
 }
 CHANGE_REQUEST_RESULT_MARKERS = ('Foundation Processing Result', 'Foundation 处理结果')
@@ -882,6 +1048,90 @@ def validate_error_catalog(path: Path) -> None:
     missing_codes = sorted(REQUIRED_ERROR_CODES - seen_codes)
     if missing_codes:
         raise ValueError(f'Error catalog missing promoted codes {missing_codes} in {path.relative_to(ROOT)}')
+    validate_foundation_error_code_exports(path, ROOT / 'packages/common-schemas/src/index.ts')
+
+
+def extract_union_literals(text: str, export_name: str, source_label: str) -> list[str]:
+    pattern = (
+        rf'export type {re.escape(export_name)} =\n'
+        rf'(?P<body>[\s\S]*?);\n\n'
+    )
+    match = re.search(pattern, text)
+    if not match:
+        raise ValueError(f'{source_label} is missing exported type `{export_name}`')
+    values = re.findall(r"'([^']+)'", match.group('body'))
+    if not values:
+        raise ValueError(f'{source_label} exported type `{export_name}` does not contain string literals')
+    return values
+
+
+def extract_array_literals(text: str, export_name: str, source_label: str) -> list[str]:
+    pattern = (
+        rf'export const {re.escape(export_name)}: [A-Za-z0-9_<>\[\]\s|]+ = \['
+        rf'(?P<body>[\s\S]*?)\n\];'
+    )
+    match = re.search(pattern, text)
+    if not match:
+        raise ValueError(f'{source_label} is missing exported const `{export_name}`')
+    values = re.findall(r"'([^']+)'", match.group('body'))
+    if not values:
+        raise ValueError(f'{source_label} exported const `{export_name}` does not contain string literals')
+    return values
+
+
+def validate_foundation_error_code_exports(catalog_path: Path, index_path: Path) -> None:
+    catalog = validate_yaml_file(catalog_path)
+    if not isinstance(catalog, dict):
+        raise ValueError(f'Error catalog must be a mapping: {catalog_path.relative_to(ROOT)}')
+    codes = catalog.get('codes')
+    if not isinstance(codes, list) or not codes:
+        raise ValueError(f'Error catalog codes list is empty in {catalog_path.relative_to(ROOT)}')
+    catalog_codes = [str(item['code']) for item in codes if isinstance(item, dict) and 'code' in item]
+    index_text = index_path.read_text(encoding='utf-8')
+    union_codes = extract_union_literals(
+        index_text,
+        'FoundationErrorCode',
+        index_path.relative_to(ROOT).as_posix(),
+    )
+    array_codes = extract_array_literals(
+        index_text,
+        'foundationErrorCodes',
+        index_path.relative_to(ROOT).as_posix(),
+    )
+    for exported_name, exported_codes in (
+        ('FoundationErrorCode', union_codes),
+        ('foundationErrorCodes', array_codes),
+    ):
+        missing = sorted(set(catalog_codes) - set(exported_codes))
+        extras = sorted(set(exported_codes) - set(catalog_codes))
+        if missing or extras:
+            raise ValueError(
+                f'{index_path.relative_to(ROOT)} `{exported_name}` is out of sync with '
+                f'{catalog_path.relative_to(ROOT)} (missing={missing or []}, extra={extras or []})'
+            )
+
+
+def extract_type_members(property_payload: Any) -> set[str]:
+    if not isinstance(property_payload, dict):
+        return set()
+    members: set[str] = set()
+    type_value = property_payload.get('type')
+    if isinstance(type_value, str):
+        members.add(type_value)
+    elif isinstance(type_value, list):
+        members.update(str(item) for item in type_value if isinstance(item, str))
+    for keyword in ('oneOf', 'anyOf'):
+        variants = property_payload.get(keyword)
+        if not isinstance(variants, list):
+            continue
+        for variant in variants:
+            if isinstance(variant, dict):
+                variant_type = variant.get('type')
+                if isinstance(variant_type, str):
+                    members.add(variant_type)
+                elif isinstance(variant_type, list):
+                    members.update(str(item) for item in variant_type if isinstance(item, str))
+    return members
 
 
 def iter_json_refs(value: Any):
@@ -976,6 +1226,22 @@ def validate_schema_properties(path: Path, payload: Any) -> None:
         if missing_nested:
             raise ValueError(
                 f'Schema property `{property_name}` missing nested properties {missing_nested} in {path.relative_to(ROOT)}'
+            )
+    for (schema_path, property_name), required_type_members in REQUIRED_SCHEMA_PROPERTY_TYPE_MEMBERS.items():
+        if schema_path != path:
+            continue
+        if not isinstance(properties, dict):
+            raise ValueError(f'Schema missing `properties` object in {path.relative_to(ROOT)}')
+        property_payload = properties.get(property_name)
+        if not isinstance(property_payload, dict):
+            raise ValueError(
+                f'Schema missing promoted property `{property_name}` in {path.relative_to(ROOT)}'
+            )
+        actual_members = extract_type_members(property_payload)
+        missing_type_members = sorted(required_type_members - actual_members)
+        if missing_type_members:
+            raise ValueError(
+                f'Schema property `{property_name}` missing type members {missing_type_members} in {path.relative_to(ROOT)}'
             )
 
 

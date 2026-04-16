@@ -19,7 +19,7 @@ configure_logging(settings.log_level)
 app = FastAPI(
     title="SmartCloud-X Auth User Service",
     version=settings.app_version,
-    description="Baseline auth service for user login/profile flows, admin auth bootstrap, and internal permission checks.",
+    description="Database-backed auth service baseline for user login/profile flows, admin auth bootstrap, and internal permission checks.",
 )
 app.add_middleware(
     CORSMiddleware,

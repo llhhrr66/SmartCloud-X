@@ -2,6 +2,7 @@ from app.core.business_tools_sdk import build_catalog
 from app.models.orchestration import AgentConfigUpdateRequest, RouteRequest
 from app.services.agent_config_store import AgentConfigStore
 from app.services.router import AgentRouter
+from app.services.tool_hub_client import ToolHubDiscoveryUnavailableError
 
 
 
@@ -47,6 +48,59 @@ def test_router_uses_order_status_query_tool_for_refund_progress_questions() -> 
     assert decision.primary_agent == "finance_order_agent"
     assert [tool.tool_name for tool in decision.tool_plan] == ["order.query_order"]
     assert decision.tool_plan[0].missing_payload_fields == []
+
+
+def test_router_uses_instance_cost_query_tool_for_followup_cost_questions() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="帮我查下这台实例费用",
+            conversation_id="conv-instance-cost-route-1",
+            scene="billing",
+            user_profile={
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                    "billing_cycle": "2026-04",
+                },
+            },
+        )
+    )
+
+    assert decision.primary_agent == "finance_order_agent"
+    assert [tool.tool_name for tool in decision.tool_plan] == ["billing.query_instance_cost"]
+    assert decision.tool_plan[0].missing_payload_fields == []
+
+
+def test_router_allows_explicit_billing_range_to_override_persisted_instance_cycle() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="帮我查下上个月这台实例费用",
+            conversation_id="conv-instance-cost-route-2",
+            scene="billing",
+            user_profile={
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                    "billing_cycle": "2026-04",
+                },
+            },
+        )
+    )
+
+    tool = decision.tool_plan[0]
+    assert tool.tool_name == "billing.query_instance_cost"
+    assert tool.payload["range"] == "last_month"
+    assert "billing_cycle" not in tool.payload
 
 
 def test_router_uses_invoice_status_query_tool_for_invoice_status_questions() -> None:
@@ -99,6 +153,27 @@ def test_router_uses_icp_subject_verification_tool_for_real_name_questions() -> 
     assert decision.primary_agent == "icp_service_agent"
     assert [tool.tool_name for tool in decision.tool_plan] == ["icp.verify_subject"]
     assert decision.tool_plan[0].missing_payload_fields == []
+
+
+def test_router_uses_service_status_tool_for_technical_incident_followup() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="帮我查下这台实例现在是不是故障了",
+            conversation_id="conv-service-status-route-1",
+            scene="technical_support",
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                },
+            },
+        )
+    )
+
+    assert decision.primary_agent == "product_tech_agent"
+    assert [tool.tool_name for tool in decision.tool_plan] == ["support.query_service_status"]
+    assert decision.tool_plan[0].missing_payload_fields == []
+    assert decision.tool_plan[0].payload["instance_id"] == "gpu-cn-sh2-01"
 
 
 def test_available_agents_include_spec_metadata_versions() -> None:
@@ -175,8 +250,90 @@ def test_router_assigns_marketing_support_for_gpu_campaign() -> None:
     assert decision.primary_agent == "product_tech_agent"
     assert "ops_marketing_agent" in decision.supporting_agents
     assert len(decision.handoff_plan) == 2
+    assert any(tool.tool_name == "product.recommend_instance" for tool in decision.tool_plan)
     assert any(tool.tool_name == "marketing.campaign_lookup" for tool in decision.tool_plan)
 
+
+def test_router_routes_gpu_marketing_copy_through_product_grounding_when_no_recommendation_context() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="帮我给 GPU 实例写一段营销文案",
+            conversation_id="conv-product-marketing-copy",
+            scene="marketing",
+            user_profile={
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read", "user:marketing.write"],
+            },
+        )
+    )
+
+    assert decision.primary_agent == "product_tech_agent"
+    assert decision.supporting_agents == ["ops_marketing_agent"]
+    assert [tool.tool_name for tool in decision.tool_plan] == [
+        "product.catalog_lookup",
+        "product.recommend_instance",
+        "marketing.campaign_lookup",
+        "marketing.generate_copy",
+    ]
+    assert decision.handoff_plan[0].agent == "product_tech_agent"
+    assert decision.handoff_plan[1].agent == "ops_marketing_agent"
+
+
+def test_router_keeps_marketing_primary_when_recommendation_context_exists() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="把刚才推荐的 GPU 实例写成营销文案",
+            conversation_id="conv-product-marketing-followup",
+            scene="marketing",
+            user_profile={
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read", "user:marketing.write"],
+            },
+            session_context={
+                "active_products": ["GPU 实例"],
+                "attributes": {
+                    "recommended_instance_summary": "gi4.2xlarge / NVIDIA L40S x2",
+                    "recommended_instance_type": "gi4.2xlarge",
+                    "recommended_gpu_model": "NVIDIA L40S",
+                },
+            },
+        )
+    )
+
+    assert decision.primary_agent == "ops_marketing_agent"
+    assert decision.supporting_agents == []
+    assert [tool.tool_name for tool in decision.tool_plan] == [
+        "marketing.campaign_lookup",
+        "marketing.generate_copy",
+    ]
+    assert decision.tool_plan[0].payload["product"] == "GPU"
+    assert decision.tool_plan[0].payload["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert decision.tool_plan[1].payload["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+
+
+def test_router_uses_product_recommendation_tool_for_gpu_sizing_questions() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例规格",
+            conversation_id="conv-product-sizing-1",
+            scene="technical_support",
+        )
+    )
+
+    assert decision.primary_agent == "product_tech_agent"
+    assert [tool.tool_name for tool in decision.tool_plan] == [
+        "product.catalog_lookup",
+        "product.recommend_instance",
+    ]
+    recommend_tool = decision.tool_plan[1]
+    assert recommend_tool.assigned_agent == "product_tech_agent"
+    assert recommend_tool.payload["workload"] == "inference"
+    assert recommend_tool.payload["model_family"] == "llm"
+    assert recommend_tool.payload["budget_level"] == "balanced"
+    assert recommend_tool.readiness == "ready"
 
 
 def test_router_flags_human_handoff_requests() -> None:
@@ -190,6 +347,68 @@ def test_router_flags_human_handoff_requests() -> None:
     )
     assert decision.needs_human_handoff is True
     assert decision.intent.needs_human_handoff is True
+
+
+def test_router_adds_handoff_brief_tool_for_human_escalation() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="服务异常我要转人工",
+            conversation_id="conv-human-brief-route",
+            scene="technical_support",
+        )
+    )
+
+    assert decision.primary_agent == "product_tech_agent"
+    assert [tool.tool_name for tool in decision.tool_plan] == ["support.handoff_brief"]
+    handoff_tool = decision.tool_plan[0]
+    assert handoff_tool.payload["scene"] == "technical_support"
+    assert handoff_tool.payload["urgency"] == "high"
+    assert handoff_tool.payload["reason"] == "service_exception"
+
+
+def test_router_routes_technical_incident_ticket_requests_through_support_then_ticket() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="GPU 实例异常帮我转人工并创建工单",
+            conversation_id="conv-tech-ticket-route",
+            scene="technical_support",
+            user_profile={
+                "user_id": "u-1",
+                "permissions": ["user:ticket.write"],
+            },
+        )
+    )
+
+    assert decision.primary_agent == "product_tech_agent"
+    assert decision.supporting_agents == ["finance_order_agent"]
+    assert [tool.tool_name for tool in decision.tool_plan] == [
+        "support.query_service_status",
+        "support.handoff_brief",
+        "ticket.create",
+    ]
+    ticket_tool = decision.tool_plan[2]
+    assert ticket_tool.assigned_agent == "finance_order_agent"
+    assert ticket_tool.readiness == "ready_after_dependencies"
+    assert ticket_tool.deferred_payload_fields == ["subject", "content"]
+    assert ticket_tool.payload["scene"] == "technical_support"
+
+
+def test_router_handoff_brief_infers_domain_scene_from_customer_service_requests() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="账单异常我要转人工",
+            conversation_id="conv-human-brief-route-2",
+            scene="customer_service",
+        )
+    )
+
+    assert decision.primary_agent == "finance_order_agent"
+    assert [tool.tool_name for tool in decision.tool_plan] == ["support.handoff_brief"]
+    assert decision.tool_plan[0].payload["scene"] == "billing"
+    assert decision.tool_plan[0].payload["reason"] == "service_exception"
 
 
 def test_router_adds_collect_user_input_checkpoint_for_high_risk_write() -> None:
@@ -525,3 +744,32 @@ def test_router_uses_tool_hub_contract_metadata_when_http_transport_enabled(monk
     query_tool = next(tool for tool in decision.tool_plan if tool.tool_name == "billing.query_statement")
     assert query_tool.timeout_ms == 4321
     assert query_tool.cache_ttl_seconds == 66
+
+
+def test_router_does_not_reuse_local_tool_metadata_when_http_discovery_is_unavailable_in_prod(monkeypatch) -> None:
+    class StubToolHubClient:
+        def list_tool_definitions(self):
+            raise ToolHubDiscoveryUnavailableError("tool-hub discovery unavailable")
+
+    router = AgentRouter(tool_hub_client=StubToolHubClient())
+    monkeypatch.setattr(router._settings, "tool_hub_transport", "http", raising=False)
+    monkeypatch.setattr(router._settings, "app_env", "prod", raising=False)
+
+    decision = router.route(
+        RouteRequest(
+            user_query="帮我查本月账单",
+            conversation_id="conv-http-prod-1",
+            scene="billing",
+            user_profile={
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+        )
+    )
+
+    query_tool = next(tool for tool in decision.tool_plan if tool.tool_name == "billing.query_statement")
+    assert query_tool.operation == "preview"
+    assert query_tool.tool_mode is None
+    assert query_tool.timeout_ms is None
+    assert query_tool.cache_ttl_seconds is None

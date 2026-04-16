@@ -2,44 +2,42 @@
 
 ## Status
 - phase: done
-- updated at: 2026-04-16T14:28:01+08:00
+- updated at: 2026-04-16T22:45:41+08:00
 - owned scope: `apps/knowledge-service/`, `apps/rag-service/`, `apps/web-admin/`, `deploy/`, `observability/`
+- run focus completed: snapshot/export authority hardening, export/degraded-path QA coverage, and trace verification refresh
 
-## Completed
-- hardened `knowledge-service` snapshot/export consistency again by merging duplicate legacy KB/document profiles without losing informative `file_id`, `source_type`, or `source_uri` fields, while still pruning orphaned runtime state and keeping exported counts aligned.
-- added a practical `knowledge-indexer` worker in owned scope. It now drains queued outbox events into MinIO raw-object upload, MySQL metadata upsert, Qdrant vector upsert, OpenSearch BM25 upsert, and Redis completion notification flows, then persists per-connector results back onto the event.
-- upgraded `rag-service` retrieval caching to use Redis TTL storage when configured, with in-process fallback so degraded Redis does not break retrieval.
-- updated compose, smoke, and observability artifacts so the owned baseline actually runs the worker, waits for completed connector steps in smoke validation, and alerts on worker or connector failures.
-- strengthened `deploy/docker-compose/trace-smoke.py` so OTLP QA now covers the worker span as well as both backend services and the shared rag-to-knowledge trace id.
+## Completed in this run
+- made `knowledge-service` snapshot export refresh MySQL-backed KB/document/admin metadata before repository reconciliation, so stale local JSON profile blobs no longer overwrite the exported admin/runtime view.
+- fixed repository reconciliation so `documentProfiles[].latest_job_id` preserves the newer authoritative job reference instead of blindly falling back to an older local ingestion job.
+- added knowledge-service regressions for conflicting local JSON drift, snapshot refresh from authoritative metadata, and snapshot OTLP span export.
+- added a rag-service route-level empty-result answer regression and extended `deploy/docker-compose/smoke-test.py` to assert snapshot KB/document-profile consistency plus the live empty-result answer path.
+- refreshed owned README guidance to describe the stronger MySQL-authority and QA behavior.
 
 ## Self-review
-- reviewed the new reconciliation, worker, Redis-cache, and QA wiring end to end after implementation.
-- found and fixed one issue in this pass:
-- the first worker implementation read `source_type/source_uri` only from the document-profile row, but admin/file-backed ingests enqueue before that profile is persisted.
-- fixed it by preferring the outbox event’s raw-object metadata during connector writes, which preserves the real filesystem source fields even under async timing.
+- reviewed the new metadata-refresh path, document-profile reconciliation, and QA assertions end to end.
+- found and fixed two issues during review:
+  - repository reconciliation was overwriting fresher authoritative `latest_job_id` values with older local ingestion ids; fixed by comparing candidate/admin-job timestamps before choosing the job id.
+  - the first version of the new metadata-authority regressions depended on module reloads and collided with the global Prometheus registry during combined pytest; replaced that with instance-injected fake metadata backends.
 
 ## Current verification
-- passed: `/home/ljr/SmartCloud-X/.venv/bin/pip install -r /home/ljr/SmartCloud-X/apps/knowledge-service/requirements.txt -r /home/ljr/SmartCloud-X/apps/rag-service/requirements.txt`
-- passed: `python3 -m py_compile /home/ljr/SmartCloud-X/apps/knowledge-service/app/services/store.py /home/ljr/SmartCloud-X/apps/knowledge-service/app/services/indexing_worker.py /home/ljr/SmartCloud-X/apps/knowledge-service/app/worker.py /home/ljr/SmartCloud-X/apps/rag-service/app/services/cache.py /home/ljr/SmartCloud-X/deploy/docker-compose/smoke-test.py /home/ljr/SmartCloud-X/deploy/docker-compose/trace-smoke.py`
-- passed: `/home/ljr/SmartCloud-X/.venv/bin/pytest -q /home/ljr/SmartCloud-X/apps/knowledge-service/tests /home/ljr/SmartCloud-X/apps/rag-service/tests`
-- passed: `SMARTCLOUD_TRACE_SMOKE_PYTHON=/home/ljr/SmartCloud-X/.venv/bin/python /home/ljr/SmartCloud-X/.venv/bin/python /home/ljr/SmartCloud-X/deploy/docker-compose/trace-smoke.py`
-- passed: `docker compose -f /home/ljr/SmartCloud-X/deploy/docker-compose/docker-compose.yml config`
-- passed: `npm run build` in `/home/ljr/SmartCloud-X/apps/web-admin`
-- passed: `python3` YAML parse for `/home/ljr/SmartCloud-X/observability/prometheus/alerts.yml` and `/home/ljr/SmartCloud-X/observability/prometheus/prometheus.yml`
+- passed: `python3 -m py_compile apps/knowledge-service/app/services/metadata_backend.py apps/knowledge-service/app/services/store.py apps/knowledge-service/app/services/snapshot.py deploy/docker-compose/smoke-test.py`
+- passed: `/home/ljr/SmartCloud-X/.venv/bin/pytest -q apps/knowledge-service/tests apps/rag-service/tests`
+- passed: `SMARTCLOUD_TRACE_SMOKE_PYTHON=/home/ljr/SmartCloud-X/.venv/bin/python /home/ljr/SmartCloud-X/.venv/bin/python deploy/docker-compose/trace-smoke.py`
+- passed: `docker compose -f deploy/docker-compose/docker-compose.yml config`
+- not run in this pass: `deploy/docker-compose/smoke-test.py` against a live compose stack; the script itself was updated, but the stack was not started during this pass.
 
 ## Blockers
 - none active inside owned directories.
-- non-blocking follow-up: frozen promotion for `PATCH /api/v1/admin/knowledge-bases/{kb_id}` is still pending in `docs/contracts/change-requests/2026-04-16-admin-kb-update-promotion.md`.
+- non-blocking follow-up remains the frozen promotion request for `PATCH /api/v1/admin/knowledge-bases/{kb_id}` in `docs/contracts/change-requests/2026-04-16-admin-kb-update-promotion.md`.
 
 ## Integration points
-- `knowledge-service` snapshot exports now expose connector step results on `integrations.recentEvents[*].connectorResults`, so `web-admin` and compose smoke can distinguish queued, failed, and fully-synchronized indexing events.
-- the new `knowledge-indexer` worker consumes the same runtime outbox already written by ingestion/reindex flows and fans it out to MinIO, MySQL, Qdrant, OpenSearch, and Redis without changing the public/admin API surface.
-- `rag-service` now uses Redis as the primary retrieval cache backend when configured in compose, while preserving local fallback behavior during Redis failures.
-- `deploy/docker-compose/trace-smoke.py` now exercises ingestion, worker processing, and rag answer flows together and proves that Phoenix-compatible collectors receive spans from both services plus the worker span under the propagated trace.
+- `apps/knowledge-service/app/services/snapshot.py` now refreshes metadata from the MySQL-backed authority before export reconciliation.
+- `apps/knowledge-service/app/services/store.py` now keeps authoritative document-profile job references when admin/profile metadata is newer than the local ingestion row.
+- `deploy/docker-compose/smoke-test.py` now checks that snapshot-exported KB/document-profile state matches the just-written admin/runtime state and that the live empty-result answer path returns operator guidance without a degraded flag.
+- `apps/rag-service/tests/test_retrieval.py` now locks in the empty-result answer behavior that the compose smoke path expects.
 
 ## Residual risks
-- knowledge persistence and admin job state still use local JSON as the source of truth; MySQL/Qdrant/OpenSearch are now downstream synchronization targets rather than authoritative storage.
-- the indexing queue itself is still JSONL-backed with retry markers; Redis is used for completion notification and cache wiring, not yet as the sole durable work queue.
-- admin document creation remains file-backed through the configured import root rather than shared upload-policy/object-storage flows.
-- admin write flows remain local-operator friendly but are not yet wired to shared auth/RBAC enforcement beyond operator-reason and confirm-token checks.
-- the KB PATCH route is implemented in owned code today, but the frozen admin contract/OpenAPI still need the follow-up promotion request listed above.
+- documents and chunks still persist primarily in the local runtime JSON store; this pass strengthened metadata authority but did not fully migrate the corpus store.
+- the Redis queue path still uses simple list semantics with the JSONL outbox retained as the audit/recovery log, not a full broker/worker framework.
+- admin document creation is still file-backed through the configured import root rather than shared upload-policy/object-storage contracts.
+- admin/auth enforcement is still local-baseline only; shared auth/RBAC integration remains outside this run.

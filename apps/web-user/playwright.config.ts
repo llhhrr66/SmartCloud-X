@@ -4,6 +4,7 @@ const appPort = Number(process.env.PLAYWRIGHT_APP_PORT ?? 3100);
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 38090);
 const appUrl = `http://127.0.0.1:${appPort}`;
 const apiUrl = `http://127.0.0.1:${apiPort}`;
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === '1';
 
 export default defineConfig({
   testDir: './tests/e2e/specs',
@@ -27,13 +28,13 @@ export default defineConfig({
       command: `PLAYWRIGHT_API_PORT=${apiPort} node tests/e2e/mock-api-server.mjs`,
       url: `${apiUrl}/__test/health`,
       timeout: 120_000,
-      reuseExistingServer: !process.env.CI
+      reuseExistingServer
     },
     {
       command: `VITE_USE_MOCK_API=false VITE_API_BASE_URL=${apiUrl} npm run dev -- --host 127.0.0.1 --port ${appPort}`,
       url: `${appUrl}/login`,
       timeout: 120_000,
-      reuseExistingServer: !process.env.CI
+      reuseExistingServer
     }
   ],
   projects: [

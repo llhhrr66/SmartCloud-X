@@ -12,6 +12,8 @@ from business_tools import (  # noqa: E402
     get_idempotency_store,
     get_query_cache_store,
 )
+from app.core.business_tools_sdk import reset_local_runtime_state  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.api.routes.orchestration import (  # noqa: E402
     _agent_config_store,
     _conversation_store,
@@ -19,14 +21,35 @@ from app.api.routes.orchestration import (  # noqa: E402
     _sse_event_store,
     _state_store,
 )
-
+def _remove_degraded_spool(path_value: str | None) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    if path.exists():
+        path.unlink()
 
 
 def pytest_runtest_setup(item) -> None:  # pragma: no cover - pytest hook
-    configure_idempotency_store(persistence_path=None)
-    configure_query_cache(enabled=True, ttl_cap_seconds=300, persistence_path=None)
+    settings = get_settings()
+    configure_idempotency_store(
+        persistence_path=settings.business_tools_idempotency_store_path,
+        redis_url=settings.redis_url,
+        redis_namespace=f"{settings.business_tools_redis_namespace}:idempotency",
+    )
+    configure_query_cache(
+        enabled=settings.tool_query_cache_enabled,
+        ttl_cap_seconds=settings.tool_query_cache_ttl_cap_seconds,
+        persistence_path=settings.business_tools_query_cache_store_path,
+        redis_url=settings.redis_url,
+        redis_namespace=f"{settings.business_tools_redis_namespace}:query-cache",
+    )
+    _remove_degraded_spool(settings.business_tools_idempotency_store_path)
+    _remove_degraded_spool(settings.business_tools_query_cache_store_path)
     get_idempotency_store().clear()
     get_query_cache_store().clear()
+    configure_idempotency_store(persistence_path=None)
+    configure_query_cache(enabled=True, ttl_cap_seconds=300, persistence_path=None)
+    reset_local_runtime_state()
     _conversation_store.clear()
     _state_store.clear()
     _sse_event_store.clear()

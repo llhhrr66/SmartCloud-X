@@ -1,9 +1,60 @@
 import httpx
 
+from app.core.business_tools_sdk import describe_local_runtime
 from app.core.config import Settings
 from app.models.common import TraceContext
 from app.models.orchestration import ToolPlanItem, UserProfile
 from app.services.tool_hub_client import ToolHubClient
+
+
+def test_tool_hub_client_falls_back_to_local_on_http_connect_error(monkeypatch) -> None:
+    client = ToolHubClient()
+    monkeypatch.setattr(client.settings, "tool_hub_transport", "http", raising=False)
+    monkeypatch.setattr(
+        client.settings,
+        "business_tools_redis_namespace",
+        "smartcloud:test:business-tools",
+        raising=False,
+    )
+    assert describe_local_runtime()["idempotency"]["active"] is False
+
+    def _raise_connect_error(*args, **kwargs):
+        raise httpx.ConnectError(
+            "connect failed",
+            request=httpx.Request("POST", "http://tool-hub.local/internal/v1/tools/call"),
+        )
+
+    monkeypatch.setattr(client, "_request_tool_call", _raise_connect_error)
+
+    tool_calls = client.invoke_plan(
+        [
+            ToolPlanItem(
+                tool_call_id="tc-connect-fallback-1",
+                tool_name="billing.query_statement",
+                assigned_agent="finance_order_agent",
+                operation="execute",
+                reason="connect fallback test",
+                payload={"range": "this_month"},
+            )
+        ],
+        UserProfile(user_id="u-1", account_id="acct-1", permissions=["user:billing.read"]),
+        TraceContext(
+            requestId="req-connect-fallback-1",
+            conversationId="conv-connect-fallback-1",
+            traceId="trace-connect-fallback-1",
+        ),
+    )
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0].status == "completed"
+    assert tool_calls[0].success is True
+    assert "degraded-http-connect-fallback" in tool_calls[0].audit_tags
+    runtime = describe_local_runtime()
+    assert runtime["idempotency"]["active"] is True
+    assert runtime["idempotency"]["activationMode"] == "degraded-fallback"
+    assert runtime["idempotency"]["redisNamespace"] == "smartcloud:test:business-tools:idempotency"
+    assert runtime["queryCache"]["redisNamespace"] == "smartcloud:test:business-tools:query-cache"
+    assert runtime["queryCache"]["active"] is True
 
 
 def test_tool_hub_client_degrades_http_timeout_to_failed_tool_invocation(monkeypatch) -> None:
@@ -36,6 +87,38 @@ def test_tool_hub_client_degrades_http_timeout_to_failed_tool_invocation(monkeyp
     assert tool_calls[0].code == 5003002
     assert tool_calls[0].retryable is True
     assert tool_calls[0].provider == "tool-hub-service"
+
+
+def test_tool_hub_client_marks_preflight_unavailable_on_http_timeout(monkeypatch) -> None:
+    client = ToolHubClient()
+    monkeypatch.setattr(client.settings, "tool_hub_transport", "http", raising=False)
+
+    def _raise_timeout(*args, **kwargs):
+        raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr(client, "_request_tool_preflight", _raise_timeout)
+
+    result = client.preflight(
+        ToolPlanItem(
+            tool_call_id="tc-preflight-timeout-1",
+            tool_name="billing.query_statement",
+            assigned_agent="finance_order_agent",
+            operation="execute",
+            reason="preflight timeout test",
+            payload={"range": "this_month"},
+        ),
+        UserProfile(user_id="u-1", account_id="acct-1", permissions=["user:billing.read"]),
+        TraceContext(
+            requestId="req-preflight-timeout-1",
+            conversationId="conv-preflight-timeout-1",
+            traceId="trace-preflight-timeout-1",
+        ),
+    )
+
+    assert result.ready is False
+    assert result.available is False
+    assert result.tool_mode == "query"
+    assert result.required_permissions == ["user:billing.read"]
 
 
 def test_tool_hub_client_preserves_idempotency_conflict_status_from_http(monkeypatch) -> None:
@@ -163,6 +246,7 @@ def test_tool_hub_client_preserves_user_action_hint_from_http(monkeypatch) -> No
                     "message": "ticket.create 执行前需补充鉴权上下文。",
                     "missing_auth_context": ["permission:user:ticket.write"],
                     "required_permissions": ["user:ticket.write"],
+                    "user_profile_bindings": {"permissions": ["permissions"]},
                 },
                 "idempotency_key": "tool-auth-1",
             },
@@ -190,6 +274,7 @@ def test_tool_hub_client_preserves_user_action_hint_from_http(monkeypatch) -> No
     assert tool_calls[0].user_action_hint is not None
     assert tool_calls[0].user_action_hint.action == "collect-auth-context"
     assert tool_calls[0].user_action_hint.required_permissions == ["user:ticket.write"]
+    assert tool_calls[0].user_action_hint.user_profile_bindings == {"permissions": ["permissions"]}
 
 
 def test_tool_hub_client_uses_configured_internal_prefix_for_http_calls() -> None:
@@ -247,3 +332,41 @@ def test_tool_hub_client_uses_configured_internal_prefix_for_http_calls() -> Non
     assert fake_client.calls[1][0] == "/internal/tool-hub/tools/preflight"
     assert fake_client.calls[0][1]["message_id"] == "msg-prefix-1"
     assert fake_client.calls[0][2]["X-Message-Token"] == "msg-prefix-1"
+
+
+def test_tool_hub_client_reports_dependency_readiness_over_http(monkeypatch) -> None:
+    client = ToolHubClient()
+    monkeypatch.setattr(client.settings, "tool_hub_transport", "http", raising=False)
+    monkeypatch.setattr(client.settings, "tool_hub_base_url", "http://tool-hub.local", raising=False)
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, path: str, headers: dict[str, str]):
+            assert path == "/readyz"
+            assert headers["X-Caller-Service"] == "orchestrator-service"
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", "http://tool-hub.local/readyz"),
+                json={
+                    "status": "ready",
+                    "service": "tool-hub-service",
+                    "not_ready_components": [],
+                },
+            )
+
+    monkeypatch.setattr("app.services.tool_hub_client.httpx.Client", FakeHttpClient)
+
+    readiness = client.dependency_readiness()
+
+    assert readiness["ready"] is True
+    assert readiness["status"] == "ready"
+    assert readiness["service"] == "tool-hub-service"
+    assert readiness["httpStatus"] == 200

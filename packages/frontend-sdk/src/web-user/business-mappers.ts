@@ -11,6 +11,7 @@ import {
 } from '../core/utils';
 import type {
   BillingDashboard,
+  BillingDashboardLoadDomain,
   BillingDetailItem,
   BillingSummary,
   CheckIcpMaterialsRequest,
@@ -21,6 +22,7 @@ import type {
   CreateTicketRequest,
   FileRecord,
   IcpApplication,
+  IcpApplicationPage,
   IcpMaterialCheckIssue,
   IcpMaterialCheckResult,
   IcpMaterialItem,
@@ -31,7 +33,9 @@ import type {
   RefundRecord,
   RefundTimelineEntry,
   ReplyTicketRequest,
+  ServiceWorkspaceLoadDomain,
   ServiceWorkspaceData,
+  SharedDomainErrorInfo,
   TicketDetail,
   TicketReply,
   TicketRecord,
@@ -39,38 +43,90 @@ import type {
   UploadPolicyRequest
 } from './business-types';
 import type { ChatAttachment } from './types';
+import {
+  toCheckIcpMaterialsRequestContract,
+  toCompleteUploadRequestContract,
+  toCreateIcpApplicationRequestContract,
+  toCreateRefundRequestContract,
+  toCreateTicketRequestContract,
+  toReplyTicketRequestContract,
+  toUploadPolicyRequestContract
+} from './business-normalizers';
+import { buildSharedWorkspaceLoadState } from './business-state';
 import type {
+  BillingDetailPageInputContract,
+  BillingDetailItemContract,
   BillingDetailPageContract,
+  BillingSummaryInputContract,
   BillingSummaryContract,
   CheckIcpMaterialsRequestContract,
+  CitationDetailInputContract,
   CitationDetailContract,
   CompleteUploadRequestContract,
   CreateIcpApplicationRequestContract,
   CreateRefundRequestContract,
   CreateTicketRequestContract,
+  FileRecordInputContract,
   FileRecordContract,
+  FileUploadPolicyInputContract,
   FileUploadPolicyContract,
+  IcpApplicationInputContract,
+  IcpApplicationPageInputContract,
+  IcpApplicationPageContract,
   IcpApplicationContract,
+  IcpMaterialCheckResultInputContract,
   IcpMaterialCheckResultContract,
+  InvoiceRecordInputContract,
+  InvoiceRecordPageInputContract,
   IcpMaterialItemContract,
   InvoiceRecordPageContract,
   InvoiceRecordContract,
-  OwnedNamedResourceInput,
+  OwnedBusinessPaginationMetaContract,
   OwnedOffsetPageInput,
+  OrderDetailInputContract,
   OrderDetailContract,
+  OrderRecordInputContract,
+  OrderRecordPageInputContract,
   OrderRecordPageContract,
   OrderRecordContract,
+  RefundRecordInputContract,
+  RefundRecordPageInputContract,
   RefundRecordPageContract,
   RefundRecordContract,
   RefundTimelineEntryContract,
   ReplyTicketRequestContract,
   TicketAttachmentContract,
+  TicketDetailInputContract,
+  TicketRecordInputContract,
+  TicketRecordPageInputContract,
+  TicketReplyInputContract,
   TicketRecordPageContract,
   TicketDetailContract,
   TicketRecordContract,
   TicketReplyContract,
   UploadPolicyRequestContract
 } from './business-contracts';
+import {
+  billingDetailPageResourceKeys,
+  billingSummaryResourceKeys,
+  citationDetailResourceKeys,
+  fileRecordResourceKeys,
+  fileUploadPolicyResourceKeys,
+  icpApplicationPageResourceKeys,
+  icpApplicationResourceKeys,
+  icpMaterialCheckResultResourceKeys,
+  invoiceRecordPageResourceKeys,
+  invoiceRecordResourceKeys,
+  orderDetailResourceKeys,
+  orderRecordPageResourceKeys,
+  orderRecordResourceKeys,
+  refundRecordPageResourceKeys,
+  refundRecordResourceKeys,
+  ticketDetailResourceKeys,
+  ticketRecordPageResourceKeys,
+  ticketRecordResourceKeys,
+  ticketReplyResourceKeys
+} from './business-resource-aliases';
 
 const TICKET_PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 const TICKET_STATUSES = ['open', 'processing', 'resolved', 'closed'] as const;
@@ -111,13 +167,31 @@ function getOptionalEnumValue<T extends string>(
   return typeof value === 'string' && allowed.includes(value as T) ? (value as T) : undefined;
 }
 
-function hasOffsetPageItems(record: Record<string, unknown>): boolean {
+function normalizeSortOrder(value: unknown): 'asc' | 'desc' | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'asc' || normalized === 'desc' ? normalized : undefined;
+}
+
+function hasDirectOffsetPageItems(record: Record<string, unknown>): boolean {
   return (
     Array.isArray(record.items) ||
     Array.isArray(record.list) ||
     Array.isArray(record.records) ||
-    Array.isArray(record.results)
+    Array.isArray(record.results) ||
+    Array.isArray(record.data)
   );
+}
+
+function hasOffsetPageItems(record: Record<string, unknown>): boolean {
+  if (hasDirectOffsetPageItems(record)) {
+    return true;
+  }
+
+  return isRecord(record.data) ? hasDirectOffsetPageItems(asRecord(record.data)) : false;
 }
 
 function extractOffsetPageItems<TContract>(
@@ -150,9 +224,35 @@ function extractOffsetPageItems<TContract>(
   return [];
 }
 
-function resolveOffsetPageRecord(value: unknown): Record<string, unknown> | undefined {
+function selectNestedOffsetPageValue(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): Record<string, unknown> | unknown[] | undefined {
+  for (const key of keys) {
+    const nestedValue = record[key];
+    if (Array.isArray(nestedValue)) {
+      return nestedValue;
+    }
+
+    if (!isRecord(nestedValue)) {
+      continue;
+    }
+
+    const nestedRecord = asRecord(nestedValue);
+    if (hasOffsetPageItems(nestedRecord) || extractPaginationMetaRecord(nestedRecord)) {
+      return nestedRecord;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveOffsetPageSource(
+  value: unknown,
+  keys: readonly string[] = []
+): Record<string, unknown> | unknown[] | undefined {
   if (Array.isArray(value)) {
-    return undefined;
+    return value;
   }
 
   const record = asRecord(value);
@@ -160,11 +260,84 @@ function resolveOffsetPageRecord(value: unknown): Record<string, unknown> | unde
     return record;
   }
 
+  const directNested = selectNestedOffsetPageValue(record, keys);
+  if (directNested) {
+    return directNested;
+  }
+
+  if (Array.isArray(record.data)) {
+    return record.data;
+  }
+
   if (isRecord(record.data) && hasOffsetPageItems(record.data)) {
     return asRecord(record.data);
   }
 
+  if (isRecord(record.data)) {
+    const nestedDataValue = selectNestedOffsetPageValue(asRecord(record.data), keys);
+    if (nestedDataValue) {
+      return nestedDataValue;
+    }
+  }
+
   return record;
+}
+
+function extractPaginationMetaRecord(
+  record: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const directPagination = isRecord(record.pagination)
+    ? asRecord(record.pagination as OwnedBusinessPaginationMetaContract)
+    : undefined;
+  const meta = isRecord(record.meta)
+    ? asRecord(record.meta as OwnedBusinessPaginationMetaContract)
+    : undefined;
+  const nestedPagination = meta && isRecord(meta.pagination)
+    ? asRecord(meta.pagination)
+    : undefined;
+
+  if (meta && nestedPagination) {
+    return {
+      ...meta,
+      ...nestedPagination
+    };
+  }
+
+  return nestedPagination ?? meta ?? directPagination;
+}
+
+function mergeOffsetPageMetaRecords(
+  primary?: Record<string, unknown>,
+  secondary?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (primary && secondary) {
+    return {
+      ...secondary,
+      ...primary
+    };
+  }
+
+  return primary ?? secondary;
+}
+
+function resolveOffsetPageMetaRecord(
+  value: unknown,
+  keys: readonly string[] = []
+): Record<string, unknown> | undefined {
+  if (Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = asRecord(value);
+  const pageSource = resolveOffsetPageSource(value, keys);
+  const pageMeta =
+    pageSource && !Array.isArray(pageSource)
+      ? extractPaginationMetaRecord(pageSource)
+      : undefined;
+  const dataMeta = isRecord(record.data) ? extractPaginationMetaRecord(asRecord(record.data)) : undefined;
+  const directMeta = extractPaginationMetaRecord(record);
+
+  return mergeOffsetPageMetaRecords(pageMeta, mergeOffsetPageMetaRecords(dataMeta, directMeta));
 }
 
 function selectNestedResourceRecord(
@@ -205,7 +378,8 @@ function resolveResourceRecord(
 
 function mapOffsetPage<TContract, TResponse>(
   value: unknown | { items?: TContract[] } | TContract[],
-  mapper: (item: unknown | TContract) => TResponse
+  mapper: (item: unknown | TContract) => TResponse,
+  resourceKeys: readonly string[] = []
 ): OwnedOffsetPageResult<TResponse> {
   if (Array.isArray(value)) {
     return {
@@ -216,17 +390,36 @@ function mapOffsetPage<TContract, TResponse>(
     };
   }
 
-  const pageRecord = resolveOffsetPageRecord(value) ?? asRecord(value);
-  const items = extractOffsetPageItems<TContract>(pageRecord);
+  const pageSource = resolveOffsetPageSource(value, resourceKeys);
+  const pageMetaRecord = resolveOffsetPageMetaRecord(value, resourceKeys) ?? {};
+  const pageRecord = pageSource && !Array.isArray(pageSource) ? pageSource : asRecord(value);
+  const items = Array.isArray(pageSource)
+    ? pageSource
+    : extractOffsetPageItems<TContract>(pageRecord);
+  const page = getNumber(pageRecord, ['page'], getNumber(pageMetaRecord, ['page'], 1));
+  const pageSize = getNumber(
+    pageRecord,
+    ['page_size', 'pageSize'],
+    getNumber(pageMetaRecord, ['page_size', 'pageSize'], items.length)
+  );
+  const total = getNumber(pageRecord, ['total'], getNumber(pageMetaRecord, ['total'], items.length));
+  const totalPages =
+    getOptionalNumber(pageRecord, ['total_pages', 'totalPages']) ??
+    getOptionalNumber(pageMetaRecord, ['total_pages', 'totalPages']) ??
+    (pageSize > 0 ? Math.ceil(total / pageSize) : undefined);
 
   return {
     items: items.map(mapper),
-    page: getNumber(pageRecord, ['page'], 1),
-    pageSize: getNumber(pageRecord, ['page_size', 'pageSize'], items.length),
-    total: getNumber(pageRecord, ['total'], items.length),
-    totalPages: getOptionalNumber(pageRecord, ['total_pages', 'totalPages']),
-    sortBy: getOptionalString(pageRecord, ['sort_by', 'sortBy']),
-    sortOrder: getOptionalEnumValue(pageRecord.sort_order ?? pageRecord.sortOrder, ['asc', 'desc'])
+    page,
+    pageSize,
+    total,
+    totalPages,
+    sortBy:
+      getOptionalString(pageRecord, ['sort_by', 'sortBy']) ??
+      getOptionalString(pageMetaRecord, ['sort_by', 'sortBy']),
+    sortOrder:
+      normalizeSortOrder(pageRecord.sort_order ?? pageRecord.sortOrder) ??
+      normalizeSortOrder(pageMetaRecord.sort_order ?? pageMetaRecord.sortOrder)
   };
 }
 
@@ -245,9 +438,9 @@ export function mapSupportAttachment(value: unknown): ChatAttachment {
 }
 
 export function mapInvoiceRecord(
-  value: OwnedNamedResourceInput<InvoiceRecordContract, 'invoice'>
+  value: InvoiceRecordInputContract | InvoiceRecord
 ): InvoiceRecord {
-  const record = resolveResourceRecord(value, ['invoice', 'result', 'record']);
+  const record = resolveResourceRecord(value, invoiceRecordResourceKeys);
   return {
     invoiceNo: getString(record, ['invoice_no', 'invoiceNo'], 'inv_unknown'),
     status: getString(record, ['status'], 'unknown'),
@@ -258,15 +451,21 @@ export function mapInvoiceRecord(
 }
 
 export function mapInvoiceRecordPage(
-  value: OwnedOffsetPageInput<InvoiceRecordContract> | InvoiceRecordPageContract
+  value:
+    | OwnedOffsetPageInput<InvoiceRecordContract | InvoiceRecord>
+    | InvoiceRecordPageInputContract
+    | InvoiceRecordPageContract
+    | InvoiceRecord[]
 ): OwnedOffsetPageResult<InvoiceRecord> {
-  return mapOffsetPage(value, mapInvoiceRecord);
+  return mapOffsetPage(value, (item) =>
+    mapInvoiceRecord(item as InvoiceRecordInputContract | InvoiceRecord)
+  , invoiceRecordPageResourceKeys);
 }
 
 export function mapOrderRecord(
-  value: OwnedNamedResourceInput<OrderRecordContract, 'order'>
+  value: OrderRecordInputContract | OrderRecord
 ): OrderRecord {
-  const record = resolveResourceRecord(value, ['order', 'result', 'record']);
+  const record = resolveResourceRecord(value, orderRecordResourceKeys);
   return {
     orderNo: getString(record, ['order_no', 'orderNo'], 'ord_unknown'),
     productType: getString(record, ['product_type', 'productType'], '-'),
@@ -278,9 +477,15 @@ export function mapOrderRecord(
 }
 
 export function mapOrderRecordPage(
-  value: OwnedOffsetPageInput<OrderRecordContract> | OrderRecordPageContract
+  value:
+    | OwnedOffsetPageInput<OrderRecordContract | OrderRecord>
+    | OrderRecordPageInputContract
+    | OrderRecordPageContract
+    | OrderRecord[]
 ): OwnedOffsetPageResult<OrderRecord> {
-  return mapOffsetPage(value, mapOrderRecord);
+  return mapOffsetPage(value, (item) =>
+    mapOrderRecord(item as OrderRecordInputContract | OrderRecord)
+  , orderRecordPageResourceKeys);
 }
 
 export function mapRefundTimelineEntry(
@@ -300,9 +505,9 @@ export function mapRefundTimelineEntry(
 }
 
 export function mapRefundRecord(
-  value: OwnedNamedResourceInput<RefundRecordContract, 'refund'>
+  value: RefundRecordInputContract | RefundRecord
 ): RefundRecord {
-  const record = resolveResourceRecord(value, ['refund', 'result', 'record']);
+  const record = resolveResourceRecord(value, refundRecordResourceKeys);
   return {
     refundNo: getString(record, ['refund_no', 'refundNo'], 'ref_unknown'),
     orderNo: getString(record, ['order_no', 'orderNo'], 'ord_unknown'),
@@ -318,23 +523,31 @@ export function mapRefundRecord(
 }
 
 export function mapRefundRecordPage(
-  value: OwnedOffsetPageInput<RefundRecordContract> | RefundRecordPageContract
+  value:
+    | OwnedOffsetPageInput<RefundRecordContract | RefundRecord>
+    | RefundRecordPageInputContract
+    | RefundRecordPageContract
+    | RefundRecord[]
 ): OwnedOffsetPageResult<RefundRecord> {
-  return mapOffsetPage(value, mapRefundRecord);
+  return mapOffsetPage(value, (item) =>
+    mapRefundRecord(item as RefundRecordInputContract | RefundRecord)
+  , refundRecordPageResourceKeys);
 }
 
 export function mapOrderDetail(
-  value: OwnedNamedResourceInput<OrderDetailContract, 'detail'>,
+  value: OrderDetailInputContract,
   fallbackOrderNo?: string
 ): OrderDetail {
-  const record = resolveResourceRecord(value, ['detail', 'result', 'record']);
+  const record = resolveResourceRecord(value, orderDetailResourceKeys);
   const orderRecord = isRecord(record.order) ? record.order : record;
 
   return {
-    order: mapOrderRecord({
-      ...orderRecord,
-      order_no: orderRecord.order_no ?? orderRecord.orderNo ?? fallbackOrderNo
-    }),
+    order: mapOrderRecord(
+      {
+        ...orderRecord,
+        order_no: getOptionalString(orderRecord, ['order_no', 'orderNo']) ?? fallbackOrderNo ?? 'ord_unknown'
+      } as OrderRecordInputContract
+    ),
     instanceName: getOptionalString(record, ['instance_name', 'instanceName']),
     region:
       getOptionalString(record, ['region']) ??
@@ -349,9 +562,9 @@ export function mapOrderDetail(
 }
 
 export function mapTicketRecord(
-  value: OwnedNamedResourceInput<TicketRecordContract, 'ticket'>
+  value: TicketRecordInputContract | TicketRecord
 ): TicketRecord {
-  const record = resolveResourceRecord(value, ['ticket', 'result', 'record']);
+  const record = resolveResourceRecord(value, ticketRecordResourceKeys);
   return {
     ticketNo: getString(record, ['ticket_no', 'ticketNo'], 'tic_unknown'),
     subject: getString(record, ['subject'], '-'),
@@ -367,15 +580,21 @@ export function mapTicketRecord(
 }
 
 export function mapTicketRecordPage(
-  value: OwnedOffsetPageInput<TicketRecordContract> | TicketRecordPageContract
+  value:
+    | OwnedOffsetPageInput<TicketRecordContract | TicketRecord>
+    | TicketRecordPageInputContract
+    | TicketRecordPageContract
+    | TicketRecord[]
 ): OwnedOffsetPageResult<TicketRecord> {
-  return mapOffsetPage(value, mapTicketRecord);
+  return mapOffsetPage(value, (item) =>
+    mapTicketRecord(item as TicketRecordInputContract | TicketRecord)
+  , ticketRecordPageResourceKeys);
 }
 
 export function mapTicketReply(
-  value: OwnedNamedResourceInput<TicketReplyContract, 'reply'>
+  value: TicketReplyInputContract
 ): TicketReply {
-  const record = resolveResourceRecord(value, ['reply', 'result', 'record']);
+  const record = resolveResourceRecord(value, ticketReplyResourceKeys);
   return {
     replyNo: getString(record, ['reply_no', 'replyNo'], 'reply_unknown'),
     content: getString(record, ['content']),
@@ -391,25 +610,27 @@ export function mapTicketReply(
 }
 
 export function mapTicketDetail(
-  value: OwnedNamedResourceInput<TicketDetailContract, 'detail'>,
+  value: TicketDetailInputContract,
   fallbackTicketNo?: string
 ): TicketDetail {
-  const record = resolveResourceRecord(value, ['detail', 'result', 'record']);
+  const record = resolveResourceRecord(value, ticketDetailResourceKeys);
   const ticketRecord = isRecord(record.ticket) ? record.ticket : record;
 
   return {
-    ticket: mapTicketRecord({
-      ...ticketRecord,
-      ticket_no: ticketRecord.ticket_no ?? ticketRecord.ticketNo ?? fallbackTicketNo
-    }),
+    ticket: mapTicketRecord(
+      {
+        ...ticketRecord,
+        ticket_no: getOptionalString(ticketRecord, ['ticket_no', 'ticketNo']) ?? fallbackTicketNo ?? 'tic_unknown'
+      } as TicketRecordInputContract
+    ),
     replies: Array.isArray(record.replies) ? record.replies.map(mapTicketReply) : []
   };
 }
 
 export function mapBillingSummary(
-  value: OwnedNamedResourceInput<BillingSummaryContract, 'summary'>
+  value: BillingSummaryInputContract | BillingSummary
 ): BillingSummary {
-  const record = resolveResourceRecord(value, ['summary', 'result', 'record']);
+  const record = resolveResourceRecord(value, billingSummaryResourceKeys);
   const topProducts = Array.isArray(record.top_products)
     ? record.top_products
     : Array.isArray(record.topProducts)
@@ -426,26 +647,30 @@ export function mapBillingSummary(
     currency: getString(record, ['currency'], 'CNY'),
     range: getString(record, ['range'], 'this_month'),
     topProducts: topProducts.map((item) => {
-          const product = asRecord(item);
-          return {
-            productType: getString(product, ['product_type', 'productType'], '-'),
-            amount: getString(product, ['amount'], '0'),
-            ratio: getNumber(product, ['ratio'])
-          };
-        }),
+      const product = asRecord(item);
+      return {
+        productType: getString(product, ['product_type', 'productType'], '-'),
+        amount: getString(product, ['amount'], '0'),
+        ratio: getNumber(product, ['ratio'])
+      };
+    }),
     topInstances: topInstances.map((item) => {
-          const instance = asRecord(item);
-          return {
-            instanceId: getString(instance, ['instance_id', 'instanceId'], '-'),
-            instanceName: getString(instance, ['instance_name', 'instanceName'], '-'),
-            amount: getString(instance, ['amount'], '0')
-          };
-        })
+      const instance = asRecord(item);
+      return {
+        instanceId: getString(instance, ['instance_id', 'instanceId'], '-'),
+        instanceName: getString(instance, ['instance_name', 'instanceName'], '-'),
+        amount: getString(instance, ['amount'], '0')
+      };
+    })
   };
 }
 
 export function mapBillingDetailPage(
-  value: OwnedOffsetPageInput<BillingDetailItemContract> | BillingDetailPageContract
+  value:
+    | OwnedOffsetPageInput<BillingDetailItemContract | BillingDetailItem>
+    | BillingDetailPageInputContract
+    | BillingDetailPageContract
+    | BillingDetailItem[]
 ): OwnedOffsetPageResult<BillingDetailItem> {
   return mapOffsetPage(value, (item) => {
     const detail = asRecord(item);
@@ -458,11 +683,15 @@ export function mapBillingDetailPage(
       amount: getString(detail, ['amount'], '0'),
       status: getString(detail, ['status'], 'unknown')
     };
-  });
+  }, billingDetailPageResourceKeys);
 }
 
 export function mapBillingDetailItems(
-  value: OwnedOffsetPageInput<BillingDetailItemContract> | BillingDetailPageContract
+  value:
+    | OwnedOffsetPageInput<BillingDetailItemContract | BillingDetailItem>
+    | BillingDetailPageInputContract
+    | BillingDetailPageContract
+    | BillingDetailItem[]
 ): BillingDetailItem[] {
   return mapBillingDetailPage(value).items;
 }
@@ -488,9 +717,11 @@ export function mapIcpMaterialCheckIssue(value: unknown): IcpMaterialCheckIssue 
 }
 
 export function mapIcpMaterialCheckResult(
-  value: OwnedNamedResourceInput<IcpMaterialCheckResultContract, 'check_result'>
+  value:
+    | IcpMaterialCheckResultInputContract
+    | IcpMaterialCheckResult
 ): IcpMaterialCheckResult {
-  const record = resolveResourceRecord(value, ['check_result', 'result', 'record']);
+  const record = resolveResourceRecord(value, icpMaterialCheckResultResourceKeys);
   return {
     passed: getBoolean(record, ['passed']),
     issues: Array.isArray(record.issues) ? record.issues.map(mapIcpMaterialCheckIssue) : [],
@@ -503,9 +734,11 @@ export function mapIcpMaterialCheckResult(
 }
 
 export function mapIcpApplication(
-  value: OwnedNamedResourceInput<IcpApplicationContract, 'application' | 'icp_application'>
+  value:
+    | IcpApplicationInputContract
+    | IcpApplication
 ): IcpApplication {
-  const record = resolveResourceRecord(value, ['application', 'icp_application', 'result', 'record']);
+  const record = resolveResourceRecord(value, icpApplicationResourceKeys);
   return {
     applicationNo: getString(record, ['application_no', 'applicationNo'], 'ICP_UNKNOWN'),
     status: getEnumValue(record.status, ICP_APPLICATION_STATUSES, 'submitted'),
@@ -525,30 +758,52 @@ export function mapIcpApplication(
   };
 }
 
+export function mapIcpApplicationPage(
+  value:
+    | OwnedOffsetPageInput<IcpApplicationContract | IcpApplication>
+    | IcpApplicationPageInputContract
+    | IcpApplicationPageContract
+    | Array<IcpApplicationInputContract | IcpApplication>
+): IcpApplicationPage {
+  return mapOffsetPage(value, (item) =>
+    mapIcpApplication(item as IcpApplicationInputContract | IcpApplication)
+  , icpApplicationPageResourceKeys);
+}
+
 export function mapServiceWorkspaceData(
   input: {
-    orders?: unknown;
-    refunds?: unknown;
-    tickets?: unknown;
-    icpApplications?: unknown;
+    orders?: OwnedOffsetPageInput<OrderRecordContract | OrderRecord> | OrderRecord[];
+    refunds?: OwnedOffsetPageInput<RefundRecordContract | RefundRecord> | RefundRecord[];
+    tickets?: OwnedOffsetPageInput<TicketRecordContract | TicketRecord> | TicketRecord[];
+    icpApplications?:
+      | OwnedOffsetPageInput<IcpApplicationContract | IcpApplication>
+      | Array<IcpApplicationInputContract | IcpApplication>;
+    failedDomains?: ServiceWorkspaceLoadDomain[];
+    fallbackDomains?: ServiceWorkspaceLoadDomain[];
+    domainErrors?: Partial<Record<ServiceWorkspaceLoadDomain, SharedDomainErrorInfo>>;
   }
 ): ServiceWorkspaceData {
-  const ordersRecord = asRecord(input.orders);
-  const refundsRecord = asRecord(input.refunds);
-  const ticketsRecord = asRecord(input.tickets);
+  const failedDomains = input.failedDomains ?? [];
+  const fallbackDomains = input.fallbackDomains ?? [];
+  const domainErrors = input.domainErrors;
 
   return {
-    orders: mapOrderRecordPage(input.orders ?? ordersRecord).items,
-    refunds: mapRefundRecordPage(input.refunds ?? refundsRecord).items,
-    tickets: mapTicketRecordPage(input.tickets ?? ticketsRecord).items,
-    icpApplications: Array.isArray(input.icpApplications) ? input.icpApplications.map(mapIcpApplication) : []
+    orders: mapOrderRecordPage(input.orders ?? []).items,
+    refunds: mapRefundRecordPage(input.refunds ?? []).items,
+    tickets: mapTicketRecordPage(input.tickets ?? []).items,
+    icpApplications: mapIcpApplicationPage(input.icpApplications ?? []).items,
+    loadState: buildSharedWorkspaceLoadState<ServiceWorkspaceLoadDomain>({
+      failedDomains,
+      fallbackDomains,
+      domainErrors
+    })
   };
 }
 
 export function mapFileRecord(
-  value: OwnedNamedResourceInput<FileRecordContract, 'file'>
+  value: FileRecordInputContract | FileRecord
 ): FileRecord {
-  const record = resolveResourceRecord(value, ['file', 'result', 'record']);
+  const record = resolveResourceRecord(value, fileRecordResourceKeys);
   return {
     fileId: getString(record, ['file_id', 'fileId'], 'file_unknown'),
     fileName: getString(record, ['file_name', 'fileName'], 'unknown'),
@@ -562,9 +817,11 @@ export function mapFileRecord(
 }
 
 export function mapUploadPolicy(
-  value: OwnedNamedResourceInput<FileUploadPolicyContract, 'policy' | 'upload_policy'>
+  value:
+    | FileUploadPolicyInputContract
+    | UploadPolicy
 ): UploadPolicy {
-  const record = resolveResourceRecord(value, ['policy', 'upload_policy', 'result', 'record']);
+  const record = resolveResourceRecord(value, fileUploadPolicyResourceKeys);
   const formFields = isRecord(record.form_fields)
     ? Object.fromEntries(Object.entries(record.form_fields).map(([key, item]) => [key, String(item)]))
     : isRecord(record.formFields)
@@ -581,9 +838,11 @@ export function mapUploadPolicy(
 }
 
 export function mapCitationDetail(
-  value: OwnedNamedResourceInput<CitationDetailContract, 'citation' | 'detail'>
+  value:
+    | CitationDetailInputContract
+    | CitationDetail
 ): CitationDetail {
-  const record = resolveResourceRecord(value, ['citation', 'detail', 'result', 'record']);
+  const record = resolveResourceRecord(value, citationDetailResourceKeys);
   return {
     id: getString(record, ['citation_id', 'id'], 'cite_unknown'),
     title: getString(record, ['title'], '引用资料'),
@@ -597,105 +856,67 @@ export function mapCitationDetail(
   };
 }
 
-function mapAttachmentReferences(attachments: ChatAttachment[]) {
-  return attachments.map((item) => ({
-    file_id: item.fileId
-  }));
-}
-
 export function toCreateTicketRequestBody(input: CreateTicketRequest): CreateTicketRequestContract {
-  return {
-    subject: input.subject,
-    content: input.content,
-    priority: input.priority,
-    category: input.category,
-    attachments: mapAttachmentReferences(input.attachments)
-  };
+  return toCreateTicketRequestContract(input);
 }
 
 export function toReplyTicketRequestBody(input: ReplyTicketRequest): ReplyTicketRequestContract {
-  return {
-    content: input.content,
-    attachments: mapAttachmentReferences(input.attachments)
-  };
+  return toReplyTicketRequestContract(input);
 }
 
 export function toCreateRefundRequestBody(input: CreateRefundRequest): CreateRefundRequestContract {
-  return {
-    reason: input.reason,
-    amount: input.amount,
-    attachments: mapAttachmentReferences(input.attachments)
-  };
-}
-
-function toIcpMaterialContract(item: IcpMaterialItem): IcpMaterialItemContract {
-  return {
-    file_id: item.fileId,
-    file_name: item.fileName,
-    type: item.type,
-    status: item.status,
-    required: item.required
-  };
+  return toCreateRefundRequestContract(input);
 }
 
 export function toCheckIcpMaterialsRequestBody(
   input: CheckIcpMaterialsRequest
 ): CheckIcpMaterialsRequestContract {
-  return {
-    subject_type: input.subjectType,
-    materials: input.materials.map(toIcpMaterialContract)
-  };
+  return toCheckIcpMaterialsRequestContract(input);
 }
 
 export function toCreateIcpApplicationRequestBody(
   input: CreateIcpApplicationRequest
 ): CreateIcpApplicationRequestContract {
-  return {
-    subject_type: input.subjectType,
-    domain: input.domain,
-    website_name: input.websiteName,
-    contacts: input.contacts,
-    materials: input.materials.map(toIcpMaterialContract)
-  };
+  return toCreateIcpApplicationRequestContract(input);
 }
 
 export function toUploadPolicyRequestBody(input: UploadPolicyRequest): UploadPolicyRequestContract {
-  return {
-    file_name: input.fileName,
-    size: input.size,
-    mime_type: input.mimeType,
-    biz_type: input.bizType
-  };
+  return toUploadPolicyRequestContract(input);
 }
 
 export function toCompleteUploadRequestBody(input: CompleteUploadRequest): CompleteUploadRequestContract {
-  return {
-    file_id: input.fileId,
-    object_key: input.objectKey,
-    checksum: input.checksum,
-    size: input.size
-  };
+  return toCompleteUploadRequestContract(input);
 }
 
 export function buildBillingDashboard(input: {
-  summary?: unknown;
-  details?: unknown;
-  invoices?: unknown;
-  orders?: unknown;
-  tickets?: unknown;
-  failedDomains?: string[];
+  summary?: BillingSummaryInputContract | BillingSummary;
+  details?: BillingDetailPageInputContract | BillingDetailItem[];
+  invoices?: OwnedOffsetPageInput<InvoiceRecordContract | InvoiceRecord> | InvoiceRecord[];
+  orders?: OwnedOffsetPageInput<OrderRecordContract | OrderRecord> | OrderRecord[];
+  tickets?: OwnedOffsetPageInput<TicketRecordContract | TicketRecord> | TicketRecord[];
+  failedDomains?: BillingDashboardLoadDomain[];
+  domainErrors?: Partial<Record<BillingDashboardLoadDomain, SharedDomainErrorInfo>>;
 }): BillingDashboard {
   const failedDomains = input.failedDomains ?? [];
+  const domainErrors = input.domainErrors;
 
   return {
-    summary: mapBillingSummary(input.summary),
-    details: mapBillingDetailPage(input.details).items,
-    invoices: mapInvoiceRecordPage(input.invoices as InvoiceRecordPageContract | unknown).items,
-    orders: mapOrderRecordPage(input.orders as OrderRecordPageContract | unknown).items,
-    tickets: mapTicketRecordPage(input.tickets as TicketRecordPageContract | unknown).items,
-    loadState: {
-      degraded: failedDomains.length > 0,
-      failedDomains
-    }
+    summary: mapBillingSummary(
+      input.summary ?? {
+        totalAmount: '0',
+        currency: 'CNY',
+        range: 'this_month',
+        topProducts: [],
+        topInstances: []
+      }
+    ),
+    details: mapBillingDetailPage(input.details ?? []).items,
+    invoices: mapInvoiceRecordPage(input.invoices ?? []).items,
+    orders: mapOrderRecordPage(input.orders ?? []).items,
+    tickets: mapTicketRecordPage(input.tickets ?? []).items,
+    loadState: buildSharedWorkspaceLoadState<BillingDashboardLoadDomain>({
+      failedDomains,
+      domainErrors
+    })
   };
 }

@@ -38,12 +38,14 @@
   - shared data source for `/service-desk`, `/tickets`, and `/icp`
 - `src/api/services/research.ts`
   - create task
-  - list placeholder for mock / future live list contract
+  - live history list via `GET /api/v1/research/tasks`
+  - tracked-task detail fallback only when the live list is temporarily unavailable or missing the newest task
 - `src/api/services/marketing.ts`
   - campaigns
   - marketing copy generate
   - poster task create
-  - poster history placeholder for mock / future live list contract
+  - live poster history via `GET /api/v1/marketing/posters`
+  - tracked-task detail fallback only when the live list is temporarily unavailable or missing the newest task
 - `src/lib/request-meta.ts`
   - stable `X-Request-Id` helper
   - deterministic `Idempotency-Key` generation for repeated-submit-sensitive writes
@@ -57,7 +59,7 @@
 - `src/api/services/citations.ts`
   - citation detail placeholder
 - `src/lib/task-registry.ts`
-  - local registry for recently created research/poster tasks in live mode
+  - supplemental registry for recently created research/poster/ICP items when a live list route is absent or temporarily inconsistent
 - `src/config/env.ts`
   - merges build-time Vite env with optional `/runtime-config.js` overrides
   - exposes whether runtime overrides are active so the shell can surface deployment mode
@@ -131,24 +133,31 @@ The owned Playwright suite now validates the following flows against the local m
 6. route-level permission denial UX for restricted marketing access
 7. structured `429` marketing API error rendering
 8. marketing copy generation + poster task creation
-9. research task creation
-10. `/orders` detail drawer + refund submission + refreshed refund history
-11. `/profile` profile update + password rotation + forced re-login
-12. focused `/tickets` creation flow
-13. composite `/service-desk` upload separation + ticket + ICP flow
-14. focused `/icp` upload-policy -> complete -> precheck -> submit flow
-15. `/sessions` rename / archive / restore / delete lifecycle actions
+9. chat retry -> assist-ticket prefill carrying conversation / trace context
+10. research task creation, with marketing/research history still loading from live list routes after clearing the browser task registry
+11. runtime `/runtime-config.js` overrides for title, version, API base URL, and SSE heartbeat
+12. research report file preview via `/api/v1/files/{file_id}`
+13. research report file-missing error rendering
+14. `/orders` detail drawer + refund submission + refreshed refund history
+15. `/profile` profile update + password rotation + forced re-login
+16. focused `/tickets` creation flow
+17. composite `/service-desk` upload separation + ticket + ICP flow
+18. focused `/icp` upload-policy -> complete -> precheck -> submit flow
+19. `/sessions` rename / archive / restore / delete lifecycle actions
 
 ## Baseline-only but not yet browser-covered
 These owned surfaces remain implemented but are not yet directly covered by Playwright:
 
-1. research report file preview via `/api/v1/files/{file_id}`
-2. runtime-config container override behavior
+1. Docker / Nginx entrypoint generation of `runtime-config.js` inside the container image
+
+## Playwright runner notes
+- `apps/web-user/playwright.config.ts` now starts fresh mock/API dev servers by default so local reruns cannot silently reuse stale processes after frontend or mock-server edits
+- set `PLAYWRIGHT_REUSE_SERVER=1` only when you intentionally want to reuse already-running local Playwright servers
 
 ## Known contract gaps
-1. live list endpoints for research-task history and poster-task history are still pending; the frontend now falls back to locally tracked task IDs plus detail queries
-2. ICP application history still lacks a canonical list endpoint in the primary spec, so live mode falls back to locally tracked `application_no` values plus detail queries
-3. file upload and cancel flows still depend on backend delivery; retry now consumes the current session-level response but richer resume semantics are still backend-owned
+1. ICP application history still lacks a canonical list endpoint in the primary spec, so live mode falls back to locally tracked `application_no` values plus detail queries
+2. file upload and cancel flows still depend on backend delivery; retry now consumes the current session-level response but richer resume semantics are still backend-owned
+3. repo-wide `npm run typecheck` / `npm run build` in `apps/web-user/` is currently blocked by a non-owned `packages/frontend-sdk` error-map mismatch (`CHAT_STREAM_EVENTS_NOT_FOUND` missing in `src/core/error-codes.ts`)
 
 ## Primary integration surfaces
 - auth: `/api/v1/auth/*`
@@ -175,11 +184,13 @@ These owned surfaces remain implemented but are not yet directly covered by Play
 ## Frontend fallbacks for partial live contracts
 - research page:
   - create uses `POST /api/v1/research/tasks`
-  - history fallback uses stored task IDs + `GET /api/v1/research/tasks/{task_id}`
+  - history prefers `GET /api/v1/research/tasks?page=1&page_size=20`
+  - fallback uses stored task IDs + `GET /api/v1/research/tasks/{task_id}` only when the list route is temporarily unavailable or missing the newest task
 - marketing page:
   - copy generator uses `POST /api/v1/marketing/copy/generate`
   - create uses `POST /api/v1/marketing/posters`
-  - history fallback uses stored task IDs + `GET /api/v1/marketing/posters/{task_id}`
+  - history prefers `GET /api/v1/marketing/posters?page=1&page_size=20`
+  - fallback uses stored task IDs + `GET /api/v1/marketing/posters/{task_id}` only when the list route is temporarily unavailable or missing the newest task
   - poster polling now auto-refreshes every 3s for up to 10 minutes, then stops and requires manual refresh to match the page-level spec constraint
 - service desk pages:
   - orders/refunds/tickets use their canonical list endpoints directly in live mode

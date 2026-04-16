@@ -40,6 +40,17 @@ class UserProfile(BaseModel):
     vip_level: str = "normal"
 
 
+class UserProfilePatch(BaseModel):
+    user_id: str | None = None
+    roles: list[str] | None = None
+    permissions: list[str] | None = None
+    account_id: str | None = None
+    tenant_id: str | None = None
+    locale: str | None = None
+    channel: str | None = None
+    vip_level: str | None = None
+
+
 class SessionContext(BaseModel):
     history_summary: str | None = None
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
@@ -263,6 +274,7 @@ class PendingUserAction(BaseModel):
     requires_account_context: bool = False
     confirmation_required: bool = False
     session_context_bindings: dict[str, list[str]] = Field(default_factory=dict)
+    user_profile_bindings: dict[str, list[str]] = Field(default_factory=dict)
     confirm_tool_names: list[str] = Field(default_factory=list)
 
 
@@ -490,6 +502,7 @@ class SessionContinueRequest(BaseModel):
     field_values: dict[str, Any] = Field(default_factory=dict)
     confirm_tool_names: list[str] = Field(default_factory=list)
     session_context_patch: dict[str, Any] = Field(default_factory=dict)
+    user_profile_patch: UserProfilePatch = Field(default_factory=UserProfilePatch)
 
 
 class SessionCancelRequest(BaseModel):

@@ -744,7 +744,10 @@ def test_refresh_rejects_when_refresh_session_subject_binding_is_tampered(client
     refresh_token = login_response.json()["data"]["refresh_token"]
 
     claims = token_codec.decode(refresh_token, audience=settings.auth_audience)
-    refresh_session = auth_store.get_refresh_session(str(claims["jti"]))
+    refresh_session = next(
+        (item for item in auth_store._snapshot.refresh_sessions if item.token_id == str(claims["jti"])),
+        None,
+    )
     assert refresh_session is not None
     refresh_session.subject_id = "u_99999"
     auth_store._persist()  # type: ignore[attr-defined]
@@ -755,3 +758,27 @@ def test_refresh_rejects_when_refresh_session_subject_binding_is_tampered(client
     )
     assert refresh_response.status_code == 401
     assert refresh_response.json()["code"] == 4010002
+
+
+def test_auth_database_persists_profile_updates_across_store_reload(client, service_modules) -> None:
+    login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "login_type": "password",
+            "account": "demo@smartcloud.local",
+            "password": "Password123!",
+        },
+    )
+    assert login.status_code == 200
+    access_token = login.json()["data"]["access_token"]
+
+    update = client.patch(
+        "/api/v1/auth/profile",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"name": "数据库持久化用户"},
+    )
+    assert update.status_code == 200
+
+    service_modules["store"].get_auth_store.cache_clear()
+    reloaded_store = service_modules["store"].get_auth_store()
+    assert reloaded_store.get_user_by_id("u_10001").name == "数据库持久化用户"

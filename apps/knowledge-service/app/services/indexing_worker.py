@@ -429,6 +429,7 @@ class KnowledgeIndexingWorkerService:
                 "payload": {
                     "kb_id": context.document.source_id,
                     "source_id": chunk.source_id,
+                    "source_name": context.source.name,
                     "document_id": chunk.document_id,
                     "document_title": chunk.document_title,
                     "chunk_id": chunk.id,
@@ -436,6 +437,9 @@ class KnowledgeIndexingWorkerService:
                     "tags": chunk.tags,
                     "keywords": chunk.keywords,
                     "content": chunk.content,
+                    "created_at": chunk.created_at,
+                    "source_type": self._event_source_type(context),
+                    "source_uri": self._event_source_uri(context),
                 },
             }
             for chunk in context.chunks
@@ -547,6 +551,8 @@ class KnowledgeIndexingWorkerService:
                             "keywords": chunk.keywords,
                             "tags": chunk.tags,
                             "ordinal": chunk.ordinal,
+                            "source_name": context.source.name,
+                            "created_at": chunk.created_at,
                             "source_type": (
                                 self._event_source_type(context)
                             ),

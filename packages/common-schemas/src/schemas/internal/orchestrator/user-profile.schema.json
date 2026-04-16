@@ -36,6 +36,14 @@
       "type": "string",
       "minLength": 1
     },
+    "locale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "channel": {
+      "type": "string",
+      "minLength": 1
+    },
     "vip_level": {
       "type": "string",
       "minLength": 1

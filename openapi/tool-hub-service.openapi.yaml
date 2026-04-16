@@ -14,6 +14,7 @@ paths:
       tags: [health]
       operationId: toolHub_healthz
       summary: Check tool-hub service liveness.
+      description: Runtime health route. `/healthz` may report `degraded` while the service remains live; downstream HTTP dependency state is surfaced through additive nested `runtime.businessToolsTransport.dependencyReadiness`.
       x-owner-service: tool-hub-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]
@@ -25,12 +26,73 @@ paths:
           content:
             application/json:
               schema:
-                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeHealthStatus
               example:
-                status: ok
+                status: degraded
                 service: tool-hub-service
+                degraded_components: [businessToolsTransport]
+                runtime:
+                  businessToolsTransport:
+                    transport: http
+                    baseUrl: http://business-tools-service:8000
+                    internalApiPrefix: /internal/v1
+                    degradedLocalFallbackEnabled: true
+                    dependencyReadiness:
+                      ready: false
+                      status: not_ready
+                      mode: http
+                      service: business-tools-service
+                      httpStatus: 503
+                      notReadyComponents: [queryCache]
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /readyz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: toolHub_readyz
+      summary: Check tool-hub runtime readiness for traffic.
+      description: Readiness route. `/readyz` is stricter than `/healthz` and returns `503` when audit storage or required downstream business-tools readiness is degraded.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Tool-hub runtime is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: ready
+                service: tool-hub-service
+                not_ready_components: []
+                runtime:
+                  auditStore:
+                    backend: mysql
+        '503':
+          description: Tool-hub runtime is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: not_ready
+                service: tool-hub-service
+                not_ready_components: [businessToolsTransport]
+                runtime:
+                  businessToolsTransport:
+                    transport: http
+                    dependencyReadiness:
+                      ready: false
+                      status: not_ready
+                      mode: http
+                      service: business-tools-service
+                      httpStatus: 503
+                      notReadyComponents: [queryCache]
   /api/v1/tools:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
@@ -142,7 +204,7 @@ paths:
       tags: [tools]
       operationId: toolHub_invokeTool
       summary: Invoke a registered tool through the current baseline dispatcher.
-      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools/{tool_name}/invoke`. Successful direct invoke responses may include additive metadata such as `downstream_target` and `auth_requirements` alongside the execution-result fields. Follow-up-required results may also surface additive `user_action_hint` metadata so trusted callers can render clarification/auth/confirmation instructions without parsing summary text.
+      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools/{tool_name}/invoke`. Successful direct invoke responses may include additive metadata such as `downstream_target` and `auth_requirements` alongside the execution-result fields. Follow-up-required results may also surface additive `user_action_hint` metadata so trusted callers can render clarification/auth/confirmation instructions without parsing summary text; auth-required hints may additionally expose `user_profile_bindings` that map missing context onto orchestrator `/continue.user_profile_patch`.
       x-owner-service: tool-hub-service
       x-legacy-paths:
         - /api/tool-hub/v1/tools/{tool_name}/invoke
@@ -293,7 +355,7 @@ paths:
       tags: [tools]
       operationId: toolHub_preflightTool
       summary: Validate a tool call for clarification, auth, or confirmation blockers before execution.
-      description: Canonical route. Internal compatibility alias remains `/internal/v1/tools/preflight`, and that internal alias requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list. Preflight validates tool availability, operation support, missing payload fields, auth context, and confirmation requirements without executing the tool or creating a tool-call audit record. Responses now also surface additive `session_context_bindings`, machine-readable `user_action_hint`, plus execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`) so continuation/planning callers can inspect how missing fields may be satisfied and how the downstream tool will execute.
+      description: Canonical route. Internal compatibility alias remains `/internal/v1/tools/preflight`, and that internal alias requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list. Preflight validates tool availability, operation support, missing payload fields, auth context, and confirmation requirements without executing the tool or creating a tool-call audit record. Responses now also surface additive `session_context_bindings`, machine-readable `user_action_hint`, additive auth-continuation `user_profile_bindings`, plus execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`) so continuation/planning callers can inspect how missing fields may be satisfied and how the downstream tool will execute.
       x-owner-service: tool-hub-service
       x-internal-paths:
         - /internal/v1/tools/preflight
@@ -379,6 +441,37 @@ paths:
                       confirm_tool_names: [billing.create_invoice]
                     session_context_bindings:
                       statement_nos: [attributes.billing_statement_nos]
+                    downstream_target: business-tools
+                    provider: business-tools
+                authRequired:
+                  summary: Auth-required preflight maps missing auth context onto continuation profile fields
+                  value:
+                    tool_name: billing.create_invoice
+                    operation: execute
+                    status: auth-required
+                    ready: false
+                    available: true
+                    high_risk: false
+                    tool_mode: write
+                    timeout_ms: 10000
+                    idempotent: true
+                    cache_ttl_seconds: null
+                    missing_payload_fields: []
+                    missing_payload_hints: {}
+                    missing_auth_context: [account_id, permission:user:billing.read]
+                    required_permissions: [user:billing.read]
+                    requires_account_context: true
+                    confirmation_required: false
+                    user_action_hint:
+                      action: collect-auth-context
+                      message: billing.create_invoice 执行前需补充鉴权上下文。
+                      missing_auth_context: [account_id, permission:user:billing.read]
+                      required_permissions: [user:billing.read]
+                      requires_account_context: true
+                      user_profile_bindings:
+                        account_id: [account_id]
+                        permissions: [permissions]
+                    session_context_bindings: {}
                     downstream_target: business-tools
                     provider: business-tools
         '400':

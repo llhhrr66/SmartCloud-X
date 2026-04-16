@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/runtime-dependency-readiness.schema.json",
+  "title": "RuntimeDependencyReadiness",
+  "type": "object",
+  "required": [
+    "ready",
+    "status",
+    "mode",
+    "service"
+  ],
+  "properties": {
+    "ready": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "transport-local",
+        "http"
+      ]
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "httpStatus": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "notReadyComponents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "error": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

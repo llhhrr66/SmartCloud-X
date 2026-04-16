@@ -2,11 +2,91 @@ from fastapi.testclient import TestClient
 
 from app.core.business_tools_sdk import ToolDefinition, ToolExecutionResult, ToolPreflightResult
 from app.main import app
+from app.api.routes import health as health_routes
 from app.api.routes import tools as tools_routes
+from app.services.business_tools_client import BusinessToolsDiscoveryUnavailableError
 
 
 client = TestClient(app)
 internal_client = TestClient(app, headers={"X-Caller-Service": "orchestrator-service"})
+
+
+def test_healthz_reports_business_tools_transport_runtime() -> None:
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["businessToolsTransport"]["transport"] in {"local", "http"}
+    assert "degradedLocalFallbackEnabled" in runtime["businessToolsTransport"]
+    if runtime["businessToolsTransport"]["transport"] == "http":
+        assert runtime["businessToolsIdempotency"]["active"] is False
+        assert runtime["businessToolsIdempotency"]["backend"] == "inactive"
+        assert runtime["businessToolsIdempotency"]["redisNamespace"].endswith(":idempotency")
+        assert runtime["businessToolsIdempotency"]["fallbackPath"].endswith(".json")
+        assert runtime["businessToolsQueryCache"]["active"] is False
+        assert runtime["businessToolsQueryCache"]["redisNamespace"].endswith(":query-cache")
+        assert runtime["businessToolsQueryCache"]["fallbackPath"].endswith(".json")
+
+
+def test_readyz_reports_ready_when_runtime_is_healthy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "auditStore": {"backend": "mysql", "configured": True},
+            "businessToolsTransport": {
+                "transport": "http",
+                "dependencyReadiness": {"ready": True, "status": "ready"},
+            },
+        },
+    )
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["not_ready_components"] == []
+
+
+def test_readyz_reports_not_ready_when_business_tools_dependency_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_routes,
+        "_runtime_snapshot",
+        lambda: {
+            "auditStore": {"backend": "mysql", "configured": True},
+            "businessToolsTransport": {
+                "transport": "http",
+                "dependencyReadiness": {"ready": False, "status": "unreachable"},
+            },
+        },
+    )
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "not_ready"
+    assert payload["not_ready_components"] == ["businessToolsTransport"]
+
+
+def test_public_tool_discovery_surfaces_503_when_remote_business_tools_discovery_is_unavailable(monkeypatch) -> None:
+    class StubRegistry:
+        def list_tools(self, **kwargs):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+        def describe_tool(self, tool_name: str, **kwargs):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+    monkeypatch.setattr(tools_routes, "_registry", StubRegistry())
+
+    list_response = client.get("/api/v1/tools")
+    describe_response = client.get("/api/v1/tools/billing.query_statement")
+
+    assert list_response.status_code == 503
+    assert list_response.json()["detail"]["code"] == "ORCH_TOOL_DISCOVERY_UNAVAILABLE"
+    assert describe_response.status_code == 503
+    assert describe_response.json()["detail"]["code"] == "ORCH_TOOL_DISCOVERY_UNAVAILABLE"
 
 
 def test_internal_tools_call_executes_query_tool() -> None:
@@ -38,6 +118,122 @@ def test_internal_tools_call_executes_query_tool() -> None:
     assert payload["citations"] == ["baseline://billing-query-statement"]
     assert "cache-hit" not in payload["audit_tags"]
     assert payload["session_context_patch"]["attributes"]["statement_no"] == "stmt_2026_04_001"
+
+
+def test_internal_tools_call_executes_instance_cost_query_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-instance-cost-1",
+            "conversation_id": "conv-instance-cost-1",
+            "tool_call_id": "tc-instance-cost-1",
+            "tool_name": "billing.query_instance_cost",
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            "payload": {"instance_id": "gpu-cn-sh2-01", "range": "this_month"},
+            "idempotency_key": "tool-instance-cost-1",
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"]["total_amount"] == 412.68
+    assert payload["session_context_patch"]["attributes"]["instance_id"] == "gpu-cn-sh2-01"
+    assert payload["session_context_patch"]["attributes"]["instance_statement_no"] == "stmt_2026_04_001"
+
+
+def test_internal_tools_call_executes_product_recommendation_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-product-recommend-1",
+            "conversation_id": "conv-product-recommend-1",
+            "tool_call_id": "tc-product-recommend-1",
+            "tool_name": "product.recommend_instance",
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "user_context": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例",
+                "workload": "inference",
+                "model_family": "llm",
+                "budget_level": "balanced",
+            },
+            "idempotency_key": "tool-product-recommend-1",
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"]["recommended_instance_type"] == "gi4.2xlarge"
+    assert payload["session_context_patch"]["attributes"]["recommended_gpu_model"] == "NVIDIA L40S"
+
+
+def test_internal_tools_call_executes_service_status_query_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-service-status-1",
+            "conversation_id": "conv-service-status-1",
+            "tool_call_id": "tc-service-status-1",
+            "tool_name": "support.query_service_status",
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "user_context": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "gpu-cn-sh2-01 网络异常，帮我查下服务状态",
+                "instance_id": "gpu-cn-sh2-01",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"]["status"] == "degraded"
+    assert payload["result"]["region"] == "cn-shanghai-2"
+    assert payload["session_context_patch"]["attributes"]["service_status"] == "degraded"
+    assert payload["session_context_patch"]["attributes"]["service_affected_instance_id"] == "gpu-cn-sh2-01"
+
+
+def test_internal_tools_call_executes_handoff_brief_tool() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-handoff-1",
+            "conversation_id": "conv-handoff-1",
+            "tool_call_id": "tc-handoff-1",
+            "tool_name": "support.handoff_brief",
+            "operator": {"type": "agent", "id": "Product_Tech_Agent"},
+            "user_context": {"tenant_id": "tenant-a"},
+            "payload": {
+                "user_query": "服务异常我要转人工",
+                "scene": "technical_support",
+                "urgency": "high",
+                "conversation_summary": "用户反馈 GPU 推理服务不可用。",
+                "related_resources": ["GPU 实例", "gpu-cn-sh2-01"],
+                "service_status": "degraded",
+                "incident_code": "INC-CNSHANGHAI2-GPUINSTANCE-042",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议尽快处理。",
+            },
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"]["queue"] == "technical-support-l2"
+    assert payload["result"]["incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+    assert payload["session_context_patch"]["attributes"]["human_handoff_summary"].startswith("用户请求人工介入")
+    assert payload["session_context_patch"]["attributes"]["human_handoff_incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
 
 
 def test_internal_tools_call_executes_order_status_query_tool() -> None:
@@ -429,6 +625,7 @@ def test_direct_invoke_creates_public_audit_record() -> None:
     )
 
     assert response.status_code == 200
+    assert response.json()["data"]["tool_call_id"] == "tc-public-invoke-1"
     audit_response = client.get("/api/v1/tool-calls", params={"trace_id": "trace-public-invoke-1"})
     assert audit_response.status_code == 200
     records = audit_response.json()["data"]
@@ -488,6 +685,32 @@ def test_tool_detail_exposes_dependency_and_session_context_metadata() -> None:
     assert "attributes.invoice_no" in payload["session_context_output_keys"]
 
 
+def test_tool_detail_exposes_product_recommendation_metadata() -> None:
+    response = client.get("/api/v1/tools/product.recommend_instance")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["session_context_bindings"]["workload"] == ["attributes.recommended_workload"]
+    assert payload["output_schema"]["properties"]["recommended_instance_type"]["type"] == "string"
+    assert "attributes.recommended_instance_type" in payload["session_context_output_keys"]
+
+
+def test_tool_detail_exposes_service_status_metadata() -> None:
+    response = client.get("/api/v1/tools/support.query_service_status")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["session_context_bindings"]["instance_id"] == [
+        "attributes.instance_id",
+        "attributes.primary_instance_id",
+        "attributes.service_affected_instance_id",
+    ]
+    assert payload["output_schema"]["properties"]["status"]["enum"] == [
+        "healthy",
+        "degraded",
+        "outage",
+    ]
+    assert "attributes.service_status_summary" in payload["session_context_output_keys"]
+
+
 def test_tool_detail_exposes_new_order_and_invoice_query_metadata() -> None:
     order_response = client.get("/api/v1/tools/order.query_order")
     invoice_response = client.get("/api/v1/tools/invoice.query_invoice")
@@ -538,7 +761,12 @@ def test_tool_detail_exposes_marketing_copy_metadata() -> None:
     payload = response.json()["data"]
     assert payload["prerequisite_tool_names"] == ["marketing.campaign_lookup"]
     assert payload["session_context_bindings"]["campaign_name"] == ["attributes.last_campaign_name"]
+    assert payload["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert "attributes.last_marketing_copy_headline" in payload["session_context_output_keys"]
+    assert "attributes.last_marketing_product_summary" in payload["session_context_output_keys"]
 
 
 def test_tool_detail_exposes_marketing_poster_metadata() -> None:
@@ -547,7 +775,27 @@ def test_tool_detail_exposes_marketing_poster_metadata() -> None:
     payload = response.json()["data"]
     assert payload["prerequisite_tool_names"] == ["marketing.poster_brief"]
     assert payload["session_context_bindings"]["theme"] == ["attributes.poster_theme"]
+    assert payload["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert "attributes.poster_asset_id" in payload["session_context_output_keys"]
+
+
+def test_tool_detail_exposes_recommendation_aware_campaign_lookup_metadata() -> None:
+    response = client.get("/api/v1/tools/marketing.campaign_lookup")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["session_context_bindings"]["product"] == [
+        "attributes.recommended_instance_type",
+        "attributes.recommended_instance_family",
+        "active_products",
+    ]
+    assert payload["session_context_bindings"]["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
+    assert "attributes.last_marketing_product_summary" in payload["session_context_output_keys"]
 
 
 def test_internal_tools_call_returns_compensation_for_confirmed_write() -> None:
@@ -611,6 +859,39 @@ def test_internal_tools_call_executes_promotion_link_write() -> None:
     assert payload["result"]["short_url"].startswith("https://scx.example/p/")
     assert payload["compensation"]["action_name"] == "deactivate_promotion_link"
     assert payload["session_context_patch"]["attributes"]["last_promotion_link"] == payload["result"]["short_url"]
+
+
+def test_internal_tools_call_executes_marketing_copy_with_product_summary() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-copy-summary-1",
+            "conversation_id": "conv-copy-summary-1",
+            "tool_call_id": "tc-copy-summary-1",
+            "tool_name": "marketing.generate_copy",
+            "operator": {"type": "agent", "id": "Ops_Marketing_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "permissions": ["user:marketing.write"],
+            },
+            "payload": {
+                "campaign_name": "GPU 新客满减",
+                "product_summary": "gi4.2xlarge / NVIDIA L40S x2",
+                "channel": "wechat",
+            },
+            "idempotency_key": "tool-copy-summary-1",
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["result"]["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert "gi4.2xlarge / NVIDIA L40S x2" in payload["result"]["headline"]
+    assert (
+        payload["session_context_patch"]["attributes"]["last_marketing_product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
 
 
 def test_internal_tools_call_executes_poster_generation_write() -> None:
@@ -717,6 +998,7 @@ def test_internal_tools_call_surfaces_permission_failure_and_audits_it() -> None
     assert payload["error"]["details"]["missing_context"] == ["permission:user:ticket.write"]
     assert payload["user_action_hint"]["action"] == "collect-auth-context"
     assert payload["user_action_hint"]["required_permissions"] == ["user:ticket.write"]
+    assert payload["user_action_hint"]["user_profile_bindings"] == {"permissions": ["permissions"]}
 
     audit_response = client.get("/api/v1/tool-calls/tc-ticket-1")
     assert audit_response.status_code == 200
@@ -724,6 +1006,49 @@ def test_internal_tools_call_surfaces_permission_failure_and_audits_it() -> None
     assert audit_payload["status"] == "auth-required"
     assert audit_payload["error"]["details"]["missing_context"] == ["permission:user:ticket.write"]
     assert audit_payload["user_action_hint"]["action"] == "collect-auth-context"
+    assert audit_payload["user_action_hint"]["user_profile_bindings"] == {"permissions": ["permissions"]}
+
+
+def test_internal_tools_call_executes_ticket_create_with_handoff_context() -> None:
+    response = internal_client.post(
+        "/internal/v1/tools/call",
+        json={
+            "trace_id": "trace-ticket-handoff-1",
+            "conversation_id": "conv-ticket-handoff-1",
+            "tool_call_id": "tc-ticket-handoff-1",
+            "tool_name": "ticket.create",
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "permissions": ["user:ticket.write"],
+            },
+            "payload": {
+                "scene": "technical_support",
+                "subject": "gpu-cn-sh2-01 异常工单",
+                "content": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "queue": "technical-support-l2",
+                "incident_code": "INC-CNSHANGHAI2-GPUINSTANCE-042",
+                "service_status": "degraded",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "related_resources": ["gpu-cn-sh2-01", "GPU 实例服务"],
+            },
+            "idempotency_key": "tool-tc-ticket-handoff-1",
+            "operation": "execute",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["result"]["queue"] == "technical-support-l2"
+    assert payload["result"]["incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+    assert payload["result"]["subject"].startswith("gpu-cn-sh2-01 异常工单")
+    assert payload["session_context_patch"]["attributes"]["ticket_queue"] == "technical-support-l2"
+
+    audit_response = client.get("/api/v1/tool-calls/tc-ticket-handoff-1")
+    assert audit_response.status_code == 200
+    audit_payload = audit_response.json()["data"]
+    assert audit_payload["status"] == "completed"
+    assert audit_payload["session_context_patch"]["attributes"]["ticket_incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
 
 
 def test_tool_call_audit_routes_expose_record() -> None:

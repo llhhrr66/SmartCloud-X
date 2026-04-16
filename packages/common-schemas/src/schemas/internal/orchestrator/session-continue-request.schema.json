@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/session-continue-request.schema.json",
   "title": "SessionContinueRequest",
+  "description": "Continue a paused clarification, auth-collection, or confirmation flow. `field_values` and `session_context_patch` remain additive runtime hints; `user_profile_patch` lets trusted callers resume auth-required steps without rebuilding the full upstream chat request.",
   "type": "object",
   "properties": {
     "message_id": {
@@ -32,7 +33,21 @@
     "session_context_patch": {
       "type": "object",
       "additionalProperties": true
+    },
+    "user_profile_patch": {
+      "$ref": "./user-profile-patch.schema.json"
     }
   },
+  "examples": [
+    {
+      "message_id": "msg-auth-2",
+      "user_profile_patch": {
+        "account_id": "acct-1001",
+        "permissions": [
+          "user:billing.read"
+        ]
+      }
+    }
+  ],
   "additionalProperties": false
 }

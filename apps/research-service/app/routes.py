@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
+from app.core.config import get_settings
 from app.dependencies import build_trace_context, require_user_permissions
 from app.models import (
     CanonicalSuccessEnvelope,
@@ -165,7 +166,9 @@ def _build_research_result(task: ResearchTask) -> ResearchTaskResultData:
     citations: list[str] = []
     if result_ready and task.report_file_id:
         extension = "pdf" if task.output_format == "pdf" else "md"
-        download_url = f"https://downloads.smartcloud.local/research/{task.report_file_id}.{extension}"
+        download_url = (
+            f"{get_settings().report_download_base_url.rstrip('/')}/{task.report_file_id}.{extension}"
+        )
         preview_text = "\n\n".join(
             [
                 f"# {task.topic}",

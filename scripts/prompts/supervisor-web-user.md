@@ -36,3 +36,10 @@ Priority continuation tasks for this run:
 4. Update owned docs/status artifacts to describe what is now truly browser-validated versus still baseline-only.
 
 Make real file changes and get this owned area from empty to usable baseline.
+
+Current override priority (2026-04-16, remove mock-first behavior):
+1. Reduce owned reliance on mock/demo/app-local persistence for normal runtime paths.
+2. Keep mock mode only as an explicit development/testing switch, not the default implied source of truth.
+3. Prefer live API-backed reads/writes for sessions, research, marketing, ticket/order/business flows wherever backend contracts already exist.
+4. Remove or minimize browser-local tracked-id/workspace fallbacks when a real backend list/detail/history path is available.
+5. Update owned docs/tests/status to clearly distinguish explicit dev-only mock behavior from real API-backed behavior.

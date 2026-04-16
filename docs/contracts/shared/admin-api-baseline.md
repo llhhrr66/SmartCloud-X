@@ -18,6 +18,7 @@ This document freezes the current external admin-surface baseline required by sp
 - `GET /api/v1/admin/jobs/{job_id}` -> `knowledge-service` for the current knowledge-base async-job baseline
 - `POST /api/v1/admin/retrieval/search-preview` -> gateway-published path currently backed by `knowledge-service`
 - `POST /api/v1/admin/retrieval/diagnostics` -> gateway-published path currently backed by `rag-service`
+- `GET/PATCH /api/v1/admin/agents*` -> `orchestrator-service` process-local admin/debug baseline documented in `openapi/orchestrator-service.openapi.yaml`; this owner route still uses internal `ApiEnvelope` responses until a gateway-normalized admin surface is promoted
 
 ## RBAC baseline for this phase
 - dashboard summary: `admin:ops.read`

@@ -23,7 +23,7 @@ from app.models.tools import (
     ToolPreflightResponse,
 )
 from app.services.audit_store import ToolCallAuditStore
-from app.services.business_tools_client import BusinessToolsClient
+from app.services.business_tools_client import BusinessToolsClient, BusinessToolsDiscoveryUnavailableError
 from app.services.dispatcher import ToolDispatcher, ToolInvocationError
 from app.services.registry import ToolRegistry
 
@@ -34,7 +34,10 @@ _registry = ToolRegistry()
 _dispatcher = ToolDispatcher()
 _business_tools_client = BusinessToolsClient()
 _settings = get_settings()
-_audit_store = ToolCallAuditStore(file_path=_settings.audit_store_path)
+_audit_store = ToolCallAuditStore(
+    file_path=_settings.audit_store_path,
+    mysql_dsn=_settings.mysql_dsn,
+)
 
 
 def _list_tools(
@@ -45,20 +48,23 @@ def _list_tools(
     tag: str | None = None,
     query: str | None = None,
 ) -> ApiEnvelope[list[ToolDescriptor]]:
-    return ApiEnvelope(
-        success=True,
-        data=_registry.list_tools(
+    try:
+        data = _registry.list_tools(
             capability=capability,
             mode=mode,
             tag=tag,
             query=query,
-        ),
-        requestId=_request_id(request),
-    )
+        )
+    except BusinessToolsDiscoveryUnavailableError as exc:
+        _raise_discovery_unavailable(exc)
+    return ApiEnvelope(success=True, data=data, requestId=_request_id(request))
 
 
 def _describe_tool(tool_name: str, request: Request) -> ApiEnvelope[ToolDescriptor]:
-    descriptor = _registry.describe_tool(tool_name)
+    try:
+        descriptor = _registry.describe_tool(tool_name)
+    except BusinessToolsDiscoveryUnavailableError as exc:
+        _raise_discovery_unavailable(exc)
     if descriptor is None:
         raise HTTPException(
             status_code=404,
@@ -177,7 +183,11 @@ def invoke_tool(
             latency_ms=int((time.perf_counter() - started) * 1000),
         ),
     )
-    return ApiEnvelope(success=True, data=result, requestId=_request_id(http_request))
+    return ApiEnvelope(
+        success=True,
+        data=result.model_copy(update={"tool_call_id": public_call_request.tool_call_id}),
+        requestId=_request_id(http_request),
+    )
 
 
 @router.get("/tool-calls", response_model=ApiEnvelope[list[ToolCallAuditRecord]])
@@ -444,6 +454,17 @@ def _preflight(tool, request: ToolInvokeRequest):
 
 def _request_id(request: Request) -> str | None:
     return request.headers.get(_settings.request_id_header)
+
+
+def _raise_discovery_unavailable(exc: BusinessToolsDiscoveryUnavailableError) -> None:
+    raise HTTPException(
+        status_code=503,
+        detail=ErrorInfo(
+            code="ORCH_TOOL_DISCOVERY_UNAVAILABLE",
+            message=str(exc),
+            details={"transport": "http", "downstream": "business-tools-service"},
+        ).model_dump(),
+    ) from exc
 
 
 def _validate_internal_caller(request: Request) -> None:

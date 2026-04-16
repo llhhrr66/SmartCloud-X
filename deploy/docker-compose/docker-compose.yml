@@ -214,8 +214,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-smartcloud}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-smartcloud123}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${SMARTCLOUD_MINIO_HOST_PORT:-19000}:9000"
+      - "${SMARTCLOUD_MINIO_CONSOLE_HOST_PORT:-19001}:9001"
     volumes:
       - minio_data:/data
     restart: unless-stopped

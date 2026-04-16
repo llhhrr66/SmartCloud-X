@@ -1,33 +1,68 @@
 from __future__ import annotations
 
 import json
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
 from business_tools.interfaces import ToolExecutionContext, ToolExecutionResult
+from business_tools.runtime_backend import build_redis_client, clear_namespace, normalize_namespace
+
+RECOVERY_RETRY_SECONDS = 5.0
 
 
 @dataclass
 class StoredToolExecution:
     fingerprint: str
     result: ToolExecutionResult
+    expires_at: float | None = None
 
 
 class ToolIdempotencyStore:
-    """Process-local write-tool idempotency store with optional file persistence."""
+    """Write-tool idempotency store with Redis-first runtime persistence and local fallback."""
 
-    def __init__(self, persistence_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        persistence_path: str | Path | None = None,
+        *,
+        redis_url: str | None = None,
+        redis_namespace: str = "smartcloud:business-tools:idempotency",
+    ) -> None:
         self._lock = RLock()
         self._records: dict[tuple[str, str], StoredToolExecution] = {}
         self._persistence_path: Path | None = None
-        self.configure_persistence(persistence_path)
+        self._redis_url: str | None = None
+        self._redis_namespace = normalize_namespace(redis_namespace)
+        self._redis_client = None
+        self._backend_error: str | None = None
+        self._next_recovery_attempt_at = 0.0
+        self.configure_persistence(
+            persistence_path,
+            redis_url=redis_url,
+            redis_namespace=redis_namespace,
+        )
 
-    def configure_persistence(self, persistence_path: str | Path | None) -> None:
+    def configure_persistence(
+        self,
+        persistence_path: str | Path | None,
+        *,
+        redis_url: str | None = None,
+        redis_namespace: str | None = None,
+    ) -> None:
         path = Path(persistence_path).expanduser() if persistence_path else None
         with self._lock:
             self._persistence_path = path
+            self._redis_url = redis_url
+            if redis_namespace:
+                self._redis_namespace = normalize_namespace(redis_namespace)
+            self._redis_client = build_redis_client(redis_url)
+            self._backend_error = "Redis connection unavailable." if redis_url and self._redis_client is None else None
+            self._next_recovery_attempt_at = 0.0
             self._records = self._load_records(path) if path else {}
+            self._bootstrap_redis_from_local_unlocked()
+            self._persist_unlocked()
 
     def get(
         self,
@@ -36,9 +71,28 @@ class ToolIdempotencyStore:
         payload: dict,
         context: ToolExecutionContext,
     ) -> tuple[ToolExecutionResult | None, bool]:
+        self._maybe_restore_backend()
         fingerprint = self._fingerprint(tool_name, payload, context)
+        redis_record = self._get_from_redis(tool_name, idempotency_key)
+        if redis_record is not None:
+            with self._lock:
+                self._records[(tool_name, idempotency_key)] = StoredToolExecution(
+                    fingerprint=redis_record.fingerprint,
+                    result=redis_record.result.model_copy(deep=True),
+                    expires_at=redis_record.expires_at,
+                )
+            if redis_record.fingerprint != fingerprint:
+                return None, True
+            replay = redis_record.result.model_copy(deep=True)
+            if "idempotent-replay" not in replay.audit_tags:
+                replay.audit_tags.append("idempotent-replay")
+            return replay, False
         with self._lock:
             record = self._records.get((tool_name, idempotency_key))
+            if record is not None and record.expires_at is not None and record.expires_at <= time.time():
+                self._records.pop((tool_name, idempotency_key), None)
+                self._persist_unlocked()
+                record = None
         if record is None:
             return None, False
         if record.fingerprint != fingerprint:
@@ -54,25 +108,198 @@ class ToolIdempotencyStore:
         idempotency_key: str,
         payload: dict,
         context: ToolExecutionContext,
+        ttl_seconds: int | None,
         result: ToolExecutionResult,
     ) -> ToolExecutionResult:
+        self._maybe_restore_backend()
         fingerprint = self._fingerprint(tool_name, payload, context)
         stored = result.model_copy(deep=True)
+        expires_at = time.time() + ttl_seconds if ttl_seconds and ttl_seconds > 0 else None
+        if self._save_to_redis(
+            tool_name,
+            idempotency_key,
+            StoredToolExecution(
+                fingerprint=fingerprint,
+                result=stored,
+                expires_at=expires_at,
+            ),
+            ttl_seconds=ttl_seconds,
+        ):
+            with self._lock:
+                self._records[(tool_name, idempotency_key)] = StoredToolExecution(
+                    fingerprint=fingerprint,
+                    result=stored.model_copy(deep=True),
+                    expires_at=expires_at,
+                )
+                self._persist_unlocked()
+            return result
         with self._lock:
             self._records[(tool_name, idempotency_key)] = StoredToolExecution(
                 fingerprint=fingerprint,
                 result=stored,
+                expires_at=expires_at,
             )
             self._persist_unlocked()
         return result
 
     def clear(self) -> None:
+        self._maybe_restore_backend()
         with self._lock:
             self._records.clear()
             self._persist_unlocked()
+        client = self._redis_client
+        if client is not None:
+            try:
+                clear_namespace(client, self._redis_namespace)
+            except Exception as exc:
+                self._degrade_backend(exc)
 
-    def _persist_unlocked(self) -> None:
+    def describe_backend(self) -> dict[str, object]:
+        self._maybe_restore_backend()
+        return {
+            "backend": "redis" if self._redis_client is not None else ("json-file" if self._persistence_path else "memory"),
+            "redisConfigured": bool(self._redis_url),
+            "redisNamespace": self._redis_namespace if self._redis_url else None,
+            "fallbackPath": str(self._persistence_path) if self._persistence_path else None,
+            "fallbackWriteMode": "degraded-only" if self._redis_client is not None and self._redis_url else "active",
+            "degradedFrom": "redis" if self._backend_error else None,
+            "backendError": self._backend_error,
+        }
+
+    def _key(self, tool_name: str, idempotency_key: str) -> str:
+        return f"{self._redis_namespace}:{tool_name}:{idempotency_key}"
+
+    def _get_from_redis(
+        self,
+        tool_name: str,
+        idempotency_key: str,
+    ) -> StoredToolExecution | None:
+        client = self._redis_client
+        if client is None:
+            return None
+        try:
+            payload = client.get(self._key(tool_name, idempotency_key))
+        except Exception as exc:
+            self._degrade_backend(exc)
+            return None
+        if not isinstance(payload, str) or not payload.strip():
+            return None
+        try:
+            parsed = json.loads(payload)
+            expires_at = parsed.get("expires_at")
+            parsed_expires_at = float(expires_at) if expires_at not in {None, ""} else None
+            return StoredToolExecution(
+                fingerprint=str(parsed.get("fingerprint", "")),
+                result=ToolExecutionResult.model_validate(parsed.get("result") or {}),
+                expires_at=parsed_expires_at,
+            )
+        except Exception:
+            try:
+                client.delete(self._key(tool_name, idempotency_key))
+            except Exception:
+                pass
+            return None
+
+    def _save_to_redis(
+        self,
+        tool_name: str,
+        idempotency_key: str,
+        record: StoredToolExecution,
+        *,
+        ttl_seconds: int | None,
+    ) -> bool:
+        client = self._redis_client
+        if client is None:
+            return False
+        payload = json.dumps(
+            {
+                "fingerprint": record.fingerprint,
+                "result": record.result.model_dump(mode="json"),
+                "expires_at": record.expires_at,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            if ttl_seconds is not None and ttl_seconds > 0:
+                client.setex(self._key(tool_name, idempotency_key), max(int(ttl_seconds), 1), payload)
+            else:
+                client.set(self._key(tool_name, idempotency_key), payload)
+        except Exception as exc:
+            self._degrade_backend(exc)
+            return False
+        return True
+
+    def _maybe_restore_backend(self) -> None:
+        if self._redis_client is not None or not self._redis_url:
+            return
+        now = time.monotonic()
+        if now < self._next_recovery_attempt_at:
+            return
+        with self._lock:
+            if self._redis_client is not None or not self._redis_url:
+                return
+            now = time.monotonic()
+            if now < self._next_recovery_attempt_at:
+                return
+            client = build_redis_client(self._redis_url)
+            if client is None:
+                self._backend_error = "Redis connection unavailable."
+                self._next_recovery_attempt_at = now + RECOVERY_RETRY_SECONDS
+                self._persist_unlocked(force=True)
+                return
+            self._redis_client = client
+            self._backend_error = None
+            self._next_recovery_attempt_at = 0.0
+            self._bootstrap_redis_from_local_unlocked()
+            self._persist_unlocked()
+
+    def _degrade_backend(self, exc: Exception) -> None:
+        with self._lock:
+            self._redis_client = None
+            self._backend_error = f"{exc.__class__.__name__}: {exc}"
+            self._next_recovery_attempt_at = time.monotonic() + RECOVERY_RETRY_SECONDS
+            self._persist_unlocked(force=True)
+
+    def _bootstrap_redis_from_local_unlocked(self) -> None:
+        if self._redis_client is None or not self._records:
+            return
+        now = time.time()
+        authoritative: dict[tuple[str, str], StoredToolExecution] = {}
+        for (tool_name, idempotency_key), record in self._records.items():
+            remote_record = self._get_from_redis(tool_name, idempotency_key)
+            if remote_record is not None:
+                authoritative[(tool_name, idempotency_key)] = StoredToolExecution(
+                    fingerprint=remote_record.fingerprint,
+                    result=remote_record.result.model_copy(deep=True),
+                    expires_at=remote_record.expires_at,
+                )
+                continue
+            ttl_seconds: int | None = None
+            if record.expires_at is not None:
+                ttl_seconds = max(int(record.expires_at - now), 1)
+            if not self._save_to_redis(
+                tool_name,
+                idempotency_key,
+                StoredToolExecution(
+                    fingerprint=record.fingerprint,
+                    result=record.result.model_copy(deep=True),
+                    expires_at=record.expires_at,
+                ),
+                ttl_seconds=ttl_seconds,
+            ):
+                return
+            authoritative[(tool_name, idempotency_key)] = StoredToolExecution(
+                fingerprint=record.fingerprint,
+                result=record.result.model_copy(deep=True),
+                expires_at=record.expires_at,
+            )
+        self._records = authoritative
+
+    def _persist_unlocked(self, *, force: bool = False) -> None:
         if self._persistence_path is None:
+            return
+        if not force and self._redis_client is not None:
+            self._remove_fallback_file_unlocked()
             return
         self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -80,16 +307,32 @@ class ToolIdempotencyStore:
                 f"{tool_name}::{idempotency_key}": {
                     "fingerprint": record.fingerprint,
                     "result": record.result.model_dump(mode="json"),
+                    "expires_at": record.expires_at,
                 }
                 for (tool_name, idempotency_key), record in self._records.items()
             }
         }
-        tmp_path = self._persistence_path.with_suffix(f"{self._persistence_path.suffix}.tmp")
-        tmp_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        with tempfile.NamedTemporaryFile(
+            "w",
             encoding="utf-8",
-        )
+            dir=self._persistence_path.parent,
+            prefix=f"{self._persistence_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            tmp_path = Path(handle.name)
         tmp_path.replace(self._persistence_path)
+
+    def _remove_fallback_file_unlocked(self) -> None:
+        if self._persistence_path is None:
+            return
+        try:
+            self._persistence_path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
 
     @staticmethod
     def _load_records(path: Path | None) -> dict[tuple[str, str], StoredToolExecution]:
@@ -97,13 +340,19 @@ class ToolIdempotencyStore:
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
         records: dict[tuple[str, str], StoredToolExecution] = {}
+        now = time.time()
         for composite_key, raw_record in payload.get("records", {}).items():
             tool_name, _, idempotency_key = composite_key.partition("::")
             if not tool_name or not idempotency_key:
                 continue
+            expires_at = raw_record.get("expires_at")
+            parsed_expires_at = float(expires_at) if expires_at not in {None, ""} else None
+            if parsed_expires_at is not None and parsed_expires_at <= now:
+                continue
             records[(tool_name, idempotency_key)] = StoredToolExecution(
                 fingerprint=str(raw_record.get("fingerprint", "")),
                 result=ToolExecutionResult.model_validate(raw_record.get("result", {})),
+                expires_at=parsed_expires_at,
             )
         return records
 
@@ -130,6 +379,15 @@ def get_idempotency_store() -> ToolIdempotencyStore:
     return _store
 
 
-def configure_idempotency_store(*, persistence_path: str | Path | None = None) -> ToolIdempotencyStore:
-    _store.configure_persistence(persistence_path)
+def configure_idempotency_store(
+    *,
+    persistence_path: str | Path | None = None,
+    redis_url: str | None = None,
+    redis_namespace: str = "smartcloud:business-tools:idempotency",
+) -> ToolIdempotencyStore:
+    _store.configure_persistence(
+        persistence_path,
+        redis_url=redis_url,
+        redis_namespace=redis_namespace,
+    )
     return _store

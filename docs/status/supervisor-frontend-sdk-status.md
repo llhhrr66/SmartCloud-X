@@ -1,41 +1,40 @@
 # Supervisor Frontend SDK Status
 
 ## Status
-- phase: done
-- updated at: 2026-04-16T15:24:27+08:00
+- phase: shared-status-catalog-and-page-metadata-tightening-self-reviewed
+- updated at: 2026-04-17T00:16:19+08:00
 - owned scope: `packages/frontend-sdk/`
+- pending before final signoff: no active owned-path blocker; remaining follow-up is frozen user-business / ICP-list contract promotion, frozen stream-event replay route/OpenAPI promotion, plus later workspace-package import cleanup outside this run
 
 ## Completed
-- tightened `packages/frontend-sdk/` further with:
-  - a shared `consumeSseStreamWithReconnect(...)` helper in `packages/frontend-sdk/src/core/sse.ts` so frontend stream consumers share reconnect gating, backoff calculation, graceful-close reconnect handling, and structured final disconnect errors
-  - stronger shared validation for stream retry behavior in `packages/frontend-sdk/tests/core-sse.test.js`, covering retryable network failures, graceful closes, structured `429` delay handling, and explicit no-retry unauthorized failures
-  - stricter owned frontend typing aliases in `packages/frontend-sdk/src/web-user/business-types.ts` for billing/order/refund/ticket list surfaces (`BillingDetailPage`, `InvoiceRecordPage`, `OrderRecordPage`, `RefundRecordPage`, `TicketRecordPage`, plus `OrderListQuery` / `RefundListQuery` / `TicketListQuery`)
-- minimal app adoption for this run:
-  - `apps/web-user/src/pages/ChatPage.tsx` now consumes the shared SSE reconnect helper instead of owning the reconnect loop directly
-  - `apps/web-user/src/types/domain.ts` now re-exports the stricter shared business page aliases
+- tightened [business-mappers.ts](/home/ljr/SmartCloud-X/packages/frontend-sdk/src/web-user/business-mappers.ts) so shared billing / order / ticket / ICP page adapters now infer deterministic `totalPages` from `total` plus `page_size` and normalize uppercase or mixed-case `sortOrder` metadata at the SDK boundary instead of leaving that cleanup to thin app consumers
+- expanded [business-constants.ts](/home/ljr/SmartCloud-X/packages/frontend-sdk/src/web-user/business-constants.ts) with shared known status catalogs and guards for ticket, refund, ICP application, file lifecycle, and file scan surfaces, completing the reusable enum outlet for the currently adopted billing / order / ticket / ICP / file frontend domains
+- minimally aligned [domain.ts](/home/ljr/SmartCloud-X/apps/web-user/src/types/domain.ts) so the thin web-user shim now re-exports the added shared business type aliases (`BillingSummaryRange`, `TicketCategory`, `IcpMaterialType`, `FileLifecycleStatus`, `FileScanStatus`) instead of leaving those route-facing types reachable only through direct SDK imports
+- added stronger shared validation in [core-http.test.js](/home/ljr/SmartCloud-X/packages/frontend-sdk/tests/core-http.test.js), [web-user-business-api.test.js](/home/ljr/SmartCloud-X/packages/frontend-sdk/tests/web-user-business-api.test.js), and [web-user-business-fallbacks.test.js](/home/ljr/SmartCloud-X/packages/frontend-sdk/tests/web-user-business-fallbacks.test.js) for structured text/event-stream request-id fallback, inferred page counts, normalized sort-order casing, and the expanded shared business-status catalog
 
 ## Self-review
-- completed on 2026-04-16
+- completed on 2026-04-17
 - fixes made during review:
-  - removed an unused page-local reconnect variable left behind after the shared helper replaced the ChatPage-local retry loop
-  - reran the shared/runtime/app validation set after the cleanup to confirm no regression in the web-user integration
+  - no additional defect was found during the post-validation diff review; the tightened mapper/catalog behavior matched the passing validation set, so no follow-up code patch was required after the review pass
 
 ## Validation
 - `./apps/web-user/node_modules/typescript/bin/tsc -p packages/frontend-sdk/tsconfig.runtime.json`
+- `node --test packages/frontend-sdk/tests/core-http.test.js`
+- `node --test packages/frontend-sdk/tests/core-envelope.test.js`
+- `node --test packages/frontend-sdk/tests/core-sse.test.js`
+- `node --test packages/frontend-sdk/tests/web-user-business-api.test.js`
+- `node --test packages/frontend-sdk/tests/web-user-business-fallbacks.test.js`
 - `./apps/web-user/node_modules/typescript/bin/tsc -p apps/web-user/tsconfig.json --noEmit`
-- `./apps/web-admin/node_modules/typescript/bin/tsc -p apps/web-admin/tsconfig.json --noEmit`
-- `node --test packages/frontend-sdk/tests/core-envelope.test.js packages/frontend-sdk/tests/core-http.test.js packages/frontend-sdk/tests/core-sse.test.js packages/frontend-sdk/tests/web-user-business-api.test.js packages/frontend-sdk/tests/web-admin-api.test.js packages/frontend-sdk/tests/web-user-session.test.js packages/frontend-sdk/tests/web-user-mappers.test.js`
-- `npm run build` in `apps/web-user`
-- `npm run build` in `apps/web-admin`
 
 ## Blockers / Risks
-- no active blocker remains in owned paths
-- billing/order/ticket/ICP/file/citation-detail still live in an owned frontend-sdk contract outlet; frozen shared frontend contract promotion remains tracked in `docs/contracts/change-requests/2026-04-16-frontend-sdk-user-business-contract-promotion.md`
-- `packages/common-schemas/src/index.ts` still exports an incomplete frozen error-code list versus `packages/common-schemas/errors/error_codes.yaml`; frontend-sdk keeps an owned supplement until `docs/contracts/change-requests/2026-04-16-frontend-sdk-foundation-error-code-export-alignment.md` is processed
+- no active blocker remains in owned paths after this run
+- billing / order / ticket / ICP / file / citation-detail still live in the owned frontend-sdk contract outlet; frozen shared frontend contract promotion remains tracked in [2026-04-16-frontend-sdk-user-business-contract-promotion.md](/home/ljr/SmartCloud-X/docs/contracts/change-requests/2026-04-16-frontend-sdk-user-business-contract-promotion.md)
+- the primary spec/openapi/catalog still do not freeze a canonical ICP application list contract for `GET /api/v1/icp/applications`; that gap is tracked in [2026-04-16-frontend-sdk-icp-application-list-contract-promotion.md](/home/ljr/SmartCloud-X/docs/contracts/change-requests/2026-04-16-frontend-sdk-icp-application-list-contract-promotion.md), so the shared SDK still owns the ICP page/fallback outlet
+- live orchestrator message-event list/replay routes still matter to shared frontend consumption, but the route-level `CHAT_STREAM_EVENTS_NOT_FOUND` replay contract is still not frozen in `openapi/`; that remaining gap is tracked in [2026-04-16-frontend-sdk-chat-stream-events-not-found-promotion.md](/home/ljr/SmartCloud-X/docs/contracts/change-requests/2026-04-16-frontend-sdk-chat-stream-events-not-found-promotion.md)
 - apps still consume the SDK through thin local shims; that is usable now, but a formal workspace package-consumption convention remains a later cleanup item
 
 ## Integration Points
-- `packages/frontend-sdk/src/core/sse.ts` is now the shared reconnect/control-flow layer for frontend async stream consumers
-- `apps/web-user/src/pages/ChatPage.tsx` plugs store updates and telemetry into that shared reconnect helper through a minimal callback adapter
-- `packages/frontend-sdk/src/web-user/business-types.ts` now publishes surface-specific billing/order/refund/ticket page aliases for stricter shared reuse
-- `apps/web-user/src/types/domain.ts` re-exports those stricter shared page aliases alongside the rest of the shared SDK surface
+- [business-mappers.ts](/home/ljr/SmartCloud-X/packages/frontend-sdk/src/web-user/business-mappers.ts) now emits normalized page metadata for shared list surfaces, so billing / ticket / ICP consumers receive stable `totalPages` and lowercase `sortOrder` without app-local recomputation or casing guards
+- [business-constants.ts](/home/ljr/SmartCloud-X/packages/frontend-sdk/src/web-user/business-constants.ts) now gives thin app callers one shared source for ticket/refund/ICP/file status vocabularies in addition to the earlier billing-summary, ticket-priority/category, ICP-material, and upload-biz catalogs
+- [domain.ts](/home/ljr/SmartCloud-X/apps/web-user/src/types/domain.ts) now re-exports the shared business type aliases needed by thin web-user code that wants to stay on the local shim instead of importing those types from the package path directly
+- [core-http.test.js](/home/ljr/SmartCloud-X/packages/frontend-sdk/tests/core-http.test.js) now validates structured text/event-stream error bodies that omit `request_id`, keeping the shared HTTP client’s request-correlation story aligned across JSON and SSE-shaped failures

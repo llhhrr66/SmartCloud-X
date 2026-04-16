@@ -224,7 +224,7 @@ export function MarketingPage(): JSX.Element {
         description="展示营销活动、文案生成器与海报任务列表，对齐 Ops_Marketing_Agent 的用户侧工作台。"
         actions={
           <div className="page-header__actions">
-            {!isMock ? <Badge tone="info">Live 模式仅展示本浏览器已跟踪海报任务</Badge> : null}
+            {!isMock ? <Badge tone="info">Live 历史列表优先</Badge> : null}
             <button
               type="button"
               className="button button--ghost"
@@ -442,7 +442,9 @@ export function MarketingPage(): JSX.Element {
             ))}
           </div>
         ) : (
-          <p className="muted">暂无海报任务。</p>
+          <p className="muted">
+            {isMock ? '暂无海报任务。' : '暂无海报任务。页面会直接读取后端历史列表，必要时才回补当前浏览器最近跟踪的任务详情。'}
+          </p>
         )}
       </div>
     </>

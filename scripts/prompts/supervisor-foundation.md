@@ -34,3 +34,12 @@ Mission:
 6. Before finishing, do a code review pass on your own changes and fix issues found.
 
 Be practical and make real file changes, not just planning notes. Print a concise completion summary at the end.
+
+Current override priority (2026-04-16, real infra migration support):
+1. Expect downstream supervisors to promote contracts needed to replace local JSON/mock/file-backed storage with real middleware-backed main paths.
+2. Prioritize frozen/shared contract work for:
+   - MySQL-backed authoritative persistence surfaces
+   - Redis-backed queue/cache/session/idempotency semantics
+   - MinIO/raw-object and retrieval/indexing contract promotion where shared docs/OpenAPI need it
+   - orchestrator/tool-hub persistence and audit contract alignment
+3. Process downstream change requests quickly so owned teams can migrate off placeholder/file-backed baselines without frozen-space ambiguity.

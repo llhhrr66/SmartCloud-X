@@ -27,7 +27,7 @@ from app.services.tool_context import (
     hydrate_payload_from_session_context,
     session_context_input_keys,
 )
-from app.services.tool_hub_client import ToolHubClient
+from app.services.tool_hub_client import ToolHubClient, ToolHubDiscoveryUnavailableError
 
 
 class AgentRouter:
@@ -38,7 +38,7 @@ class AgentRouter:
 
     AGENT_KEYWORDS: OrderedDict[str, tuple[str, ...]] = OrderedDict(
         [
-            ("finance_order_agent", ("账单", "订单", "退款", "发票", "扣费", "工单")),
+            ("finance_order_agent", ("账单", "订单", "退款", "发票", "扣费", "工单", "费用", "消费")),
             ("icp_service_agent", ("备案", "实名", "合规", "icp", "核验")),
             ("ops_marketing_agent", ("营销", "活动", "海报", "推广", "优惠", "促销", "文案")),
             ("deep_research_agent", ("调研", "研究", "对比", "报告", "选型", "方案评估")),
@@ -62,7 +62,13 @@ class AgentRouter:
             "display_name": "Product_Tech_Agent",
             "description": "处理产品咨询、云服务器、GPU、部署与技术排障。",
             "supported_scenes": ["customer_service", "technical_support", "research"],
-            "allowed_tools": ["product.catalog_lookup", "support.playbook_search"],
+            "allowed_tools": [
+                "product.catalog_lookup",
+                "product.recommend_instance",
+                "support.playbook_search",
+                "support.query_service_status",
+                "support.handoff_brief",
+            ],
             "fallback_agent": "orchestrator",
         },
             "finance_order_agent": {
@@ -72,6 +78,7 @@ class AgentRouter:
                 "supported_scenes": ["billing", "customer_service"],
             "allowed_tools": [
                 "billing.query_statement",
+                "billing.query_instance_cost",
                 "order.query_order",
                 "billing.create_invoice",
                 "invoice.query_invoice",
@@ -79,6 +86,7 @@ class AgentRouter:
                 "ticket.create",
                 "ticket.reply",
                 "ticket.query_ticket",
+                "support.handoff_brief",
             ],
             "fallback_agent": "orchestrator",
         },
@@ -92,6 +100,7 @@ class AgentRouter:
                 "icp.verify_subject",
                 "icp.submit_application",
                 "icp.query_application",
+                "support.handoff_brief",
             ],
             "fallback_agent": "orchestrator",
         },
@@ -106,6 +115,7 @@ class AgentRouter:
                     "marketing.generate_copy",
                     "marketing.generate_promotion_link",
                     "marketing.generate_poster",
+                    "support.handoff_brief",
                 ],
                 "fallback_agent": "orchestrator",
             },
@@ -118,6 +128,7 @@ class AgentRouter:
                 "research.generate_report",
                 "research.reference_search",
                 "research.export_report",
+                "support.handoff_brief",
             ],
             "fallback_agent": "orchestrator",
         },
@@ -128,6 +139,7 @@ class AgentRouter:
         "invoice_no": re.compile(r"\b(inv[-_][a-z0-9._-]+)\b", re.IGNORECASE),
         "ticket_no": re.compile(r"\b(tk[-_][a-z0-9._-]+)\b", re.IGNORECASE),
         "application_no": re.compile(r"\b(icp[-_][a-z0-9._-]+)\b", re.IGNORECASE),
+        "instance_id": re.compile(r"\b((?:gpu|ecs|vm|instance|i)-[a-z0-9._-]+)\b", re.IGNORECASE),
     }
     CERTIFICATE_NO_PATTERN = re.compile(r"\b([0-9A-Z]{15,18})\b", re.IGNORECASE)
     PHONE_PATTERN = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
@@ -153,6 +165,10 @@ class AgentRouter:
             request.scene,
             explicit_tool_candidates,
         )
+        if self._marketing_needs_product_grounding(primary, text, request):
+            resolved_primary = self._resolve_primary_agent("product_tech_agent")
+            if resolved_primary is not None:
+                primary = resolved_primary
         supporting_agents = self._select_supporting_agents(
             primary,
             signals,
@@ -296,13 +312,24 @@ class AgentRouter:
         candidate_owner = self._primary_agent_for_tool_candidates(tool_candidates)
         if candidate_owner is not None:
             return candidate_owner
+        scene_agent = self.SCENE_TO_AGENT.get(scene, "product_tech_agent")
+        scene_signal = next((signal for signal in ranked if signal.label == scene_agent), None)
+        if (
+            scene != "customer_service"
+            and scene_signal is not None
+            and scene_signal.score > 0
+            and ranked
+            and scene_signal.score == ranked[0].score
+        ):
+            resolved_scene_agent = self._resolve_primary_agent(scene_agent)
+            if resolved_scene_agent is not None:
+                return resolved_scene_agent
         for signal in ranked:
             if signal.score <= 0:
                 continue
             resolved = self._resolve_primary_agent(signal.label)  # type: ignore[arg-type]
             if resolved is not None:
                 return resolved
-        scene_agent = self.SCENE_TO_AGENT.get(scene, "product_tech_agent")
         resolved_scene_agent = self._resolve_primary_agent(scene_agent)
         if resolved_scene_agent is not None:
             return resolved_scene_agent
@@ -344,7 +371,7 @@ class AgentRouter:
         if (
             primary == "product_tech_agent"
             and "ops_marketing_agent" in routable_agents
-            and any(token in text for token in ("活动", "优惠", "促销"))
+            and any(token in text for token in ("活动", "优惠", "促销", "海报", "文案", "推广", "宣传", "链接"))
         ):
             supporting.append("ops_marketing_agent")
         if (
@@ -361,7 +388,7 @@ class AgentRouter:
                 deduped.append(agent)
         if primary == "ops_marketing_agent" and any(
             token in text for token in ("推广链接", "短链", "海报", "文案", "宣传")
-        ):
+        ) and not self._marketing_needs_product_grounding(primary, text, request):
             deduped = [agent for agent in deduped if agent != "product_tech_agent"]
         return deduped[: max(self._settings.max_handoff_steps - 1, 0)]
 
@@ -374,12 +401,176 @@ class AgentRouter:
             token in text for token in self.RETRIEVAL_KEYWORDS
         )
 
+    def _marketing_needs_product_grounding(
+        self,
+        primary: AgentName,
+        text: str,
+        request: RouteRequest,
+    ) -> bool:
+        if primary != "ops_marketing_agent":
+            return False
+        if self._has_product_recommendation_context(request):
+            return False
+        has_marketing_goal = any(
+            token in text for token in ("文案", "海报", "推广", "宣传", "活动", "优惠", "促销", "链接")
+        )
+        has_product_signal = (
+            any(token in text for token in ("实例", "算力", "部署", "机型", "规格", "推荐", "大模型"))
+            or ("gpu" in text and any(token in text for token in ("实例", "部署", "规格", "推荐", "大模型", "算力")))
+        )
+        return has_marketing_goal and has_product_signal
+
+    @staticmethod
+    def _has_product_recommendation_context(request: RouteRequest) -> bool:
+        attributes = request.session_context.attributes
+        return any(
+            attributes.get(key)
+            for key in (
+                "recommended_instance_summary",
+                "recommended_instance_type",
+                "recommended_gpu_model",
+                "last_marketing_product_summary",
+            )
+        )
+
     def _determine_urgency(self, text: str) -> str:
         if any(token in text for token in self.HIGH_URGENCY_KEYWORDS):
             return "high"
         if any(token in text for token in ("尽快", "今天", "马上")):
             return "medium"
         return "low"
+
+    def _human_handoff_requested(self, text: str) -> bool:
+        return any(token in text for token in self.HUMAN_HANDOFF_KEYWORDS)
+
+    @staticmethod
+    def _ticket_requested(text: str) -> bool:
+        return any(token in text for token in ("工单", "售后", "ticket", "服务单"))
+
+    @staticmethod
+    def _promote_tool(tool_names: list[str], tool_name: str) -> list[str]:
+        if tool_name not in tool_names:
+            return tool_names
+        return [tool_name, *[value for value in tool_names if value != tool_name]]
+
+    @staticmethod
+    def _service_status_requested(text: str) -> bool:
+        return any(
+            token in text
+            for token in ("状态", "健康", "异常", "故障", "不可用", "中断", "告警", "延迟", "抖动", "超时")
+        ) and any(
+            token in text
+            for token in ("实例", "服务", "节点", "网络", "gpu", "云服务器", "ecs")
+        )
+
+    @staticmethod
+    def _product_sizing_requested(text: str) -> bool:
+        return any(
+            token in text
+            for token in ("推荐", "规格", "选型", "大模型", "推理", "训练", "算力")
+        ) or (
+            "gpu" in text
+            and any(token in text for token in ("部署", "规格", "推荐", "大模型", "算力", "训练", "推理"))
+        ) or (
+            "gpu" in text
+            and "实例" in text
+            and any(token in text for token in ("文案", "海报", "推广", "宣传", "活动", "优惠", "促销", "链接"))
+        )
+
+    def _append_handoff_brief(
+        self,
+        tool_names: list[str],
+        *,
+        text: str,
+    ) -> list[str]:
+        if self._human_handoff_requested(text) and "support.handoff_brief" not in tool_names:
+            tool_names.append("support.handoff_brief")
+        return tool_names
+
+    def _human_handoff_prefers_brief_only(self, text: str) -> bool:
+        if not self._human_handoff_requested(text):
+            return False
+        operational_tokens = (
+            "查",
+            "查询",
+            "核对",
+            "确认",
+            "开票",
+            "退款",
+            "创建",
+            "回复",
+            "提交",
+            "生成",
+            "推荐",
+            "导出",
+            "工单",
+        )
+        return not any(token in text for token in operational_tokens)
+
+    @staticmethod
+    def _handoff_related_resources(request: RouteRequest) -> list[str]:
+        attributes = request.session_context.attributes
+        related: list[str] = []
+        for value in request.session_context.active_products:
+            normalized = str(value).strip()
+            if normalized and normalized not in related:
+                related.append(normalized)
+        for key in (
+            "primary_instance_id",
+            "instance_id",
+            "order_no",
+            "refund_no",
+            "invoice_no",
+            "application_no",
+            "domain",
+            "recommended_instance_type",
+            "recommended_instance_summary",
+        ):
+            value = attributes.get(key)
+            normalized = str(value).strip() if value is not None else ""
+            if normalized and normalized not in related:
+                related.append(normalized)
+        if request.session_context.open_ticket_id:
+            normalized_ticket = str(request.session_context.open_ticket_id).strip()
+            if normalized_ticket and normalized_ticket not in related:
+                related.append(normalized_ticket)
+        return related[:6]
+
+    def _human_handoff_reason(
+        self,
+        text: str,
+        scene: SceneName,
+    ) -> str:
+        if any(token in text for token in ("投诉", "升级")):
+            return "complaint_or_escalation"
+        if any(token in text for token in ("异常", "故障", "不可用", "中断")):
+            return "service_exception"
+        if scene == "billing":
+            return "billing_manual_follow_up"
+        if scene == "icp":
+            return "icp_manual_review"
+        if scene == "marketing":
+            return "marketing_manual_follow_up"
+        if scene == "research":
+            return "research_manual_follow_up"
+        return "user_requested_handoff"
+
+    def _effective_scene_for_payload(
+        self,
+        request: RouteRequest,
+        text: str,
+    ) -> SceneName:
+        if request.scene != "customer_service":
+            return request.scene
+        if any(token in text for token in ("账单", "订单", "退款", "发票", "工单", "费用")):
+            return "billing"
+        if any(token in text for token in ("备案", "实名", "合规", "icp")):
+            return "icp"
+        if any(token in text for token in ("营销", "活动", "海报", "推广", "优惠", "促销", "文案")):
+            return "marketing"
+        if any(token in text for token in ("研究", "调研", "报告", "对比", "选型")):
+            return "research"
+        return "technical_support"
 
     def _infer_scene(self, primary: AgentName, requested_scene: SceneName) -> SceneName:
         if requested_scene != "customer_service":
@@ -545,7 +736,11 @@ class AgentRouter:
         deduped: list[ToolPlanItem] = []
         seen: set[tuple[str, AgentName]] = set()
         for item in selected_tools:
-            key = (item.tool_name, item.assigned_agent)
+            key = (
+                (item.tool_name, primary)
+                if item.tool_name == "support.handoff_brief"
+                else (item.tool_name, item.assigned_agent)
+            )
             if key not in seen:
                 seen.add(key)
                 deduped.append(item)
@@ -561,10 +756,22 @@ class AgentRouter:
         if tool_candidates:
             allowed_tools = set(self._allowed_tools(agent))
             return [tool_name for tool_name in tool_candidates if tool_name in allowed_tools]
+        human_handoff_requested = self._human_handoff_requested(text)
+        if self._human_handoff_prefers_brief_only(text):
+            return ["support.handoff_brief"]
         if agent == "finance_order_agent":
             tools = []
-            if any(token in text for token in ("账单", "扣费", "消费")):
+            instance_cost_requested = any(
+                token in text
+                for token in ("实例费用", "实例花费", "实例消费", "机器费用", "主机费用", "节点费用", "实例账单")
+            ) or ("实例" in text and any(token in text for token in ("费用", "花费", "成本", "消费", "账单")))
+            general_billing_requested = any(token in text for token in ("账单", "扣费")) or (
+                any(token in text for token in ("消费", "费用")) and not instance_cost_requested
+            )
+            if general_billing_requested:
                 tools.append("billing.query_statement")
+            if instance_cost_requested:
+                tools.append("billing.query_instance_cost")
             order_status_requested = any(
                 token in text for token in ("订单状态", "订单详情", "订单信息", "订单进度")
             )
@@ -590,7 +797,13 @@ class AgentRouter:
                     tools.append("ticket.query_ticket")
                 else:
                     tools.append("ticket.reply" if "回复" in text else "ticket.create")
-            return tools or self._allowed_tools(agent)[:2]
+            tools = self._append_handoff_brief(
+                tools or self._allowed_tools(agent)[:2],
+                text=text,
+            )
+            if "ticket.create" in tools and "support.handoff_brief" in tools:
+                tools = self._promote_tool(tools, "support.handoff_brief")
+            return tools
         if agent == "icp_service_agent":
             tools = []
             verification_requested = any(token in text for token in ("实名", "实名认证", "核身", "主体核验"))
@@ -607,7 +820,10 @@ class AgentRouter:
                 tools.append("icp.query_application")
             if submit_requested and not icp_status_requested:
                 tools.append("icp.submit_application")
-            return tools or self._allowed_tools(agent)
+            return self._append_handoff_brief(
+                tools or self._allowed_tools(agent),
+                text=text,
+            )
         if agent == "ops_marketing_agent":
             tools = []
             poster_requested = any(token in text for token in ("海报", "poster", "视觉", "版式"))
@@ -631,7 +847,10 @@ class AgentRouter:
                 tools.append("marketing.generate_promotion_link")
             if poster_requested:
                 tools.append("marketing.generate_poster")
-            return tools or self._allowed_tools(agent)
+            return self._append_handoff_brief(
+                tools or self._allowed_tools(agent),
+                text=text,
+            )
         if agent == "deep_research_agent":
             export_requested = any(token in text for token in ("导出", "markdown", "pdf", "下载"))
             has_existing_report = bool(
@@ -643,7 +862,7 @@ class AgentRouter:
                 if not request.session_context.attributes.get("reference_titles"):
                     tools.append("research.reference_search")
                 tools.append("research.export_report")
-                return tools
+                return self._append_handoff_brief(tools, text=text)
             tools = ["research.generate_report"]
             if any(token in text for token in ("研究", "调研", "对比", "报告", "参考")):
                 tools.append("research.reference_search")
@@ -651,12 +870,41 @@ class AgentRouter:
                 if "research.reference_search" not in tools:
                     tools.append("research.reference_search")
                 tools.append("research.export_report")
-            return tools
+            return self._append_handoff_brief(tools, text=text)
         if agent == "product_tech_agent":
-            tools = ["product.catalog_lookup"]
-            if any(token in text for token in ("部署", "技术", "故障", "配置", "排查")):
+            ticket_requested = self._ticket_requested(text)
+            service_status_requested = self._service_status_requested(text)
+            product_sizing_requested = self._product_sizing_requested(text)
+            product_catalog_requested = (
+                any(token in text for token in ("产品", "规格", "选型", "推荐", "大模型", "算力"))
+                or ("部署" in text and not service_status_requested)
+                or ("gpu" in text and product_sizing_requested)
+            ) and not (service_status_requested or ticket_requested or human_handoff_requested)
+            tools = ["product.catalog_lookup"] if product_catalog_requested else []
+            if product_sizing_requested:
+                tools.append("product.recommend_instance")
+            if service_status_requested:
+                tools.append("support.query_service_status")
+            if ticket_requested and service_status_requested and "support.handoff_brief" not in tools:
+                tools.append("support.handoff_brief")
+            if (
+                any(token in text for token in ("技术", "配置", "排查", "最佳实践", "教程", "sop"))
+                or (
+                    any(token in text for token in ("故障", "异常"))
+                    and any(token in text for token in ("排查", "修复", "恢复", "怎么办", "怎么处理"))
+                )
+                or (
+                    "部署" in text
+                    and any(token in text for token in ("方案", "实践", "步骤", "排查"))
+                )
+            ):
                 tools.append("support.playbook_search")
-            return tools
+            fallback_tools = (
+                ["support.query_service_status"]
+                if service_status_requested
+                else (["support.playbook_search"] if not human_handoff_requested else ["support.handoff_brief"])
+            )
+            return self._append_handoff_brief(tools, text=text) or fallback_tools
         return self._allowed_tools(agent)
 
     def _resolve_payload_requirements(
@@ -776,6 +1024,20 @@ class AgentRouter:
                 base_payload["range"] = "last_month"
             elif any(token in text for token in ("最近三个月", "近三个月", "过去三个月")):
                 base_payload["range"] = "last_3_months"
+        elif tool_name == "billing.query_instance_cost":
+            extracted_instance_id = self._extract_identifier(raw_query, "instance_id")
+            if extracted_instance_id is not None:
+                base_payload["instance_id"] = extracted_instance_id
+            if any(token in text for token in ("本月", "这个月")):
+                base_payload["range"] = "this_month"
+            elif any(token in text for token in ("上月", "上个月", "上期")):
+                base_payload["range"] = "last_month"
+            elif any(token in text for token in ("最近三个月", "近三个月", "过去三个月")):
+                base_payload["range"] = "last_3_months"
+            elif request.session_context.attributes.get("instance_billing_cycle"):
+                base_payload["billing_cycle"] = request.session_context.attributes["instance_billing_cycle"]
+            elif request.session_context.attributes.get("billing_cycle"):
+                base_payload["billing_cycle"] = request.session_context.attributes["billing_cycle"]
         elif tool_name == "order.query_order":
             extracted_order_no = self._extract_identifier(raw_query, "order_no")
             extracted_refund_no = self._extract_identifier(raw_query, "refund_no")
@@ -796,14 +1058,24 @@ class AgentRouter:
             if extracted_order_no is not None:
                 base_payload["order_no"] = extracted_order_no
         elif tool_name == "ticket.create":
+            effective_scene = self._effective_scene_for_payload(request, text)
+            ticket_waits_for_context = (
+                self._human_handoff_requested(text)
+                or (
+                    effective_scene == "technical_support"
+                    and self._service_status_requested(text)
+                )
+            )
             base_payload.update(
                 {
-                    "subject": request.user_query,
-                    "content": request.user_query,
+                    "scene": effective_scene,
                     "priority": "high" if "紧急" in text else "medium",
-                    "category": "billing" if request.scene == "billing" else "technical_support",
+                    "category": effective_scene,
                 }
             )
+            if not ticket_waits_for_context:
+                base_payload["subject"] = request.user_query
+                base_payload["content"] = request.user_query
         elif tool_name == "ticket.reply":
             extracted_ticket_no = self._extract_identifier(raw_query, "ticket_no")
             if extracted_ticket_no is not None:
@@ -813,6 +1085,30 @@ class AgentRouter:
             extracted_ticket_no = self._extract_identifier(raw_query, "ticket_no")
             if extracted_ticket_no is not None:
                 base_payload["ticket_no"] = extracted_ticket_no
+        elif tool_name == "support.handoff_brief":
+            effective_scene = self._effective_scene_for_payload(request, text)
+            base_payload.update(
+                {
+                    "scene": effective_scene,
+                    "urgency": self._determine_urgency(text),
+                    "reason": self._human_handoff_reason(text, effective_scene),
+                    "related_resources": self._handoff_related_resources(request),
+                }
+            )
+            if request.session_context.history_summary:
+                base_payload["conversation_summary"] = request.session_context.history_summary
+            if request.session_context.open_ticket_id:
+                base_payload["open_ticket_id"] = request.session_context.open_ticket_id
+        elif tool_name == "support.query_service_status":
+            extracted_instance_id = self._extract_identifier(raw_query, "instance_id")
+            if extracted_instance_id is not None:
+                base_payload["instance_id"] = extracted_instance_id
+            if "网络" in text:
+                base_payload["service"] = "实例网络连通性"
+            elif any(token in text for token in ("存储", "磁盘", "云盘")):
+                base_payload["service"] = "块存储服务"
+            elif "gpu" in text or "显卡" in request.user_query:
+                base_payload["service"] = "GPU 实例服务"
         elif tool_name == "icp.verify_subject":
             if "个人" in text:
                 base_payload["subject_type"] = "personal"
@@ -872,6 +1168,25 @@ class AgentRouter:
                 base_payload["channel"] = "sms"
             else:
                 base_payload["channel"] = "web"
+        elif tool_name == "product.recommend_instance":
+            if any(token in text for token in ("训练", "微调")):
+                base_payload["workload"] = "training"
+            elif any(token in text for token in ("推理", "部署", "上线")):
+                base_payload["workload"] = "inference"
+            else:
+                base_payload["workload"] = "general"
+            if any(token in text for token in ("多模态", "文生图", "图文")):
+                base_payload["model_family"] = "multimodal"
+            elif any(token in text for token in ("视觉", "视频")):
+                base_payload["model_family"] = "vision"
+            elif any(token in text for token in ("大模型", "llm", "qwen", "llama", "deepseek")):
+                base_payload["model_family"] = "llm"
+            if any(token in text for token in ("低预算", "成本", "便宜", "测试", "demo", "poc")):
+                base_payload["budget_level"] = "cost_optimized"
+            elif any(token in text for token in ("高性能", "生产", "企业级", "高并发", "低延迟")):
+                base_payload["budget_level"] = "performance"
+            else:
+                base_payload["budget_level"] = "balanced"
         elif tool_name == "research.generate_report":
             base_payload["topic"] = request.user_query
         elif tool_name == "research.reference_search":
@@ -1140,12 +1455,15 @@ class AgentRouter:
     def _tool_definitions(self) -> dict[str, ToolDefinition]:
         if self._settings.tool_hub_transport == "http":
             if self._remote_tool_definitions is None:
-                self._remote_tool_definitions = {
-                    definition.name: definition
-                    for definition in self._tool_hub_client.list_tool_definitions()
-                }
-            if self._remote_tool_definitions:
-                return self._remote_tool_definitions
+                try:
+                    remote_tool_definitions = {
+                        definition.name: definition
+                        for definition in self._tool_hub_client.list_tool_definitions()
+                    }
+                except ToolHubDiscoveryUnavailableError:
+                    return {}
+                self._remote_tool_definitions = remote_tool_definitions
+            return self._remote_tool_definitions
         return {
             tool_name: tool.definition
             for tool_name, tool in self._catalog.items()

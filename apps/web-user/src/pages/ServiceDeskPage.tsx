@@ -9,11 +9,32 @@ import { StatCard } from '../components/StatCard';
 import {
   formatCurrency,
   formatDateTime,
+  formatRetryAfterHint,
   icpApplicationStatusLabel,
   refundStatusLabel,
   ticketPriorityLabel
 } from '../lib/format';
 import { hasPermission } from '../lib/permissions';
+import {
+  applyCreatedTicketToWorkspace,
+  applyIcpApplicationToWorkspace,
+  applyRefundToWorkspace,
+  applyTicketReplyToDetail,
+  applyTicketReplyToWorkspace,
+  buildChatAttachmentFromFileRecord,
+  buildIcpMaterialFromFileRecord,
+  isKnownIcpMaterialType,
+  isKnownTicketCategory,
+  isKnownTicketPriority,
+  knownIcpMaterialTypes,
+  knownTicketCategories,
+  knownTicketPriorities,
+  resolveSharedLoadStateRetryAfterMs,
+  selectSharedLoadStateDomains,
+  upsertChatAttachment,
+  upsertIcpMaterial
+} from '../shared-sdk';
+import type { KnownIcpMaterialType, KnownTicketCategory } from '../shared-sdk';
 import type {
   ChatAttachment,
   CreateIcpApplicationRequest,
@@ -41,11 +62,18 @@ const emptyWorkspace: ServiceWorkspaceData = {
   icpApplications: []
 };
 
-const materialTypeLabels: Record<string, string> = {
+const materialTypeLabels: Record<KnownIcpMaterialType, string> = {
   business_license: '营业执照',
   domain_certificate: '域名证书',
   website_responsible_id: '负责人身份证',
   personal_id: '个人身份证'
+};
+
+const ticketCategoryLabels: Record<KnownTicketCategory, string> = {
+  technical_support: '技术支持',
+  billing: '账单',
+  order: '订单',
+  icp: '备案'
 };
 
 const uploadBizTypeLabels: Record<'chat_attachment' | 'icp_material', string> = {
@@ -58,6 +86,20 @@ const uploadBizTypesByMode: Record<ServiceDeskPageMode, Array<'chat_attachment' 
   tickets: ['chat_attachment'],
   icp: ['icp_material']
 };
+
+const workspaceFailureLabels: Record<'orders' | 'refunds' | 'tickets' | 'icp', string> = {
+  orders: '订单列表',
+  refunds: '退款记录',
+  tickets: '工单列表',
+  icp: 'ICP备案申请'
+};
+
+const visibleFailureDomainsByMode: Record<ServiceDeskPageMode, ReadonlyArray<keyof typeof workspaceFailureLabels>> = {
+  workspace: ['orders', 'refunds', 'tickets', 'icp'],
+  tickets: ['tickets'],
+  icp: ['icp']
+};
+const icpWorkspaceDomains = ['icp'] as const;
 
 const initialTicketForm: Omit<CreateTicketRequest, 'attachments'> = {
   subject: 'GPU 实例挂盘异常',
@@ -98,31 +140,12 @@ const pageCopy: Record<ServiceDeskPageMode, { eyebrow: string; title: string; de
   }
 };
 
-const ticketPriorities: Array<CreateTicketRequest['priority']> = ['low', 'medium', 'high', 'urgent'];
-const ticketCategories = ['technical_support', 'billing', 'order', 'icp'] as const;
-
-function isTicketPriority(value: string | null): value is CreateTicketRequest['priority'] {
-  return value !== null && ticketPriorities.includes(value as CreateTicketRequest['priority']);
-}
-
-function isTicketCategory(value: string | null): value is (typeof ticketCategories)[number] {
-  return value !== null && ticketCategories.includes(value as (typeof ticketCategories)[number]);
-}
-
-function sortTicketsByUpdatedAt(tickets: ServiceWorkspaceData['tickets']): ServiceWorkspaceData['tickets'] {
-  return [...tickets].sort(
-    (left, right) =>
-      new Date(right.updatedAt ?? right.createdAt ?? 0).getTime() -
-      new Date(left.updatedAt ?? left.createdAt ?? 0).getTime()
-  );
-}
-
 function createInitialUploadForm(mode: ServiceDeskPageMode): {
   fileName: string;
   size: string;
   mimeType: string;
   bizType: UploadPolicyRequest['bizType'];
-  materialType: string;
+  materialType: KnownIcpMaterialType;
 } {
   if (mode === 'icp') {
     return {
@@ -186,6 +209,34 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
   const canWriteIcp = hasPermission(session, 'user:icp.write');
   const showIcpMaterialList = mode !== 'tickets';
   const uploadTargetLabel = uploadForm.bizType === 'icp_material' ? 'ICP 备案材料' : '工单 / 退款附件';
+  const visibleWorkspaceDomains = visibleFailureDomainsByMode[mode];
+  const degradedWorkspaceDomainKeys = selectSharedLoadStateDomains(
+    workspace.loadState,
+    visibleWorkspaceDomains
+  );
+  const fallbackWorkspaceDomainKeys = selectSharedLoadStateDomains(
+    workspace.loadState,
+    visibleWorkspaceDomains,
+    'fallback'
+  );
+  const icpFallbackDomainKeys = selectSharedLoadStateDomains(
+    workspace.loadState,
+    icpWorkspaceDomains,
+    'fallback'
+  );
+  const unavailableWorkspaceDomains = degradedWorkspaceDomainKeys.map(
+    (item) => workspaceFailureLabels[item]
+  );
+  const fallbackWorkspaceDomains = fallbackWorkspaceDomainKeys.map(
+    (item) => workspaceFailureLabels[item]
+  );
+  const usesIcpHistoryFallback = icpFallbackDomainKeys.includes('icp');
+  const workspaceRetryAfterHint = formatRetryAfterHint(
+    resolveSharedLoadStateRetryAfterMs(workspace.loadState, degradedWorkspaceDomainKeys)
+  );
+  const icpFallbackRetryAfterHint = formatRetryAfterHint(
+    resolveSharedLoadStateRetryAfterMs(workspace.loadState, icpFallbackDomainKeys)
+  );
 
   useEffect(() => {
     const nextBizType = allowedUploadBizTypes[0];
@@ -268,8 +319,8 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
     setTicketForm((previous) => ({
       subject: subject?.trim() || previous.subject,
       content: content?.trim() || previous.content,
-      category: isTicketCategory(category) ? category : previous.category,
-      priority: isTicketPriority(priority) ? priority : previous.priority
+      category: isKnownTicketCategory(category) ? category : previous.category,
+      priority: isKnownTicketPriority(priority) ? priority : previous.priority
     }));
     setTicketPrefillNotice(prefillNotice?.trim() || '已从聊天页带入人工协助草稿，可直接补充细节后提交工单。');
     setAppliedTicketPrefillKey(ticketPrefillKey);
@@ -389,27 +440,16 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         size: Number(uploadForm.size)
       });
 
-      const attachment: ChatAttachment = {
-        fileId: file.fileId,
-        fileName: file.fileName,
-        mimeType: file.mimeType,
-        size: file.size
-      };
+      const attachment = buildChatAttachmentFromFileRecord(file);
 
       if (uploadForm.bizType === 'icp_material') {
-        const material: IcpMaterialItem = {
-          fileId: file.fileId,
-          fileName: file.fileName,
-          type: uploadForm.materialType,
-          status: 'uploaded',
-          required: true
-        };
+        const material = buildIcpMaterialFromFileRecord(file, uploadForm.materialType);
 
-        setIcpMaterials((previous) => [material, ...previous.filter((item) => item.fileId !== material.fileId)]);
+        setIcpMaterials((previous) => upsertIcpMaterial(previous, material));
         setMaterialCheck(null);
         setSuccessMessage('上传登记已完成，材料已加入 ICP 备案表单。');
       } else {
-        setAvailableAttachments((previous) => [attachment, ...previous.filter((item) => item.fileId !== attachment.fileId)]);
+        setAvailableAttachments((previous) => upsertChatAttachment(previous, attachment));
         setSuccessMessage('上传登记已完成，附件已加入工单 / 退款 / 工单回复表单。');
       }
     } catch (error) {
@@ -448,10 +488,7 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         attachments: availableAttachments
       });
 
-      setWorkspace((previous) => ({
-        ...previous,
-        tickets: sortTicketsByUpdatedAt([ticket, ...previous.tickets])
-      }));
+      setWorkspace((previous) => applyCreatedTicketToWorkspace(previous, ticket));
       setSelectedTicketNo(ticket.ticketNo);
       setSelectedTicketDetail(null);
       setReplyForm({
@@ -508,34 +545,8 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         attachments: availableAttachments
       });
 
-      setSelectedTicketDetail((previous) =>
-        previous && previous.ticket.ticketNo === selectedTicketNo
-          ? {
-              ticket: {
-                ...previous.ticket,
-                status: reply.status ?? (previous.ticket.status === 'open' ? 'processing' : previous.ticket.status),
-                updatedAt: reply.createdAt
-              },
-              replies: [...previous.replies, reply].sort(
-                (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
-              )
-            }
-          : previous
-      );
-      setWorkspace((previous) => ({
-        ...previous,
-        tickets: sortTicketsByUpdatedAt(
-          previous.tickets.map((item) =>
-            item.ticketNo === selectedTicketNo
-              ? {
-                  ...item,
-                  status: reply.status ?? (item.status === 'open' ? 'processing' : item.status),
-                  updatedAt: reply.createdAt
-                }
-              : item
-          )
-        )
-      }));
+      setSelectedTicketDetail((previous) => applyTicketReplyToDetail(previous, selectedTicketNo, reply));
+      setWorkspace((previous) => applyTicketReplyToWorkspace(previous, selectedTicketNo, reply));
       setReplyForm({
         content: ''
       });
@@ -558,18 +569,7 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         attachments: availableAttachments
       });
 
-      setWorkspace((previous) => ({
-        ...previous,
-        refunds: [refund, ...previous.refunds],
-        orders: previous.orders.map((item) =>
-          item.orderNo === refund.orderNo
-            ? {
-                ...item,
-                eligibleForRefund: false
-              }
-            : item
-        )
-      }));
+      setWorkspace((previous) => applyRefundToWorkspace(previous, refund));
       setSuccessMessage('退款申请 ' + refund.refundNo + ' 已提交。');
     } catch (error) {
       setPageError(error instanceof Error ? error.message : '创建退款申请失败');
@@ -639,10 +639,7 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         materials: icpMaterials
       });
 
-      setWorkspace((previous) => ({
-        ...previous,
-        icpApplications: [application, ...previous.icpApplications.filter((item) => item.applicationNo !== application.applicationNo)]
-      }));
+      setWorkspace((previous) => applyIcpApplicationToWorkspace(previous, application));
       setSuccessMessage('备案申请 ' + application.applicationNo + ' 已提交。');
     } catch (error) {
       setPageError(error instanceof Error ? error.message : '提交备案申请失败');
@@ -700,11 +697,18 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
           <span>材料类型</span>
           <select
             value={uploadForm.materialType}
-            onChange={(event) => setUploadForm((previous) => ({ ...previous, materialType: event.target.value }))}
+            onChange={(event) =>
+              setUploadForm((previous) => ({
+                ...previous,
+                materialType: isKnownIcpMaterialType(event.target.value)
+                  ? event.target.value
+                  : previous.materialType
+              }))
+            }
           >
-            {Object.entries(materialTypeLabels).map(([value, label]) => (
+            {knownIcpMaterialTypes.map((value) => (
               <option key={value} value={value}>
-                {label}
+                {materialTypeLabels[value]}
               </option>
             ))}
           </select>
@@ -770,7 +774,7 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
             icpMaterials.map((item) => (
               <div key={(item.fileId ?? item.fileName) + '-' + item.type} className="list-row">
                 <span>{item.fileName}</span>
-                <span>{materialTypeLabels[item.type] ?? item.type}</span>
+                <span>{materialTypeLabels[item.type as KnownIcpMaterialType] ?? item.type}</span>
                 <Badge tone={item.status === 'verified' ? 'success' : 'info'}>{item.status}</Badge>
                 <button
                   type="button"
@@ -825,23 +829,37 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
               onChange={(event) =>
                 setTicketForm((previous) => ({
                   ...previous,
-                  priority: event.target.value as CreateTicketRequest['priority']
+                  priority: isKnownTicketPriority(event.target.value)
+                    ? event.target.value
+                    : previous.priority
                 }))
               }
             >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="urgent">Urgent</option>
+              {knownTicketPriorities.map((priority) => (
+                <option key={priority} value={priority}>
+                  {ticketPriorityLabel(priority)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="field field--compact">
             <span>分类</span>
-            <select value={ticketForm.category} onChange={(event) => setTicketForm((previous) => ({ ...previous, category: event.target.value }))}>
-              <option value="technical_support">技术支持</option>
-              <option value="billing">账单</option>
-              <option value="order">订单</option>
-              <option value="icp">备案</option>
+            <select
+              value={ticketForm.category}
+              onChange={(event) =>
+                setTicketForm((previous) => ({
+                  ...previous,
+                  category: isKnownTicketCategory(event.target.value)
+                    ? event.target.value
+                    : previous.category
+                }))
+              }
+            >
+              {knownTicketCategories.map((category) => (
+                <option key={category} value={category}>
+                  {ticketCategoryLabels[category]}
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -1161,7 +1179,7 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
             icpMaterials.map((item) => (
               <div key={(item.fileId ?? item.fileName) + '-' + item.type} className="list-row">
                 <span>{item.fileName}</span>
-                <span>{materialTypeLabels[item.type] ?? item.type}</span>
+                <span>{materialTypeLabels[item.type as KnownIcpMaterialType] ?? item.type}</span>
                 <Badge tone={item.status === 'verified' ? 'success' : 'info'}>{item.status}</Badge>
                 <button
                   type="button"
@@ -1256,14 +1274,23 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
             ) : null}
             {mode === 'tickets' ? (
               <Badge tone="info">详情 / 回复对齐 ticket-service</Badge>
-            ) : !isMock ? (
-              <Badge tone="info">Live 模式下备案历史仅展示当前浏览器已跟踪申请</Badge>
+            ) : !isMock && usesIcpHistoryFallback ? (
+              <Badge tone="info">
+                {`Live 模式下备案历史已回退到本地跟踪申请${icpFallbackRetryAfterHint ? `，${icpFallbackRetryAfterHint.replace(/。$/, '')}` : ''}`}
+              </Badge>
             ) : null}
           </div>
         }
       />
 
       {pageError ? <div className="error-banner">{pageError}</div> : null}
+      {!pageError && unavailableWorkspaceDomains.length ? (
+        <div className="error-banner">
+          部分服务台数据暂不可用，当前以下分区加载失败：
+          <strong>{` ${unavailableWorkspaceDomains.join(' / ')}`}</strong>
+          {workspaceRetryAfterHint ? ` ${workspaceRetryAfterHint}` : ''}
+        </div>
+      ) : null}
       {successMessage ? <div className="success-banner">{successMessage}</div> : null}
 
       <div className="card stack">
@@ -1292,7 +1319,11 @@ export function ServiceDeskPage({ mode = 'workspace' }: ServiceDeskPageProps): J
         <StatCard label="可退款订单" value={loading ? '--' : String(workspace.orders.filter((item) => item.eligibleForRefund).length)} hint="基于订单列表与退款入口。" />
         <StatCard label="进行中工单" value={loading ? '--' : String(workspace.tickets.filter((item) => item.status !== 'closed').length)} hint="支撑技术支持/账单咨询提交。" />
         <StatCard label="退款记录" value={loading ? '--' : String(workspace.refunds.length)} hint="对齐 /api/v1/refunds 列表接口。" />
-        <StatCard label="备案申请" value={loading ? '--' : String(workspace.icpApplications.length)} hint="依赖 ICP detail 接口与本地跟踪。" />
+        <StatCard
+          label="备案申请"
+          value={loading ? '--' : String(workspace.icpApplications.length)}
+          hint={usesIcpHistoryFallback ? '列表接口未就绪时回退到共享 ICP detail 跟踪。' : '优先使用共享 ICP 列表接口。'}
+        />
       </div>
 
       {showUpload && showTickets ? <div className="grid grid--2">{uploadSection}{ticketSection}</div> : null}

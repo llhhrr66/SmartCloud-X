@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/admin-agent-list-data.schema.json",
+  "title": "AdminAgentListData",
+  "type": "object",
+  "required": [
+    "items",
+    "total"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "./admin-agent-record.schema.json"
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

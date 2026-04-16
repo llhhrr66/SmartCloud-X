@@ -12,7 +12,14 @@ import type {
   ToolInvocation
 } from '@smartcloud-x/common-schemas';
 import { asRecord, getNumber, getOptionalNumber, getOptionalString, getString, getStringArray, isRecord } from '../core/utils';
-import { classifyApiError, extractEnvelopeCode, extractEnvelopeMessage, type RawSseEvent } from '../core/envelope';
+import {
+  classifyApiError,
+  extractApiErrorDetails,
+  extractEnvelopeCode,
+  extractEnvelopeMessage,
+  extractUserActionHintAction,
+  type RawSseEvent
+} from '../core/envelope';
 import type {
   AuthSession,
   ChangePasswordRequest,
@@ -690,29 +697,44 @@ function normalizeActionRequiredType(
   }
 }
 
+function mapActionRequiredTypeFromAction(
+  action: ReturnType<typeof extractUserActionHintAction>
+): ChatActionRequiredPayload['type'] | undefined {
+  switch (action) {
+    case 'collect-auth-context':
+      return 'permission';
+    case 'clarify-tool-input':
+      return 'clarification';
+    case 'user-confirmation':
+      return 'manual_intervention';
+    default:
+      return undefined;
+  }
+}
+
 function hasMissingFieldHints(payload: unknown): boolean {
-  if (!isRecord(payload)) {
-    return false;
-  }
-
-  if (Array.isArray(payload.missing_fields) && payload.missing_fields.length > 0) {
-    return true;
-  }
-
-  return (
-    hasMissingFieldHints(payload.error) ||
-    hasMissingFieldHints(payload.error_detail) ||
-    hasMissingFieldHints(payload.details)
-  );
+  return (extractApiErrorDetails(payload)?.missingFields.length ?? 0) > 0;
 }
 
 function resolveStreamActionRequiredType(
   payload: unknown
 ): ChatActionRequiredPayload['type'] | undefined {
+  const action = extractUserActionHintAction(payload);
+  const actionType = mapActionRequiredTypeFromAction(action);
+  if (actionType) {
+    return actionType;
+  }
+
   const kind = classifyApiError(payload);
   const code = extractEnvelopeCode(payload);
+  const errorDetails = extractApiErrorDetails(payload);
 
-  if (kind === 'unauthorized' || kind === 'forbidden') {
+  if (
+    kind === 'unauthorized' ||
+    kind === 'forbidden' ||
+    (errorDetails?.requiredPermissions.length ?? 0) > 0 ||
+    (errorDetails?.missingAuthContext.length ?? 0) > 0
+  ) {
     return 'permission';
   }
 
@@ -739,6 +761,50 @@ function mapStreamErrorMessage(rawData: unknown, payload: unknown): string {
   return extractEnvelopeMessage(payload, 'stream error');
 }
 
+function buildStreamActionRequiredPayload(
+  payload: unknown,
+  rawData: unknown
+): ChatActionRequiredPayload {
+  const record = asRecord(payload);
+  const action = extractUserActionHintAction(record);
+  const details = extractApiErrorDetails(record);
+  const data: ChatActionRequiredPayload = {
+    code: extractEnvelopeCode(record) ?? 'CHAT_ACTION_REQUIRED',
+    message: mapStreamErrorMessage(rawData, record),
+    type: normalizeActionRequiredType(
+      record.type,
+      mapActionRequiredTypeFromAction(action) ??
+        resolveStreamActionRequiredType(record) ??
+        'manual_intervention'
+    )
+  };
+
+  if (action) {
+    data.action = action;
+  }
+
+  const toolName = getOptionalString(record, ['tool_name', 'toolName']);
+  if (toolName?.trim()) {
+    data.toolName = toolName;
+  }
+
+  const toolCallId = getOptionalString(record, ['tool_call_id', 'toolCallId']);
+  if (toolCallId?.trim()) {
+    data.toolCallId = toolCallId;
+  }
+
+  const agent = getOptionalString(record, ['agent']);
+  if (agent?.trim()) {
+    data.agent = agent;
+  }
+
+  if (details) {
+    data.details = details;
+  }
+
+  return data;
+}
+
 export function buildSessionListQuery(query: SessionListQuery): string {
   const params = new URLSearchParams();
 
@@ -752,13 +818,24 @@ export function buildSessionListQuery(query: SessionListQuery): string {
   return encoded ? `?${encoded}` : '';
 }
 
+function withRetryHint(events: ChatStreamEvent[], retry: number | undefined): ChatStreamEvent[] {
+  if (retry === undefined) {
+    return events;
+  }
+
+  return events.map((event) => ({
+    ...event,
+    retry
+  }));
+}
+
 export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
   const record = asRecord(raw.data);
 
   switch (raw.event) {
     case 'meta':
     case 'message.started':
-      return [
+      return withRetryHint([
         {
           event: 'meta',
           data: {
@@ -768,9 +845,9 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
             agent: getString(record, ['agent', 'to_agent', 'toAgent'], 'Orchestrator')
           }
         }
-      ];
+      ], raw.retry);
     case 'reasoning':
-      return [
+      return withRetryHint([
         {
           event: 'reasoning',
           data: {
@@ -779,10 +856,10 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
             step: getNumber(record, ['step'], 1)
           }
         }
-      ];
+      ], raw.retry);
     case 'agent.routed':
     case 'route':
-      return [
+      return withRetryHint([
         {
           event: 'route',
           data: {
@@ -791,11 +868,11 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
             reason: getString(record, ['reason'], '发生了 Agent 路由。')
           }
         }
-      ];
+      ], raw.retry);
     case 'tool_call':
-      return [{ event: 'tool_call', data: mapToolCallRecord(record) }];
+      return withRetryHint([{ event: 'tool_call', data: mapToolCallRecord(record) }], raw.retry);
     case 'tool.started':
-      return [
+      return withRetryHint([
         {
           event: 'tool_call',
           data: {
@@ -805,11 +882,11 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
             dataPreview: buildToolDataPreview(record)
           }
         }
-      ];
+      ], raw.retry);
     case 'tool_result':
-      return [{ event: 'tool_result', data: mapToolCallRecord(record) }];
+      return withRetryHint([{ event: 'tool_result', data: mapToolCallRecord(record) }], raw.retry);
     case 'tool.finished':
-      return [
+      return withRetryHint([
         {
           event: 'tool_result',
           data: {
@@ -820,9 +897,9 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
             dataPreview: buildToolDataPreview(record)
           }
         }
-      ];
+      ], raw.retry);
     case 'retrieval':
-      return [
+      return withRetryHint([
         {
           event: 'retrieval',
           data: {
@@ -841,35 +918,35 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
               : []
           }
         }
-      ];
+      ], raw.retry);
     case 'delta':
     case 'message.delta':
-      return [
+      return withRetryHint([
         {
           event: 'delta',
           data: {
             content: getString(record, ['content', 'delta'])
           }
         }
-      ];
+      ], raw.retry);
     case 'citation':
-      return [
+      return withRetryHint([
         {
           event: 'citation',
           data: {
             citations: Array.isArray(record.citations) ? record.citations.map(mapCitation) : []
           }
         }
-      ];
+      ], raw.retry);
     case 'citation.delta':
-      return [
+      return withRetryHint([
         {
           event: 'citation',
           data: {
             citations: [mapCitation(record)]
           }
         }
-      ];
+      ], raw.retry);
     case 'done':
     case 'message.completed': {
       const completionEvents: ChatStreamEvent[] = [];
@@ -906,57 +983,48 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
         }
       });
 
-      return completionEvents;
+      return withRetryHint(completionEvents, raw.retry);
     }
     case 'action_required':
     case 'message.action_required': {
-      const code = extractEnvelopeCode(record) ?? 'CHAT_ACTION_REQUIRED';
-      const message = mapStreamErrorMessage(raw.data, record);
-      return [
+      return withRetryHint([
         {
           event: 'action_required',
-          data: {
-            code,
-            message,
-            type: normalizeActionRequiredType(
-              record.type,
-              resolveStreamActionRequiredType(record) ?? 'manual_intervention'
-            )
-          }
+          data: buildStreamActionRequiredPayload(record, raw.data)
         }
-      ];
+      ], raw.retry);
     }
     case 'error':
     case 'message.error': {
-      const code = extractEnvelopeCode(record) ?? 'WEB_STREAM_ERROR';
-      const message = mapStreamErrorMessage(raw.data, record);
       const events: ChatStreamEvent[] = [];
       const actionRequiredType = resolveStreamActionRequiredType(record);
 
       if (actionRequiredType) {
         events.push({
           event: 'action_required',
-          data: {
-            code,
-            message,
-            type: actionRequiredType
-          }
+          data: buildStreamActionRequiredPayload(
+            {
+              ...record,
+              type: record.type ?? actionRequiredType
+            },
+            raw.data
+          )
         });
       }
 
       events.push({
         event: 'error',
         data: {
-          code,
-          message
+          code: extractEnvelopeCode(record) ?? 'WEB_STREAM_ERROR',
+          message: mapStreamErrorMessage(raw.data, record)
         }
       });
 
-      return events;
+      return withRetryHint(events, raw.retry);
     }
     case 'ping':
     case 'heartbeat':
-      return [{ event: 'ping', data: {} }];
+      return withRetryHint([{ event: 'ping', data: {} }], raw.retry);
     default:
       return [];
   }

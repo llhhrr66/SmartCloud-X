@@ -1,11 +1,67 @@
 import httpx
+import pytest
 
+from app.core.business_tools_sdk import describe_local_runtime
 from app.core.business_tools_sdk import ToolDefinition, ToolExecutionContext, ToolInvocationRequest
 from app.core.config import Settings
 from app.models.tools import CompensationCallRequest, ToolCallRequest
 from app.services.business_tools_client import BusinessToolsClient
 from app.services.registry import ToolRegistry
 
+
+def test_business_tools_client_falls_back_to_local_on_http_connect_error(monkeypatch) -> None:
+    registry = ToolRegistry()
+    tool = registry.get_tool("billing.query_statement")
+    assert tool is not None
+    assert describe_local_runtime()["idempotency"]["active"] is False
+
+    client = BusinessToolsClient(
+        Settings.model_validate(
+            {
+                "APP_ENV": "dev",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+                "SMARTCLOUD_REDIS_URL": "redis://redis.test:6379/0",
+                "BUSINESS_TOOLS_REDIS_NAMESPACE": "smartcloud:test:business-tools",
+            }
+        )
+    )
+
+    def _raise_connect_error(*args, **kwargs):
+        raise httpx.ConnectError(
+            "connect failed",
+            request=httpx.Request("POST", "http://example.local/internal/v1/execute/billing.query_statement"),
+        )
+
+    monkeypatch.setattr(client, "_invoke_via_http", _raise_connect_error)
+    response = client.invoke_call(
+        tool,
+        ToolCallRequest(
+            trace_id="trace-connect-fallback-1",
+            conversation_id="conv-connect-fallback-1",
+            tool_call_id="tc-connect-fallback-1",
+            tool_name="billing.query_statement",
+            operator={"type": "agent", "id": "Finance_Order_Agent"},
+            user_context={
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            payload={"range": "this_month"},
+            idempotency_key="tool-connect-fallback-1",
+            operation="execute",
+        ),
+    )
+
+    assert response.success is True
+    assert response.status == "completed"
+    assert "degraded-http-connect-fallback" in response.audit_tags
+    runtime = describe_local_runtime()
+    assert runtime["idempotency"]["active"] is True
+    assert runtime["idempotency"]["activationMode"] == "degraded-fallback"
+    assert runtime["idempotency"]["redisNamespace"] == "smartcloud:test:business-tools:idempotency"
+    assert runtime["queryCache"]["redisNamespace"] == "smartcloud:test:business-tools:query-cache"
+    assert runtime["queryCache"]["active"] is True
 
 
 def test_business_tools_client_retries_timeout_for_idempotent_tool(monkeypatch) -> None:
@@ -359,6 +415,113 @@ def test_business_tools_client_invokes_tool_via_http_with_execution_contract(mon
     assert result.citations == ["billing://statement"]
 
 
+def test_business_tools_client_does_not_fallback_to_local_on_http_status_error_for_invoke_tool(monkeypatch) -> None:
+    client = BusinessToolsClient(
+        Settings.model_validate(
+            {
+                "APP_ENV": "dev",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+            }
+        )
+    )
+
+    def _raise_status_error(*args, **kwargs):
+        response = httpx.Response(
+            503,
+            request=httpx.Request("POST", "http://example.local/internal/v1/execute/billing.query_statement"),
+        )
+        raise httpx.HTTPStatusError("upstream failed", request=response.request, response=response)
+
+    monkeypatch.setattr(client, "_invoke_tool_via_http", _raise_status_error)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.invoke_tool(
+            ToolDefinition(
+                name="billing.query_statement",
+                capability="billing",
+                description="remote billing",
+            ),
+            ToolInvocationRequest(
+                tool_name="billing.query_statement",
+                operation="execute",
+                payload={"range": "this_month"},
+                context=ToolExecutionContext(
+                    request_id="tc-status-error-1",
+                    trace_id="trace-status-error-1",
+                    conversation_id="conv-status-error-1",
+                    user_id="u-1",
+                    account_id="acct-1",
+                    permissions=["user:billing.read"],
+                    idempotency_key="tool-status-error-1",
+                ),
+            ),
+        )
+
+
+def test_business_tools_client_marks_preflight_unavailable_on_http_timeout(monkeypatch) -> None:
+    client = BusinessToolsClient(
+        Settings.model_validate(
+            {
+                "APP_ENV": "dev",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+            }
+        )
+    )
+    monkeypatch.setattr(
+        client,
+        "describe_tool",
+        lambda tool_name: ToolDefinition(
+            name=tool_name,
+            capability="billing",
+            description="remote billing",
+            mode="query",
+            auth_requirements={"required_permissions": ["user:billing.read"]},
+        ),
+    )
+
+    class TimeoutHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, path: str, json: dict[str, object], headers: dict[str, str]):
+            raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr("app.services.business_tools_client.httpx.Client", TimeoutHttpClient)
+
+    result = client.preflight_call(
+        "billing.query_statement",
+        ToolCallRequest(
+            trace_id="trace-preflight-timeout-1",
+            conversation_id="conv-preflight-timeout-1",
+            message_id="msg-preflight-timeout-1",
+            tool_call_id="tc-preflight-timeout-1",
+            tool_name="billing.query_statement",
+            operator={"type": "agent", "id": "Finance_Order_Agent"},
+            user_context={
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            payload={"range": "this_month"},
+            idempotency_key="tool-preflight-timeout-1",
+            operation="execute",
+        ),
+    )
+
+    assert result.ready is False
+    assert result.available is False
+    assert result.tool_mode == "query"
+    assert result.required_permissions == ["user:billing.read"]
+
+
 def test_business_tools_client_preserves_richer_tool_call_fields_from_http_execute(monkeypatch) -> None:
     registry = ToolRegistry()
     tool = registry.get_tool("billing.query_statement")
@@ -503,6 +666,7 @@ def test_business_tools_client_preserves_user_action_hint_from_http_execute(monk
                         "message": "ticket.create 执行前需补充鉴权上下文。",
                         "missing_auth_context": ["permission:user:ticket.write"],
                         "required_permissions": ["user:ticket.write"],
+                        "user_profile_bindings": {"permissions": ["permissions"]},
                     },
                 },
             )
@@ -528,3 +692,48 @@ def test_business_tools_client_preserves_user_action_hint_from_http_execute(monk
     assert response.user_action_hint is not None
     assert response.user_action_hint.action == "collect-auth-context"
     assert response.user_action_hint.required_permissions == ["user:ticket.write"]
+    assert response.user_action_hint.user_profile_bindings == {"permissions": ["permissions"]}
+
+
+def test_business_tools_client_reports_dependency_readiness_over_http(monkeypatch) -> None:
+    client = BusinessToolsClient(
+        Settings.model_validate(
+            {
+                "APP_ENV": "dev",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://business-tools.local",
+            }
+        )
+    )
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def get(self, path: str, headers: dict[str, str]):
+            assert path == "/readyz"
+            assert headers["X-Caller-Service"] == "tool-hub-service"
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", "http://business-tools.local/readyz"),
+                json={
+                    "status": "ready",
+                    "service": "business-tools-service",
+                    "not_ready_components": [],
+                },
+            )
+
+    monkeypatch.setattr("app.services.business_tools_client.httpx.Client", FakeHttpClient)
+
+    readiness = client.dependency_readiness()
+
+    assert readiness["ready"] is True
+    assert readiness["status"] == "ready"
+    assert readiness["service"] == "business-tools-service"
+    assert readiness["httpStatus"] == 200

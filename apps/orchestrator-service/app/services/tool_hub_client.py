@@ -13,6 +13,7 @@ from app.core.business_tools_sdk import (
     ToolInvocationRequest,
     ToolUserActionHint,
     build_catalog,
+    ensure_local_runtime,
     execute_compensation,
     preflight_tool_invocation,
 )
@@ -71,16 +72,14 @@ class ToolHubClient:
                     ready=False,
                     available=False,
                 )
-            return ToolPreflightResult(tool_name=item.tool_name, operation=item.operation)
-        except httpx.HTTPError:
-            return ToolPreflightResult(tool_name=item.tool_name, operation=item.operation)
+            return self._unavailable_preflight(item)
+        except (httpx.HTTPError, ValueError):
+            return self._unavailable_preflight(item)
 
     def list_tool_definitions(self) -> list[ToolDefinition]:
+        local_definitions = self._local_tool_definitions()
         if self.settings.tool_hub_transport != "http":
-            return [
-                tool.definition.model_copy(deep=True)
-                for _, tool in sorted(self._catalog.items(), key=lambda item: item[0])
-            ]
+            return local_definitions
         try:
             with httpx.Client(
                 base_url=self.settings.tool_hub_base_url,
@@ -94,11 +93,12 @@ class ToolHubClient:
                 )
                 response.raise_for_status()
                 payload = response.json()
-        except httpx.HTTPError:
-            return [
-                tool.definition.model_copy(deep=True)
-                for _, tool in sorted(self._catalog.items(), key=lambda item: item[0])
-            ]
+        except httpx.HTTPError as exc:
+            if self._allow_local_degraded_fallback():
+                return local_definitions
+            raise ToolHubDiscoveryUnavailableError(
+                "tool-hub definition discovery is unavailable while HTTP transport is enabled."
+            ) from exc
 
         raw_tools = payload.get("data", payload.get("tools", [])) if isinstance(payload, dict) else []
         definitions: list[ToolDefinition] = []
@@ -109,10 +109,55 @@ class ToolHubClient:
                 continue
         if definitions:
             return definitions
-        return [
-            tool.definition.model_copy(deep=True)
-            for _, tool in sorted(self._catalog.items(), key=lambda item: item[0])
-        ]
+        if self._allow_local_degraded_fallback():
+            return local_definitions
+        raise ToolHubDiscoveryUnavailableError(
+            "tool-hub definition discovery returned no usable tool metadata while HTTP transport is enabled."
+        )
+
+    def dependency_readiness(self) -> dict[str, object]:
+        if self.settings.tool_hub_transport != "http":
+            return {
+                "ready": True,
+                "status": "ready",
+                "mode": "transport-local",
+                "service": "tool-hub-service",
+                "notReadyComponents": [],
+            }
+        try:
+            with httpx.Client(
+                base_url=self.settings.tool_hub_base_url,
+                timeout=self._dependency_probe_timeout_seconds(),
+            ) as client:
+                response = client.get(
+                    "/readyz",
+                    headers={self.settings.caller_service_header: self.settings.app_name},
+                )
+        except httpx.HTTPError as exc:
+            return {
+                "ready": False,
+                "status": "unreachable",
+                "mode": "http",
+                "service": "tool-hub-service",
+                "error": exc.__class__.__name__,
+            }
+
+        payload = self._dependency_probe_payload(response)
+        status = str(payload.get("status") or ("ready" if response.status_code < 400 else "not_ready"))
+        raw_components = payload.get("not_ready_components")
+        not_ready_components = (
+            [str(component) for component in raw_components]
+            if isinstance(raw_components, list)
+            else []
+        )
+        return {
+            "ready": response.status_code < 400 and status == "ready",
+            "status": status,
+            "mode": "http",
+            "service": str(payload.get("service") or "tool-hub-service"),
+            "httpStatus": response.status_code,
+            "notReadyComponents": not_ready_components,
+        }
 
     def _invoke_locally(
         self,
@@ -122,6 +167,10 @@ class ToolHubClient:
         operator_id: str = "orchestrator",
         message_id: str | None = None,
     ) -> Iterable[ToolInvocation]:
+        ensure_local_runtime(
+            activation_mode=self._local_runtime_activation_mode(),
+            settings=self.settings,
+        )
         for item in tool_plan:
             tool = self._catalog.get(item.tool_name)
             if tool is None:
@@ -192,6 +241,28 @@ class ToolHubClient:
                     )
                     response.raise_for_status()
                     payload = response.json()
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    if self._allow_local_degraded_fallback():
+                        yield self._invoke_locally_with_fallback_tag(
+                            item,
+                            user_profile,
+                            trace,
+                            operator_id,
+                            message_id,
+                            fallback_tag="degraded-http-connect-fallback",
+                        )
+                        continue
+                    yield self._http_error_invocation(
+                        item=item,
+                        trace=trace,
+                        idempotency_key=idempotency_key,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                        summary="tool-hub connection failed",
+                        code=5003001,
+                        retryable=True,
+                        error_detail={"exception": exc.__class__.__name__},
+                    )
+                    continue
                 except httpx.TimeoutException as exc:
                     yield self._http_error_invocation(
                         item=item,
@@ -267,6 +338,10 @@ class ToolHubClient:
         operator_id: str = "orchestrator",
         message_id: str | None = None,
     ) -> ToolPreflightResult:
+        ensure_local_runtime(
+            activation_mode=self._local_runtime_activation_mode(),
+            settings=self.settings,
+        )
         tool = self._catalog.get(item.tool_name)
         if tool is None:
             return ToolPreflightResult(
@@ -296,20 +371,51 @@ class ToolHubClient:
         operator_id: str = "orchestrator",
         message_id: str | None = None,
     ) -> ToolPreflightResult:
-        with httpx.Client(base_url=self.settings.tool_hub_base_url, timeout=self.settings.request_timeout_ms / 1000) as client:
-            idempotency_key = self._build_idempotency_key(item, trace)
-            response = self._request_tool_preflight(
-                client=client,
-                item=item,
-                user_profile=user_profile,
-                trace=trace,
-                operator_id=operator_id,
-                idempotency_key=idempotency_key,
-                message_id=message_id,
+        try:
+            with httpx.Client(base_url=self.settings.tool_hub_base_url, timeout=self.settings.request_timeout_ms / 1000) as client:
+                idempotency_key = self._build_idempotency_key(item, trace)
+                response = self._request_tool_preflight(
+                    client=client,
+                    item=item,
+                    user_profile=user_profile,
+                    trace=trace,
+                    operator_id=operator_id,
+                    idempotency_key=idempotency_key,
+                    message_id=message_id,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            return ToolPreflightResult.model_validate(payload)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            if self._allow_local_degraded_fallback():
+                return self._preflight_locally(item, user_profile, trace, operator_id, message_id)
+            raise
+
+    def _unavailable_preflight(self, item: ToolPlanItem) -> ToolPreflightResult:
+        definition = self._catalog.get(item.tool_name).definition if item.tool_name in self._catalog else None
+        if definition is None:
+            return ToolPreflightResult(
+                tool_name=item.tool_name,
+                operation=item.operation,
+                status="missing-tool",
+                ready=False,
+                available=False,
             )
-            response.raise_for_status()
-            payload = response.json()
-        return ToolPreflightResult.model_validate(payload)
+        return ToolPreflightResult(
+            tool_name=item.tool_name,
+            operation=item.operation,
+            status="ready",
+            ready=False,
+            available=False,
+            high_risk=definition.high_risk,
+            tool_mode=definition.mode,
+            timeout_ms=definition.timeout_ms,
+            idempotent=definition.idempotent,
+            cache_ttl_seconds=definition.cache_ttl_seconds,
+            required_permissions=list(definition.auth_requirements.required_permissions),
+            requires_account_context=definition.auth_requirements.require_account_id,
+            confirmation_required=definition.auth_requirements.confirmation_required,
+        )
 
     def _build_context(
         self,
@@ -512,6 +618,10 @@ class ToolHubClient:
         trace: TraceContext | None = None,
         operator_id: str = "orchestrator-service",
     ) -> Iterable[CompensationExecutionRecord]:
+        ensure_local_runtime(
+            activation_mode=self._local_runtime_activation_mode(),
+            settings=self.settings,
+        )
         for step in compensation_steps:
             started = time.perf_counter()
             idempotency_key = self._compensation_idempotency_key(step, trace)
@@ -577,6 +687,31 @@ class ToolHubClient:
                     )
                     response.raise_for_status()
                     payload = response.json()
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    if self._allow_local_degraded_fallback():
+                        yield next(
+                            self._execute_compensations_locally(
+                                [step],
+                                trace,
+                                operator_id,
+                            )
+                        )
+                        continue
+                    yield CompensationExecutionRecord(
+                        step_id=step.step_id,
+                        tool_name=step.tool_name,
+                        action_name=step.compensation.action_name,
+                        status="failed",
+                        success=False,
+                        message="tool-hub compensation connection failed",
+                        provider="tool-hub-service",
+                        code=5003001,
+                        retryable=True,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                        error_detail={"exception": exc.__class__.__name__},
+                        idempotency_key=idempotency_key,
+                    )
+                    continue
                 except httpx.TimeoutException as exc:
                     yield CompensationExecutionRecord(
                         step_id=step.step_id,
@@ -683,3 +818,55 @@ class ToolHubClient:
             error_detail=error_detail,
             idempotency_key=idempotency_key,
         )
+
+    def _invoke_locally_with_fallback_tag(
+        self,
+        item: ToolPlanItem,
+        user_profile: UserProfile,
+        trace: TraceContext | None,
+        operator_id: str,
+        message_id: str | None,
+        *,
+        fallback_tag: str,
+    ) -> ToolInvocation:
+        invocation = next(
+            self._invoke_locally(
+                [item],
+                user_profile,
+                trace,
+                operator_id,
+                message_id,
+            )
+        )
+        audit_tags = list(dict.fromkeys([*invocation.audit_tags, fallback_tag]))
+        return invocation.model_copy(
+            deep=True,
+            update={"audit_tags": audit_tags},
+        )
+
+    def _local_tool_definitions(self) -> list[ToolDefinition]:
+        return [
+            tool.definition.model_copy(deep=True)
+            for _, tool in sorted(self._catalog.items(), key=lambda item: item[0])
+        ]
+
+    def _dependency_probe_timeout_seconds(self) -> float:
+        return max(min(self.settings.request_timeout_ms, 2_000), 500) / 1000
+
+    @staticmethod
+    def _dependency_probe_payload(response: httpx.Response) -> dict[str, object]:
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _allow_local_degraded_fallback(self) -> bool:
+        return self.settings.app_env in {"local", "dev", "test"}
+
+    def _local_runtime_activation_mode(self) -> Literal["transport-local", "degraded-fallback"]:
+        return "transport-local" if self.settings.tool_hub_transport != "http" else "degraded-fallback"
+
+
+class ToolHubDiscoveryUnavailableError(RuntimeError):
+    pass

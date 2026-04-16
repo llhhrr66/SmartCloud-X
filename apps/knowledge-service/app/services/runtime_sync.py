@@ -27,6 +27,11 @@ from app.models.runtime import (
 from app.services.store import KnowledgeStoreRepository
 from app.services.store_provider import get_repository
 
+try:
+    import redis
+except ImportError:  # pragma: no cover - exercised in integration environments
+    redis = None
+
 
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
@@ -110,6 +115,7 @@ class KnowledgeRuntimeSyncService:
             events.append(event)
             self._persist_events_locked(events)
             self._sync_metrics_locked(events)
+        self._enqueue_redis_event(event.event_id)
         INDEX_OUTBOX_EVENTS_TOTAL.labels(operation=operation, status="queued").inc()
         return event
 
@@ -119,6 +125,12 @@ class KnowledgeRuntimeSyncService:
         *,
         allowed_statuses: tuple[str, ...] = ("queued", "failed"),
     ) -> IndexingOutboxEvent | None:
+        redis_claimed = self._claim_next_event_from_redis(
+            processor_id,
+            allowed_statuses=allowed_statuses,
+        )
+        if redis_claimed is not None:
+            return redis_claimed
         with self._lock:
             events = self._load_events_locked()
             for index, event in enumerate(events):
@@ -174,9 +186,9 @@ class KnowledgeRuntimeSyncService:
         )
 
     def build_integrations(self, recent_limit: int = 5) -> KnowledgeRuntimeIntegrations:
-        raw_storage_backend = "minio-mirror" if self.settings.minio_endpoint and self.settings.minio_bucket else "local-mirror"
+        raw_storage_backend = "minio" if self.settings.minio_endpoint and self.settings.minio_bucket else "local-mirror"
         cache_backend = "redis-configured" if self.settings.redis_url else "local-memory-fallback"
-        queue_backend = "redis-list" if self.settings.redis_url else "jsonl-outbox"
+        queue_backend = "redis-list-primary" if self.settings.redis_url else "jsonl-outbox"
         event_counters = self.event_counters()
         return KnowledgeRuntimeIntegrations(
             rawStorage=RuntimeConnectorStatus(
@@ -185,7 +197,7 @@ class KnowledgeRuntimeSyncService:
                 endpoint=self.settings.minio_endpoint,
                 target=self.settings.minio_bucket or str(self.settings.raw_mirror_root),
                 notes=[
-                    "raw document bodies are mirrored locally before async indexing handoff",
+                    "MinIO bucket/object key is the formal raw-object target while a local mirror remains for migration safety",
                 ],
             ),
             metadataStore=RuntimeConnectorStatus(
@@ -194,7 +206,7 @@ class KnowledgeRuntimeSyncService:
                 endpoint=_sanitize_endpoint(self.settings.mysql_dsn),
                 target=self.settings.mysql_table,
                 notes=[
-                    "document and knowledge-base metadata writes are prepared as outbox events",
+                    "knowledge-base, document-profile, and admin-job metadata prefer MySQL-backed runtime storage when configured, with local JSON retained as a fallback mirror",
                 ],
             ),
             vectorStore=RuntimeConnectorStatus(
@@ -203,7 +215,7 @@ class KnowledgeRuntimeSyncService:
                 endpoint=self.settings.qdrant_url,
                 target=self.settings.qdrant_collection,
                 notes=[
-                    "chunk payloads are ready for async vector indexing",
+                    "chunk payloads are indexed asynchronously and queried as the preferred vector backend when available",
                 ],
             ),
             bm25Store=RuntimeConnectorStatus(
@@ -212,7 +224,7 @@ class KnowledgeRuntimeSyncService:
                 endpoint=self.settings.opensearch_url,
                 target=self.settings.opensearch_index,
                 notes=[
-                    "lexical documents are staged through the same indexing outbox",
+                    "lexical chunk documents are indexed asynchronously and used as the preferred BM25 backend when available",
                 ],
             ),
             cache=RuntimeConnectorStatus(
@@ -230,7 +242,7 @@ class KnowledgeRuntimeSyncService:
                 endpoint=_sanitize_endpoint(self.settings.redis_url),
                 target=self.settings.task_queue_name,
                 notes=[
-                    "knowledge-service persists queue-ready outbox events with claim/fail/complete lifecycle scaffolding",
+                    "Redis pending/processing lists are used as the active queue path when configured, with the JSONL outbox retained as an auditable fallback log",
                 ],
             ),
             outboxPath=str(self.settings.outbox_path.expanduser()),
@@ -275,7 +287,7 @@ class KnowledgeRuntimeSyncService:
             docId=document.id,
             kbId=knowledge_base_profile.kb_id if knowledge_base_profile else source.id,
             sourceId=source.id,
-            storageKind="minio-mirror" if self.settings.minio_endpoint and self.settings.minio_bucket else "local-mirror",
+            storageKind="minio" if self.settings.minio_endpoint and self.settings.minio_bucket else "local-mirror",
             bucket=self.settings.minio_bucket or None,
             objectKey=object_key,
             mirrorPath=str(mirror_path),
@@ -321,6 +333,10 @@ class KnowledgeRuntimeSyncService:
                 events[index] = updated
                 self._persist_events_locked(events)
                 self._sync_metrics_locked(events)
+                if status == "completed":
+                    self._ack_redis_event(event_id)
+                elif status == "failed":
+                    self._requeue_redis_event(event_id)
                 INDEX_OUTBOX_EVENTS_TOTAL.labels(operation=updated.operation, status=status).inc()
                 return updated
         return None
@@ -364,6 +380,103 @@ class KnowledgeRuntimeSyncService:
             count for status, count in counters.items() if status in {"queued", "processing", "failed"}
         )
         return counters
+
+    def _redis_client(self):
+        if not self.settings.redis_url or redis is None:
+            return None
+        try:
+            return redis.from_url(  # type: ignore[union-attr]
+                self.settings.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+        except Exception:
+            return None
+
+    def _queue_keys(self) -> tuple[str, str]:
+        prefix = f"{self.settings.redis_namespace}:{self.settings.task_queue_name}"
+        return f"{prefix}:pending", f"{prefix}:processing"
+
+    def _enqueue_redis_event(self, event_id: str) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        pending_key, _ = self._queue_keys()
+        try:
+            client.lrem(pending_key, 0, event_id)
+            client.lpush(pending_key, event_id)
+        except Exception:
+            return
+
+    def _claim_next_event_from_redis(
+        self,
+        processor_id: str,
+        *,
+        allowed_statuses: tuple[str, ...],
+    ) -> IndexingOutboxEvent | None:
+        client = self._redis_client()
+        if client is None:
+            return None
+        pending_key, processing_key = self._queue_keys()
+        try:
+            claimed_id = client.rpoplpush(pending_key, processing_key)
+        except Exception:
+            return None
+        while claimed_id:
+            with self._lock:
+                events = self._load_events_locked()
+                for index, event in enumerate(events):
+                    if event.event_id != claimed_id:
+                        continue
+                    if event.status not in allowed_statuses:
+                        break
+                    updated = event.model_copy(
+                        update={
+                            "status": "processing",
+                            "processor_id": processor_id,
+                            "reserved_at": utc_now(),
+                            "completed_at": None,
+                            "last_error": None,
+                            "attempt_count": event.attempt_count + 1,
+                        }
+                    )
+                    events[index] = updated
+                    self._persist_events_locked(events)
+                    self._sync_metrics_locked(events)
+                    INDEX_OUTBOX_EVENTS_TOTAL.labels(
+                        operation=updated.operation,
+                        status="processing",
+                    ).inc()
+                    return updated
+            try:
+                client.lrem(processing_key, 0, claimed_id)
+                claimed_id = client.rpoplpush(pending_key, processing_key)
+            except Exception:
+                return None
+        return None
+
+    def _ack_redis_event(self, event_id: str) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        _, processing_key = self._queue_keys()
+        try:
+            client.lrem(processing_key, 0, event_id)
+        except Exception:
+            return
+
+    def _requeue_redis_event(self, event_id: str) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        pending_key, processing_key = self._queue_keys()
+        try:
+            client.lrem(processing_key, 0, event_id)
+            client.lrem(pending_key, 0, event_id)
+            client.lpush(pending_key, event_id)
+        except Exception:
+            return
 
 
 @lru_cache(maxsize=1)

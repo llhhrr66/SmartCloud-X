@@ -77,7 +77,7 @@ export const appEnv: AppEnv = {
     readConfigValue(runtimeConfig, 'VITE_SSE_HEARTBEAT_SECONDS', import.meta.env.VITE_SSE_HEARTBEAT_SECONDS),
     15
   ),
-  useMockApi: readBoolean(readConfigValue(runtimeConfig, 'VITE_USE_MOCK_API', import.meta.env.VITE_USE_MOCK_API), true),
+  useMockApi: readBoolean(readConfigValue(runtimeConfig, 'VITE_USE_MOCK_API', import.meta.env.VITE_USE_MOCK_API), false),
   clientPlatform: 'web',
   runtimeConfigEnabled: runtimeOverrideKeys.length > 0,
   runtimeOverrideKeys

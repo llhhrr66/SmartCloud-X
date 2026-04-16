@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-event-record.schema.json",
+  "title": "StreamEventRecord",
+  "type": "object",
+  "required": [
+    "event_id",
+    "sequence",
+    "event",
+    "data",
+    "created_at"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "meta",
+        "reasoning",
+        "retrieval",
+        "tool_call",
+        "tool_result",
+        "delta",
+        "citation",
+        "done"
+      ]
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

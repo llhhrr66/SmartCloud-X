@@ -27,11 +27,19 @@ def _parse_csv_env(name: str, default: list[str]) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
-def _resolve_path_env(name: str, default: Path) -> Path:
-    raw_value = os.getenv(name)
-    if not raw_value:
-        return default
-    return Path(raw_value).expanduser()
+def _resolve_path_env_aliases(names: tuple[str, ...], default: Path | None) -> Path | None:
+    for name in names:
+        raw_value = os.getenv(name)
+        if raw_value:
+            return Path(raw_value).expanduser()
+    return default
+
+
+def _legacy_sqlite_database_url(names: tuple[str, ...]) -> str | None:
+    path = _resolve_path_env_aliases(names, None)
+    if path is None:
+        return None
+    return f"sqlite:///{path.with_suffix('.db').as_posix()}"
 
 
 def _optional_env(name: str) -> str | None:
@@ -42,9 +50,18 @@ def _optional_env(name: str) -> str | None:
     return normalized or None
 
 
+def _default_database_url() -> str:
+    return (
+        os.getenv("MARKETING_SERVICE_DATABASE_URL")
+        or _legacy_sqlite_database_url(("MARKETING_SERVICE_BOOTSTRAP_PATH", "MARKETING_SERVICE_DATA_PATH"))
+        or os.getenv("SMARTCLOUD_MYSQL_DSN")
+        or f"sqlite:///{(_service_root() / 'data' / 'marketing-service.db').as_posix()}"
+    )
+
+
 class Settings(BaseModel):
     app_name: str = "smartcloud-x-marketing-service"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     api_prefix: str = "/api/v1"
     env: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_ENV", "local"))
     log_level: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_LOG_LEVEL", "INFO"))
@@ -105,10 +122,47 @@ class Settings(BaseModel):
     internal_service_name: str = Field(
         default_factory=lambda: os.getenv("MARKETING_SERVICE_INTERNAL_SERVICE_NAME", "marketing-service")
     )
-    data_path: Path = Field(
-        default_factory=lambda: _resolve_path_env(
-            "MARKETING_SERVICE_DATA_PATH",
+    database_url: str = Field(default_factory=_default_database_url)
+    bootstrap_path: Path | None = Field(
+        default_factory=lambda: _resolve_path_env_aliases(
+            ("MARKETING_SERVICE_BOOTSTRAP_PATH", "MARKETING_SERVICE_DATA_PATH"),
             _service_root() / "data" / "marketing-store.json",
+        )
+    )
+    redis_url: str | None = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_REDIS_URL")
+        or os.getenv("SMARTCLOUD_REDIS_URL")
+    )
+    redis_namespace: str = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_REDIS_NAMESPACE", "smartcloud-x:marketing")
+    )
+    minio_endpoint: str | None = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_MINIO_ENDPOINT")
+        or os.getenv("SMARTCLOUD_MINIO_ENDPOINT")
+    )
+    minio_bucket: str | None = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_MINIO_BUCKET")
+        or os.getenv("SMARTCLOUD_MINIO_BUCKET")
+        or "marketing-artifacts"
+    )
+    minio_access_key: str | None = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_MINIO_ACCESS_KEY")
+        or os.getenv("SMARTCLOUD_MINIO_ACCESS_KEY")
+    )
+    minio_secret_key: str | None = Field(
+        default_factory=lambda: os.getenv("MARKETING_SERVICE_MINIO_SECRET_KEY")
+        or os.getenv("SMARTCLOUD_MINIO_SECRET_KEY")
+    )
+    poster_public_base_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "MARKETING_SERVICE_POSTER_PUBLIC_BASE_URL",
+            "https://cdn.smartcloud.local/posters",
+        )
+    )
+    promotion_short_link_base_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "MARKETING_SERVICE_SHORT_LINK_BASE_URL",
+            "https://go.smartcloud.local",
         )
     )
     default_estimated_seconds: int = Field(

@@ -67,6 +67,8 @@ Trusted internal aliases or private routes protected by `ALLOWED_INTERNAL_CALLER
 - OpenAPI operations that declare `x-permission-code: service:internal.call` must document the shared `X-Caller-Service` header, either inline or via `./components.openapi.yaml#/components/parameters/XCallerServiceHeader`
 
 The `TraceContext` JSON Schema is the baseline shared internal structure.
+- optional scope members such as `conversationId`, `userId`, `tenantId`, `callerService`, `toolCallId`, `idempotencyKey`, and `operatorReason` may be omitted or explicit `null` when that context is unknown or not applicable
+- downstream validators and consumers should treat missing and explicit `null` optional trace members as equivalent unknown-context states
 
 ## Response headers
 Current internal HTTP services standardize these response headers when available:
@@ -110,8 +112,10 @@ Current orchestrator-service baseline note:
 
 ## Current orchestrator session lifecycle baseline
 - `POST /api/v1/chat/sessions` plus `GET/PATCH /api/v1/chat/sessions/{conversation_id}` are now frozen as the current service-level session management surface for gateway or web alignment
-- `POST /api/v1/chat/sessions/{conversation_id}/continue` is the frozen continuation route for clarification/confirmation resumes; callers may submit `field_values`, `confirm_tool_names`, and additive `session_context_patch` without relying on owner-local session keys
+- `POST /api/v1/chat/sessions/{conversation_id}/continue` is the frozen continuation route for clarification/confirmation resumes; callers may submit `field_values`, `confirm_tool_names`, additive `session_context_patch`, and additive `user_profile_patch` without relying on owner-local session keys
 - orchestrator response/state payloads may also expose additive `pending_user_actions[]` advisory metadata copied from tool-level `user_action_hint` records; this metadata helps UI/gateway callers render structured continuation instructions but does not replace `pending_actions[]` or `/continue` semantics
+- auth-related `user_action_hint` / `pending_user_actions[]` records may also expose additive `user_profile_bindings` so continuation clients know which `/continue.user_profile_patch` fields can satisfy missing user/account/role/permission context
+- current orchestrator baseline may persist collected continuation auth/profile values into `session_context.attributes.auth_profile` as a runtime convenience layer for later turns; this does not change external auth ownership or token semantics
 - `POST /api/v1/chat/sessions/{conversation_id}/cancel` is the frozen cooperative cancellation route for the currently running message in a conversation
 - `DELETE /api/v1/chat/sessions/{conversation_id}` is a soft delete: the underlying conversation transitions to `status=deleted`, but deleted sessions are hidden from normal list/detail/history flows and should subsequently surface `CHAT_CONVERSATION_NOT_FOUND`
 - archived conversations must reject new `/api/v1/chat/completions` and retry execution until `POST /api/v1/chat/sessions/{conversation_id}/restore` succeeds
@@ -153,6 +157,7 @@ Current orchestrator-service baseline note:
 ## Tool continuation hint baseline
 - shared business-tools, tool-hub, and orchestrator contracts may expose additive `user_action_hint` metadata when a tool step needs caller follow-up
 - the current frozen action families are `clarify-tool-input`, `collect-auth-context`, and `user-confirmation`
+- auth-required hints may additionally expose `user_profile_bindings` so trusted continuation clients can map missing auth context onto `/continue.user_profile_patch`
 - tool-hub audit reads may persist the same hint object so trusted debugging/admin consumers can reconstruct continuation instructions without scraping human-readable summaries
 
 ## Provider-backed tool discovery
@@ -164,6 +169,7 @@ Current orchestrator-service baseline note:
 ## Error codes
 - all shared or cross-service internal error codes must be registered in `packages/common-schemas/errors/error_codes.yaml`
 - current baseline uses stable internal string codes with numeric mappings for future alignment
+- `@smartcloud-x/common-schemas` also exports `FoundationErrorCode` and `foundationErrorCodes`; foundation validation now keeps those TypeScript exports aligned with the frozen YAML catalog so frontend/backend consumers can rely on one typed shared registry
 - external/public numeric codes follow the primary spec ranges and may remain owner-documented in OpenAPI until a dedicated frozen public error catalog is promoted
 - service-specific additions remain downstream until promoted
 

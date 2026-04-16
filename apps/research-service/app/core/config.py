@@ -27,11 +27,19 @@ def _parse_csv_env(name: str, default: list[str]) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
-def _resolve_path_env(name: str, default: Path) -> Path:
-    raw_value = os.getenv(name)
-    if not raw_value:
-        return default
-    return Path(raw_value).expanduser()
+def _resolve_path_env_aliases(names: tuple[str, ...], default: Path | None) -> Path | None:
+    for name in names:
+        raw_value = os.getenv(name)
+        if raw_value:
+            return Path(raw_value).expanduser()
+    return default
+
+
+def _legacy_sqlite_database_url(names: tuple[str, ...]) -> str | None:
+    path = _resolve_path_env_aliases(names, None)
+    if path is None:
+        return None
+    return f"sqlite:///{path.with_suffix('.db').as_posix()}"
 
 
 def _optional_env(name: str) -> str | None:
@@ -42,9 +50,18 @@ def _optional_env(name: str) -> str | None:
     return normalized or None
 
 
+def _default_database_url() -> str:
+    return (
+        os.getenv("RESEARCH_SERVICE_DATABASE_URL")
+        or _legacy_sqlite_database_url(("RESEARCH_SERVICE_BOOTSTRAP_PATH", "RESEARCH_SERVICE_DATA_PATH"))
+        or os.getenv("SMARTCLOUD_MYSQL_DSN")
+        or f"sqlite:///{(_service_root() / 'data' / 'research-service.db').as_posix()}"
+    )
+
+
 class Settings(BaseModel):
     app_name: str = "smartcloud-x-research-service"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     api_prefix: str = "/api/v1"
     env: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_ENV", "local"))
     log_level: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_LOG_LEVEL", "INFO"))
@@ -105,10 +122,24 @@ class Settings(BaseModel):
     internal_service_name: str = Field(
         default_factory=lambda: os.getenv("RESEARCH_SERVICE_INTERNAL_SERVICE_NAME", "research-service")
     )
-    data_path: Path = Field(
-        default_factory=lambda: _resolve_path_env(
-            "RESEARCH_SERVICE_DATA_PATH",
+    database_url: str = Field(default_factory=_default_database_url)
+    bootstrap_path: Path | None = Field(
+        default_factory=lambda: _resolve_path_env_aliases(
+            ("RESEARCH_SERVICE_BOOTSTRAP_PATH", "RESEARCH_SERVICE_DATA_PATH"),
             _service_root() / "data" / "research-store.json",
+        )
+    )
+    redis_url: str | None = Field(
+        default_factory=lambda: os.getenv("RESEARCH_SERVICE_REDIS_URL")
+        or os.getenv("SMARTCLOUD_REDIS_URL")
+    )
+    redis_namespace: str = Field(
+        default_factory=lambda: os.getenv("RESEARCH_SERVICE_REDIS_NAMESPACE", "smartcloud-x:research")
+    )
+    report_download_base_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "RESEARCH_SERVICE_REPORT_DOWNLOAD_BASE_URL",
+            "https://downloads.smartcloud.local/research",
         )
     )
     default_estimated_minutes: int = Field(

@@ -199,6 +199,7 @@ def wait_for_expected_spans() -> tuple[list[ExportedSpan], list[str], list[str]]
                 expected_span
                 for expected_span in (
                     "knowledge.search",
+                    "knowledge.snapshot.export",
                     "knowledge.indexing.process_event",
                     "rag.retrieval.search_candidates",
                     "rag.answer.compose",
@@ -358,6 +359,14 @@ def main() -> int:
             run_worker_once(KNOWLEDGE_ROOT, knowledge_env, log_dir)
             wait_for_trace_exports(2, "knowledge-indexer")
 
+            snapshot_payload = request(
+                "GET",
+                f"http://127.0.0.1:{knowledge_port}/api/knowledge/v1/snapshot",
+            )
+            if snapshot_payload.get("success") is not True:
+                raise RuntimeError(f"knowledge snapshot failed during trace smoke: {snapshot_payload}")
+            wait_for_trace_exports(3, "knowledge snapshot")
+
             answer_payload = request(
                 "POST",
                 f"http://127.0.0.1:{rag_port}/api/rag/v1/answer",
@@ -372,7 +381,7 @@ def main() -> int:
                 raise RuntimeError(f"rag answer failed during trace smoke: {answer_payload}")
             if answer_payload.get("data", {}).get("degraded") is True:
                 raise RuntimeError(f"rag answer degraded unexpectedly during trace smoke: {answer_payload}")
-            wait_for_trace_exports(3, "rag-service")
+            wait_for_trace_exports(4, "rag-service")
             exported_spans, service_names, shared_trace_ids = wait_for_expected_spans()
 
             summary = {

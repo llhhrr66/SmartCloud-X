@@ -19,7 +19,7 @@ configure_logging(settings.log_level)
 app = FastAPI(
     title="SmartCloud-X Research Service",
     version=settings.app_version,
-    description="Baseline research task service with canonical external envelopes and file-backed placeholder results.",
+    description="Database-backed research task service baseline with canonical external envelopes and persisted placeholder results.",
 )
 app.add_middleware(
     CORSMiddleware,

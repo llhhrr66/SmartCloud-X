@@ -4,12 +4,14 @@
 
 ## Coverage in the root Playwright entry
 
-- login and dashboard bootstrap through the current `apps/web-user/` app
-- one-time `401` refresh recovery in the billing workspace
+- login, dashboard bootstrap, and seeded session-history rendering through the current `apps/web-user/` app
+- marketing poster and research task cards surviving a reload in the repo-level browser entry
+- one-time `401` refresh recovery in the billing workspace, including a reload-safe billing follow-up
 - route-level permission denial when the user lacks `user:marketing.read`
 - chat SSE interruption followed by automatic reconnect
 - citation-detail `403` permission denial UX
 - marketing `429` structured error UX
+- research task completion plus report-preview missing-file error UX
 
 ## No-browser wiring smoke
 

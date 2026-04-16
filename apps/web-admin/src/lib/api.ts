@@ -43,34 +43,9 @@ export const {
   previewImportFiles,
   importFiles,
   searchKnowledge,
+  searchKnowledgeAdminPreview,
   ingestDocument,
+  diagnoseAdminRetrieval,
   diagnose,
   answer
 } = adminApi;
-
-export function searchKnowledgeAdminPreview(
-  query: string,
-  topK = 5,
-  knowledgeBaseId?: string,
-  tags: string[] = []
-) {
-  return adminApi.searchKnowledgeAdminPreview({
-    query,
-    topK,
-    knowledgeBaseId,
-    tags
-  });
-}
-
-export function diagnoseAdminRetrieval(
-  query: string,
-  topK = 5,
-  knowledgeBaseId?: string
-) {
-  return adminApi.diagnoseAdminRetrieval({
-    query,
-    topK,
-    knowledgeBaseId,
-    includeCitations: true
-  });
-}

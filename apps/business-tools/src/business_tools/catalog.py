@@ -223,6 +223,7 @@ class StaticBusinessTool(BusinessTool):
                 request.context.idempotency_key,
                 request.payload,
                 request.context,
+                self.definition.idempotency_window_seconds,
                 result,
             )
         if request.operation == "execute" and self.definition.mode == "query":
@@ -242,6 +243,7 @@ def _query_payload(request: ToolInvocationRequest) -> str:
         request.payload.get("user_query")
         or request.payload.get("topic")
         or request.payload.get("theme")
+        or request.payload.get("product_summary")
         or request.payload.get("product")
         or request.payload.get("subject")
         or ""
@@ -327,6 +329,19 @@ def _build_session_context_patch(
         active_products = _list_strings(
             [item.get("product") for item in items if isinstance(item, dict)]
         )
+        top_instances = (
+            payload.get("top_instances", [])
+            if isinstance(payload.get("top_instances"), list)
+            else []
+        )
+        primary_instance_id = next(
+            (
+                item.get("instance_id")
+                for item in top_instances
+                if isinstance(item, dict) and item.get("instance_id")
+            ),
+            None,
+        )
         statement_nos = _normalize_string_list(payload.get("statement_nos"))
         if not statement_nos and payload.get("billing_cycle"):
             billing_cycle = str(payload["billing_cycle"]).replace("-", "_").replace("~", "_")
@@ -341,7 +356,25 @@ def _build_session_context_patch(
                 "billing_cycle": payload.get("billing_cycle"),
                 "currency": payload.get("currency"),
                 "latest_billing_total": payload.get("total_amount"),
-                "top_instances": payload.get("top_instances", []),
+                "top_instances": top_instances,
+                "primary_instance_id": primary_instance_id,
+            }
+        )
+    elif definition.name == "billing.query_instance_cost":
+        instance_id = payload.get("instance_id") or request.payload.get("instance_id")
+        product = payload.get("product")
+        active_products = _list_strings([product])
+        attributes.update(
+            {
+                "instance_id": instance_id,
+                "primary_instance_id": instance_id,
+                "instance_name": payload.get("instance_name"),
+                "instance_product": product,
+                "instance_billing_cycle": payload.get("billing_cycle"),
+                "instance_statement_no": payload.get("statement_no"),
+                "instance_range": request.payload.get("range"),
+                "last_instance_cost_total": payload.get("total_amount"),
+                "currency": payload.get("currency"),
             }
         )
     elif definition.name == "order.query_order":
@@ -391,6 +424,11 @@ def _build_session_context_patch(
             {
                 "ticket_status": payload.get("status"),
                 "ticket_subject": payload.get("subject"),
+                "ticket_priority": payload.get("priority"),
+                "ticket_category": payload.get("category"),
+                "ticket_queue": payload.get("queue"),
+                "ticket_incident_code": payload.get("incident_code"),
+                "ticket_related_resources": payload.get("related_resources", []),
             }
         )
     elif definition.name == "ticket.reply":
@@ -503,11 +541,21 @@ def _build_session_context_patch(
             None,
         )
         attributes["last_campaign_name"] = first_campaign
+        attributes["last_marketing_product_summary"] = (
+            payload.get("product_summary")
+            or payload.get("matched_product")
+            or request.payload.get("product_summary")
+            or request.payload.get("product")
+        )
     elif definition.name == "marketing.poster_brief":
         attributes.update(
             {
                 "poster_theme": payload.get("theme") or request.payload.get("theme"),
                 "poster_cta": payload.get("cta"),
+                "last_marketing_product_summary": (
+                    payload.get("product_summary")
+                    or request.payload.get("product_summary")
+                ),
             }
         )
     elif definition.name == "marketing.generate_copy":
@@ -518,6 +566,12 @@ def _build_session_context_patch(
                 "last_marketing_copy_campaign_name": payload.get("campaign_name"),
                 "last_marketing_copy_channel": payload.get("channel"),
                 "last_marketing_copy_cta": payload.get("cta"),
+                "last_marketing_product_summary": (
+                    payload.get("product_summary")
+                    or request.payload.get("product_summary")
+                    or payload.get("product")
+                    or request.payload.get("product")
+                ),
             }
         )
     elif definition.name == "marketing.generate_promotion_link":
@@ -538,6 +592,10 @@ def _build_session_context_patch(
                 "poster_size": payload.get("size"),
                 "poster_theme": payload.get("theme") or request.payload.get("theme"),
                 "last_campaign_name": payload.get("campaign_name") or request.payload.get("campaign_name"),
+                "last_marketing_product_summary": (
+                    payload.get("product_summary")
+                    or request.payload.get("product_summary")
+                ),
             }
         )
     elif definition.name in {"research.generate_report", "research.outline"}:
@@ -563,12 +621,72 @@ def _build_session_context_patch(
         )
     elif definition.name == "product.catalog_lookup":
         active_products = _list_strings(payload.get("product_families", []))
+    elif definition.name == "product.recommend_instance":
+        active_products = _list_strings(
+            [
+                "GPU 实例",
+                payload.get("recommended_instance_family"),
+                payload.get("recommended_instance_type"),
+            ]
+        )
+        attributes.update(
+            {
+                "recommended_workload": payload.get("workload"),
+                "recommended_model_family": payload.get("model_family"),
+                "recommended_budget_level": payload.get("budget_level"),
+                "recommended_instance_family": payload.get("recommended_instance_family"),
+                "recommended_instance_type": payload.get("recommended_instance_type"),
+                "recommended_gpu_model": payload.get("gpu_model"),
+                "recommended_gpu_count": payload.get("gpu_count"),
+                "recommended_vcpu": payload.get("vcpu"),
+                "recommended_memory_gb": payload.get("memory_gb"),
+                "recommended_network_gbps": payload.get("network_gbps"),
+                "recommended_instance_summary": (
+                    f"{payload.get('recommended_instance_type')} / "
+                    f"{payload.get('gpu_model')} x{payload.get('gpu_count')}"
+                )
+                if payload.get("recommended_instance_type") and payload.get("gpu_model")
+                else None,
+            }
+        )
     elif definition.name == "support.playbook_search":
         attributes["playbook_titles"] = [
             item.get("title")
             for item in payload.get("playbooks", [])
             if isinstance(item, dict) and item.get("title")
         ]
+    elif definition.name == "support.query_service_status":
+        service_name = payload.get("service_name") or request.payload.get("service")
+        active_products = _list_strings([service_name])
+        attributes.update(
+            {
+                "service_status": payload.get("status"),
+                "service_severity": payload.get("severity"),
+                "service_incident_code": payload.get("incident_code"),
+                "service_status_summary": payload.get("summary"),
+                "service_recommended_action": payload.get("recommended_action"),
+                "service_region": payload.get("region"),
+                "service_name": service_name,
+                "service_health_checked_at": payload.get("checked_at"),
+                "service_affected_instance_id": payload.get("instance_id") or request.payload.get("instance_id"),
+                "service_escalation_recommended": payload.get("escalation_recommended"),
+            }
+        )
+    elif definition.name == "support.handoff_brief":
+        attributes.update(
+            {
+                "human_handoff_queue": payload.get("queue"),
+                "human_handoff_severity": payload.get("severity"),
+                "human_handoff_summary": payload.get("summary"),
+                "human_handoff_reason": payload.get("reason"),
+                "human_handoff_related_resources": payload.get("related_resources", []),
+                "human_handoff_existing_ticket_no": payload.get("open_ticket_id"),
+                "human_handoff_service_status": payload.get("service_status"),
+                "human_handoff_incident_code": payload.get("incident_code"),
+                "human_handoff_recommended_action": payload.get("recommended_action"),
+                "human_handoff_operator_notes": payload.get("operator_notes", []),
+            }
+        )
 
     if active_products:
         patch["active_products"] = active_products
@@ -695,6 +813,374 @@ def _support_playbook_builder(request: ToolInvocationRequest) -> tuple[str, dict
     )
 
 
+def _infer_region_from_instance_id(instance_id: str | None) -> str:
+    normalized = str(instance_id or "").strip().lower()
+    if "cn-sh2" in normalized or "shanghai" in normalized:
+        return "cn-shanghai-2"
+    if "cn-bj1" in normalized or "beijing" in normalized:
+        return "cn-beijing-1"
+    if "cn-gz1" in normalized or "guangzhou" in normalized:
+        return "cn-guangzhou-1"
+    return "cn-shanghai-2"
+
+
+def _support_query_service_status_profile(request: ToolInvocationRequest) -> dict[str, Any]:
+    query = str(request.payload.get("user_query") or _query_payload(request) or "待补充服务状态问题")
+    lowered_query = query.lower()
+    instance_id = str(request.payload.get("instance_id") or "").strip() or None
+    region = str(request.payload.get("region") or "").strip() or _infer_region_from_instance_id(instance_id)
+
+    raw_service = str(request.payload.get("service") or "").strip()
+    if "网络" in query:
+        service_name = "实例网络连通性"
+        service_code = "instance-network"
+    elif any(token in query for token in ("存储", "磁盘", "云盘")):
+        service_name = "块存储服务"
+        service_code = "block-storage"
+    elif instance_id and instance_id.startswith("gpu-"):
+        service_name = "GPU 实例服务"
+        service_code = "gpu-instance"
+    elif any(token in lowered_query for token in ("gpu", "cuda", "显卡")):
+        service_name = "GPU 实例服务"
+        service_code = "gpu-instance"
+    elif instance_id and instance_id.startswith(("ecs-", "vm-", "instance-", "i-")):
+        service_name = "云服务器实例"
+        service_code = "cloud-server"
+    elif raw_service:
+        service_name = raw_service
+        service_code = _slugify_token(raw_service, fallback="cloud-service")
+    else:
+        service_name = "云服务运行状态"
+        service_code = "cloud-service"
+
+    symptoms: list[str] = []
+    if any(token in query for token in ("不可用", "中断", "宕机")):
+        symptoms.append("用户反馈服务不可用或已中断。")
+    if any(token in query for token in ("故障", "异常")):
+        symptoms.append("用户反馈实例或服务出现异常。")
+    if any(token in query for token in ("网络", "丢包", "超时", "连接")):
+        symptoms.append("观测到网络连通性或时延相关诉求。")
+    if any(token in query for token in ("延迟", "抖动", "慢")):
+        symptoms.append("存在性能波动或访问延迟升高风险。")
+    if not symptoms:
+        symptoms.append("基线巡检未收到明确故障关键词。")
+
+    if any(token in query for token in ("不可用", "中断", "宕机")):
+        status = "outage"
+        severity = "sev1"
+        recommended_action = "建议立即转人工并核对影响时间、实例编号和最近变更记录。"
+    elif any(token in query for token in ("故障", "异常", "告警", "延迟", "抖动", "超时")):
+        status = "degraded"
+        severity = "sev2"
+        recommended_action = "建议先核对网络/安全组/驱动，再视影响范围升级人工支持。"
+    else:
+        status = "healthy"
+        severity = "info"
+        recommended_action = "当前未发现明显异常，可继续观察并补充具体实例或时间窗。"
+
+    region_token = region.upper().replace("-", "")
+    service_token = _slugify_token(service_code, fallback="service").upper().replace("-", "")
+    incident_code = None
+    if status != "healthy":
+        incident_code = f"INC-{region_token}-{service_token[:10]}-042"
+
+    impact_scope = "single-instance" if instance_id else "regional"
+    if status == "healthy":
+        summary = f"{service_name} 在 {region} 当前未发现显著异常。"
+    elif instance_id:
+        summary = f"{instance_id} 所属{service_name}在 {region} 当前为 {status}，建议尽快处理。"
+    else:
+        summary = f"{service_name} 在 {region} 当前为 {status}，建议确认受影响资源范围。"
+
+    return {
+        "instance_id": instance_id,
+        "service_name": service_name,
+        "region": region,
+        "status": status,
+        "severity": severity,
+        "incident_code": incident_code,
+        "impact_scope": impact_scope,
+        "symptoms": symptoms,
+        "summary": summary,
+        "recommended_action": recommended_action,
+        "checked_at": "2026-04-16T00:00:00+08:00",
+        "escalation_recommended": status != "healthy",
+    }
+
+
+def _support_query_service_status_preview(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    profile = _support_query_service_status_profile(request)
+    return _with_result(
+        "已生成服务状态巡检草稿。",
+        {
+            **profile,
+            "preview_notice": "正式执行会返回基线状态摘要、建议动作和可能的事件编号。",
+        },
+        "baseline://support-service-status",
+    )
+
+
+def _support_query_service_status_execute(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    profile = _support_query_service_status_profile(request)
+    return _with_result(
+        "已返回服务状态基线信息。",
+        profile,
+        "baseline://support-service-status",
+    )
+
+
+def _support_handoff_brief_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    query = str(request.payload.get("user_query") or _query_payload(request) or "待补充用户诉求")
+    scene = str(request.payload.get("scene") or "customer_service").strip() or "customer_service"
+    urgency = str(request.payload.get("urgency") or "medium").strip().lower() or "medium"
+    conversation_summary = str(request.payload.get("conversation_summary") or "").strip()
+    open_ticket_id = str(request.payload.get("open_ticket_id") or "").strip() or None
+    related_resources = _normalize_string_list(request.payload.get("related_resources"))
+    service_status = str(request.payload.get("service_status") or "").strip() or None
+    incident_code = str(request.payload.get("incident_code") or "").strip() or None
+    diagnostic_summary = str(request.payload.get("status_summary") or "").strip() or None
+    recommended_action = str(request.payload.get("recommended_action") or "").strip() or None
+
+    queue_mapping = {
+        "billing": "billing-ops",
+        "technical_support": "technical-support-l2",
+        "icp": "icp-service-desk",
+        "marketing": "marketing-ops",
+        "research": "solution-architecture",
+        "customer_service": "customer-success",
+    }
+    queue = queue_mapping.get(scene, "customer-success")
+
+    lowered_query = query.lower()
+    if any(token in query for token in ("投诉", "升级")):
+        reason = "complaint_or_escalation"
+    elif any(token in query for token in ("异常", "故障", "不可用", "中断")):
+        reason = "service_exception"
+    elif "退款" in query:
+        reason = "refund_follow_up"
+    elif "备案" in query:
+        reason = "icp_manual_review"
+    else:
+        reason = "user_requested_handoff"
+
+    severity = urgency
+    if severity not in {"low", "medium", "high"}:
+        severity = "medium"
+    if reason in {"complaint_or_escalation", "service_exception"} or any(
+        token in lowered_query for token in ("urgent", "p0", "sev1")
+    ):
+        severity = "high"
+
+    operator_notes: list[str] = []
+    if scene == "billing":
+        operator_notes.extend(
+            [
+                "优先核对账单、退款或发票关联记录，确认是否存在金额或状态异常。",
+                "如用户已提供订单号/发票号，请在人工接入时复核对应凭证。",
+            ]
+        )
+    elif scene == "technical_support":
+        operator_notes.extend(
+            [
+                "优先确认实例、网络、安全组或 GPU 驱动是否存在服务异常。",
+                "接入后先确认影响范围、开始时间以及是否需要升级值班支持。",
+            ]
+        )
+    elif scene == "icp":
+        operator_notes.extend(
+            [
+                "优先核对备案主体、联系人与材料缺口，必要时走人工复审。",
+                "如涉及实名核验失败，请确认主体证件号和联系方式是否一致。",
+            ]
+        )
+    elif scene == "marketing":
+        operator_notes.extend(
+            [
+                "确认活动有效期、投放渠道与素材约束，再安排人工运营跟进。",
+                "如用户涉及定制诉求，请保留当前 campaign / 海报 / 文案上下文。",
+            ]
+        )
+    elif scene == "research":
+        operator_notes.extend(
+            [
+                "确认调研目标、交付时间和期望输出格式，再分配到方案或架构团队。",
+                "必要时回看已有参考资料和报告导出记录，避免重复劳动。",
+            ]
+        )
+    else:
+        operator_notes.extend(
+            [
+                "先复述用户当前诉求与紧急程度，再确认需转接的具体业务团队。",
+                "如已有上下文摘要或工单编号，请一并同步给人工坐席。",
+            ]
+        )
+
+    if diagnostic_summary:
+        operator_notes.append(f"当前基线状态检查：{diagnostic_summary}")
+    elif service_status:
+        operator_notes.append(f"当前基线状态：{service_status}。")
+    if incident_code:
+        operator_notes.append(f"关联事件编号：{incident_code}。")
+    if recommended_action:
+        operator_notes.append(f"建议优先动作：{recommended_action}")
+
+    summary_parts = [f"用户请求人工介入：{query}"]
+    if conversation_summary:
+        summary_parts.append(f"历史摘要：{conversation_summary}")
+    if related_resources:
+        summary_parts.append(f"关联资源：{'、'.join(related_resources[:5])}")
+    if open_ticket_id:
+        summary_parts.append(f"已有工单：{open_ticket_id}")
+    if diagnostic_summary:
+        summary_parts.append(f"状态检查：{diagnostic_summary}")
+    if incident_code:
+        summary_parts.append(f"事件编号：{incident_code}")
+    summary = "；".join(summary_parts)
+
+    return _with_result(
+        "已生成转人工交接摘要。",
+        {
+            "queue": queue,
+            "severity": severity,
+            "reason": reason,
+            "summary": summary,
+            "conversation_summary": conversation_summary or None,
+            "related_resources": related_resources,
+            "open_ticket_id": open_ticket_id,
+            "service_status": service_status,
+            "incident_code": incident_code,
+            "status_summary": diagnostic_summary,
+            "recommended_action": recommended_action,
+            "operator_notes": operator_notes,
+        },
+        "baseline://support-handoff-brief",
+    )
+
+
+def _product_recommend_instance_profile(request: ToolInvocationRequest) -> dict[str, Any]:
+    query = _query_payload(request)
+    lowered_query = query.lower()
+
+    workload = str(request.payload.get("workload") or "").strip().lower()
+    if not workload:
+        if any(token in query for token in ("训练", "微调")) or "train" in lowered_query:
+            workload = "training"
+        elif any(token in query for token in ("推理", "部署", "上线")) or "inference" in lowered_query:
+            workload = "inference"
+        else:
+            workload = "general"
+
+    model_family = str(request.payload.get("model_family") or "").strip().lower()
+    if not model_family:
+        if any(token in query for token in ("多模态", "文生图", "图文")):
+            model_family = "multimodal"
+        elif any(token in query for token in ("视觉", "视频")):
+            model_family = "vision"
+        elif any(token in query for token in ("大模型", "llm", "qwen", "llama", "deepseek")):
+            model_family = "llm"
+        else:
+            model_family = "general"
+
+    budget_level = str(request.payload.get("budget_level") or "").strip().lower()
+    if not budget_level:
+        if any(token in query for token in ("低预算", "成本", "便宜", "测试", "demo", "poc")):
+            budget_level = "cost_optimized"
+        elif any(token in query for token in ("高性能", "生产", "企业级", "高并发", "低延迟")):
+            budget_level = "performance"
+        else:
+            budget_level = "balanced"
+
+    if workload == "training" or budget_level == "performance":
+        recommendation = {
+            "recommended_instance_family": "GPU-GN8",
+            "recommended_instance_type": "gn8.8xlarge",
+            "gpu_model": "NVIDIA H100",
+            "gpu_count": 8,
+            "vcpu": 128,
+            "memory_gb": 1024,
+            "network_gbps": 200,
+            "estimated_monthly_cost_cny": 198000,
+            "rationale": [
+                "适合 70B 级大模型训练、微调或长上下文实验。",
+                "预留 NVLink / 高速网络带宽，便于分布式训练和参数同步。",
+                "显存、CPU 与内存余量更适合生产级吞吐与扩容。",
+            ],
+            "alternatives": [
+                {"instance_type": "gn8.4xlarge", "gpu_model": "NVIDIA H100", "scenario": "中等规模微调"},
+                {"instance_type": "gi4.4xlarge", "gpu_model": "NVIDIA L40S", "scenario": "推理优先的中大型部署"},
+            ],
+        }
+    elif budget_level == "cost_optimized":
+        recommendation = {
+            "recommended_instance_family": "GPU-GN6i",
+            "recommended_instance_type": "gn6i.xlarge",
+            "gpu_model": "NVIDIA A10",
+            "gpu_count": 1,
+            "vcpu": 16,
+            "memory_gb": 64,
+            "network_gbps": 25,
+            "estimated_monthly_cost_cny": 18000,
+            "rationale": [
+                "适合 PoC、低成本验证和中小模型推理。",
+                "单卡规格更容易控制预算并快速上线测试环境。",
+                "可以先完成业务验证，再平滑升级到更高阶 GPU 机型。",
+            ],
+            "alternatives": [
+                {"instance_type": "gn6i.2xlarge", "gpu_model": "NVIDIA A10", "scenario": "略高吞吐的推理场景"},
+                {"instance_type": "gi4.2xlarge", "gpu_model": "NVIDIA L40S", "scenario": "量产前的性能升级"},
+            ],
+        }
+    else:
+        recommendation = {
+            "recommended_instance_family": "GPU-GI4",
+            "recommended_instance_type": "gi4.2xlarge",
+            "gpu_model": "NVIDIA L40S",
+            "gpu_count": 2,
+            "vcpu": 32,
+            "memory_gb": 128,
+            "network_gbps": 50,
+            "estimated_monthly_cost_cny": 42000,
+            "rationale": [
+                "适合 7B-70B 量化模型推理和大模型部署。",
+                "双卡 L40S 在吞吐、显存与成本之间更均衡。",
+                "便于后续挂接对象存储、负载均衡和弹性扩容。",
+            ],
+            "alternatives": [
+                {"instance_type": "gn6i.2xlarge", "gpu_model": "NVIDIA A10", "scenario": "预算敏感推理"},
+                {"instance_type": "gn8.4xlarge", "gpu_model": "NVIDIA H100", "scenario": "更高吞吐和训练预留"},
+            ],
+        }
+
+    return {
+        "query": query,
+        "workload": workload,
+        "model_family": model_family,
+        "budget_level": budget_level,
+        **recommendation,
+    }
+
+
+def _product_recommend_instance_preview(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    recommendation = _product_recommend_instance_profile(request)
+    return _with_result(
+        "已生成云主机规格推荐草稿。",
+        {
+            **recommendation,
+            "preview_notice": "正式执行会返回推荐理由、备选机型与基线成本估算。",
+        },
+        "baseline://product-instance-recommendation",
+    )
+
+
+def _product_recommend_instance_execute(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    recommendation = _product_recommend_instance_profile(request)
+    return _with_result(
+        "已生成云主机规格建议。",
+        recommendation,
+        "baseline://product-instance-recommendation",
+    )
+
+
 def _billing_query_statement_preview(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
     range_name = str(request.payload.get("range", "this_month"))
     billing_cycle = _current_billing_cycle(range_name)
@@ -740,6 +1226,69 @@ def _billing_query_statement_execute(request: ToolInvocationRequest) -> tuple[st
             ],
         },
         "baseline://billing-query-statement",
+    )
+
+
+def _billing_query_instance_cost_profile(request: ToolInvocationRequest) -> dict[str, Any]:
+    instance_id = str(request.payload.get("instance_id") or "inst_pending").strip()
+    range_name = str(request.payload.get("range", "this_month"))
+    billing_cycle = str(request.payload.get("billing_cycle") or _current_billing_cycle(range_name))
+    if instance_id.startswith("gpu-"):
+        product = "GPU 实例"
+        instance_name = "智能算力实例"
+        region = "cn-shanghai-2"
+        total_amount = 412.68 if billing_cycle == "2026-04" else 386.40
+    elif instance_id.startswith("ecs-"):
+        product = "通用云服务器"
+        instance_name = "通用计算实例"
+        region = "cn-shanghai-2"
+        total_amount = 168.42 if billing_cycle == "2026-04" else 154.76
+    else:
+        product = "云主机实例"
+        instance_name = "云主机实例"
+        region = "cn-hangzhou-1"
+        total_amount = 238.60 if billing_cycle == "2026-04" else 224.30
+
+    compute_amount = round(total_amount * 0.82, 2)
+    storage_amount = round(total_amount * 0.12, 2)
+    network_amount = round(total_amount - compute_amount - storage_amount, 2)
+    statement_no = f"stmt_{billing_cycle.replace('-', '_').replace('~', '_')}_001"
+
+    return {
+        "instance_id": instance_id,
+        "instance_name": instance_name,
+        "product": product,
+        "billing_cycle": billing_cycle,
+        "range": range_name,
+        "statement_no": statement_no,
+        "currency": "CNY",
+        "total_amount": total_amount,
+        "daily_average_amount": round(total_amount / 30, 2),
+        "compute_amount": compute_amount,
+        "storage_amount": storage_amount,
+        "network_amount": network_amount,
+        "region": region,
+    }
+
+
+def _billing_query_instance_cost_preview(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    profile = _billing_query_instance_cost_profile(request)
+    return _with_result(
+        "已整理实例费用查询草稿。",
+        {
+            **profile,
+            "preview_notice": "正式执行会返回该实例的费用拆分和账期基线数据。",
+        },
+        "baseline://billing-query-instance-cost",
+    )
+
+
+def _billing_query_instance_cost_execute(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    profile = _billing_query_instance_cost_profile(request)
+    return _with_result(
+        "已返回实例费用基线数据。",
+        profile,
+        "baseline://billing-query-instance-cost",
     )
 
 
@@ -873,13 +1422,65 @@ def _order_create_refund_execute(request: ToolInvocationRequest) -> tuple[str, d
 
 
 def _ticket_create_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    scene = str(request.payload.get("scene") or request.payload.get("category") or "customer_service").strip() or "customer_service"
+    category = str(request.payload.get("category") or scene or "general").strip() or "general"
+    queue = str(request.payload.get("queue") or "").strip() or None
+    service_status = str(request.payload.get("service_status") or "").strip() or None
+    incident_code = str(request.payload.get("incident_code") or "").strip() or None
+    status_summary = str(request.payload.get("status_summary") or "").strip() or None
+    recommended_action = str(request.payload.get("recommended_action") or "").strip() or None
+    related_resources = _normalize_string_list(request.payload.get("related_resources"))
+    operator_notes = _normalize_string_list(request.payload.get("operator_notes"))
+    priority = str(request.payload.get("priority") or "").strip().lower() or "medium"
+    if priority not in {"low", "medium", "high"}:
+        priority = "high" if service_status in {"degraded", "outage"} else "medium"
+
+    subject = str(request.payload.get("subject") or "").strip()
+    if not subject:
+        resource_label = related_resources[0] if related_resources else None
+        if resource_label and incident_code:
+            subject = f"{resource_label} 异常工单 {incident_code}"
+        elif resource_label and service_status:
+            subject = f"{resource_label} {service_status} 工单"
+        elif status_summary:
+            subject = status_summary
+        else:
+            subject = _query_payload(request) or "待补充工单主题"
+
+    content_lines: list[str] = []
+    raw_content = str(request.payload.get("content") or "").strip()
+    if raw_content:
+        content_lines.append(raw_content)
+    elif status_summary:
+        content_lines.append(status_summary)
+    else:
+        content_lines.append(_query_payload(request) or "待补充工单内容")
+    if incident_code:
+        content_lines.append(f"关联事件：{incident_code}")
+    if queue:
+        content_lines.append(f"建议队列：{queue}")
+    if related_resources:
+        content_lines.append(f"关联资源：{', '.join(related_resources)}")
+    if recommended_action:
+        content_lines.append(f"建议动作：{recommended_action}")
+    if operator_notes:
+        content_lines.append(f"值守提示：{'；'.join(operator_notes)}")
+
     return _with_result(
         "已生成工单创建结果。",
         {
-            "ticket_no": f"tk_{request.payload.get('category', 'general')}_001",
+            "ticket_no": f"tk_{_slugify_token(category, fallback='general')}_001",
             "status": "open" if request.operation == "execute" else "draft",
             "sla_minutes": 30,
-            "subject": request.payload.get("subject", _query_payload(request) or "待补充工单主题"),
+            "subject": subject,
+            "content": "\n".join(content_lines),
+            "priority": priority,
+            "category": category,
+            "scene": scene,
+            "queue": queue,
+            "incident_code": incident_code,
+            "service_status": service_status,
+            "related_resources": related_resources,
         },
         "baseline://ticket-create",
     )
@@ -1071,28 +1672,63 @@ def _icp_query_application_execute(request: ToolInvocationRequest) -> tuple[str,
 
 def _campaign_lookup_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
     query = _query_payload(request)
+    product, product_summary = _marketing_product_context(request)
+    effective_query = product_summary or product or query
+    lowered_query = effective_query.lower()
+    gpu_context = any(
+        token in lowered_query
+        for token in ("gpu", "l40s", "h100", "a10", "gi4", "gn6", "gn8", "算力", "大模型")
+    ) or "大模型" in effective_query
     campaigns = [
-        {"name": "GPU 新客满减", "segment": "AI/大模型", "priority": "high"},
-        {"name": "云服务器续费折扣", "segment": "通用企业客户", "priority": "medium"},
+        {
+            "name": "GPU 新客满减",
+            "segment": product_summary or "AI/大模型",
+            "priority": "high",
+        },
+        {
+            "name": "大模型部署代金券",
+            "segment": product or "GPU 实例",
+            "priority": "medium",
+        },
     ]
-    if "gpu" not in query.lower() and "大模型" not in query:
+    if not gpu_context:
         campaigns = [{"name": "春季通用云上云活动", "segment": "SMB", "priority": "medium"}]
     return _with_result(
         "已整理营销活动候选。",
-        {"matched_query": query, "campaigns": campaigns},
+        {
+            "matched_query": query,
+            "matched_product": product,
+            "product_summary": product_summary or None,
+            "campaigns": campaigns,
+        },
         "baseline://marketing-campaign",
     )
 
 
 def _poster_brief_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
-    theme = request.payload.get("theme") or _query_payload(request) or "云服务推广"
+    product, product_summary = _marketing_product_context(request)
+    theme = (
+        request.payload.get("theme")
+        or product_summary
+        or _query_payload(request)
+        or "云服务推广"
+    )
+    copy_points = ["高性能算力", "7x24 智能服务", "快速部署"]
+    if product_summary:
+        copy_points = [
+            f"推荐机型：{product_summary}",
+            "AI/大模型场景可快速上线",
+            "弹性扩容与专家顾问协同跟进",
+        ]
     return _with_result(
         "已生成海报 brief。",
         {
             "theme": theme,
+            "product": product,
+            "product_summary": product_summary or None,
             "cta": request.payload.get("cta", "立即咨询"),
             "visual_style": "科技蓝 + 工业风",
-            "copy_points": ["高性能算力", "7x24 智能服务", "快速部署"],
+            "copy_points": copy_points,
         },
         "baseline://marketing-poster",
     )
@@ -1100,11 +1736,8 @@ def _poster_brief_builder(request: ToolInvocationRequest) -> tuple[str, dict[str
 
 def _marketing_copy_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
     campaign_name = request.payload.get("campaign_name") or "待确认活动"
-    raw_product = request.payload.get("product")
-    if isinstance(raw_product, list):
-        product = str(raw_product[0]) if raw_product else "SmartCloud 云服务"
-    else:
-        product = str(raw_product or "SmartCloud 云服务")
+    product, product_summary = _marketing_product_context(request)
+    display_product = product_summary or product
     channel = str(request.payload.get("channel", "web"))
     tone = str(request.payload.get("tone", "professional"))
     cta = str(request.payload.get("cta") or ("立即咨询" if channel == "web" else "联系专属顾问"))
@@ -1113,23 +1746,31 @@ def _marketing_copy_builder(request: ToolInvocationRequest) -> tuple[str, dict[s
         "urgent": "限时窗口期内的优惠机会",
         "friendly": "轻量起步、快速见效的上云选择",
     }.get(tone, "为企业上云准备的稳健方案")
+    bullets = [
+        "高性能算力与弹性规格可按需扩容",
+        "部署快，支持 AI/业务上云场景",
+        "专属顾问和智能服务协同跟进",
+    ]
+    if product_summary:
+        bullets = [
+            f"{product_summary} 适合 AI/大模型场景快速上线",
+            "规格清晰，可衔接营销落地页或销售跟进",
+            "智能服务与专属顾问协同推进转化",
+        ]
     return _with_result(
         "已生成营销文案草稿。",
         {
             "campaign_name": campaign_name,
             "product": product,
+            "product_summary": product_summary or None,
             "channel": channel,
             "tone": tone,
-            "headline": f"{campaign_name} | {product} 专属优惠",
+            "headline": f"{campaign_name} | {display_product} 专属优惠",
             "body": (
-                f"{lead}。围绕 {product} 提供高性能算力、弹性部署能力与 7x24 智能服务支持，"
+                f"{lead}。围绕 {display_product} 提供高性能算力、弹性部署能力与 7x24 智能服务支持，"
                 "适合需要稳定交付和快速上线的业务团队。"
             ),
-            "bullets": [
-                "高性能算力与弹性规格可按需扩容",
-                "部署快，支持 AI/业务上云场景",
-                "专属顾问和智能服务协同跟进",
-            ],
+            "bullets": bullets,
             "cta": cta,
         },
         "baseline://marketing-copy",
@@ -1137,9 +1778,10 @@ def _marketing_copy_builder(request: ToolInvocationRequest) -> tuple[str, dict[s
 
 
 def _marketing_poster_preview_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    _, product_summary = _marketing_product_context(request)
     theme = str(request.payload.get("theme") or _query_payload(request) or "云服务推广海报")
     campaign_name = str(request.payload.get("campaign_name") or "待确认活动")
-    headline = str(request.payload.get("headline") or f"{campaign_name} | {theme}")
+    headline = str(request.payload.get("headline") or f"{campaign_name} | {product_summary or theme}")
     size = str(request.payload.get("size") or "portrait")
     channel = str(request.payload.get("channel") or "web")
     return _with_result(
@@ -1148,6 +1790,7 @@ def _marketing_poster_preview_builder(request: ToolInvocationRequest) -> tuple[s
             "theme": theme,
             "campaign_name": campaign_name,
             "headline": headline,
+            "product_summary": product_summary or None,
             "cta": request.payload.get("cta", "立即咨询"),
             "size": size,
             "channel": channel,
@@ -1160,9 +1803,10 @@ def _marketing_poster_preview_builder(request: ToolInvocationRequest) -> tuple[s
 
 
 def _marketing_poster_execute_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
+    _, product_summary = _marketing_product_context(request)
     theme = str(request.payload.get("theme") or _query_payload(request) or "云服务推广海报")
     campaign_name = str(request.payload.get("campaign_name") or "待确认活动")
-    headline = str(request.payload.get("headline") or f"{campaign_name} | {theme}")
+    headline = str(request.payload.get("headline") or f"{campaign_name} | {product_summary or theme}")
     size = str(request.payload.get("size") or "portrait")
     channel = str(request.payload.get("channel") or "web")
     theme_slug = _slugify_token(theme, fallback="poster")
@@ -1174,6 +1818,7 @@ def _marketing_poster_execute_builder(request: ToolInvocationRequest) -> tuple[s
             "theme": theme,
             "campaign_name": campaign_name,
             "headline": headline,
+            "product_summary": product_summary or None,
             "cta": request.payload.get("cta", "立即咨询"),
             "size": size,
             "channel": channel,
@@ -1201,6 +1846,21 @@ def _promotion_link_preview_builder(request: ToolInvocationRequest) -> tuple[str
         },
         "baseline://marketing-promotion-link",
     )
+
+
+def _marketing_product_context(request: ToolInvocationRequest) -> tuple[str, str]:
+    raw_product = request.payload.get("product")
+    if isinstance(raw_product, list):
+        product = next((str(item).strip() for item in raw_product if str(item).strip()), "")
+    else:
+        product = str(raw_product or "").strip()
+
+    product_summary = str(request.payload.get("product_summary") or "").strip()
+    if not product and product_summary:
+        product = product_summary
+    if not product:
+        product = "SmartCloud 云服务"
+    return product, product_summary
 
 
 def _promotion_link_execute_builder(request: ToolInvocationRequest) -> tuple[str, dict[str, Any], list[str]]:
@@ -1543,6 +2203,55 @@ def build_catalog() -> dict[str, BusinessTool]:
             preview_builder=_product_catalog_builder,
         ),
         _tool(
+            name="product.recommend_instance",
+            capability="product-tech",
+            description="Recommend baseline GPU instance sizing for deployment or training workloads.",
+            tags=["product", "recommendation", "gpu", "tech"],
+            input_schema_hint={
+                "user_query": "string",
+                "workload": "training|inference|general?",
+                "model_family": "llm|multimodal|vision|general?",
+                "budget_level": "cost_optimized|balanced|performance?",
+            },
+            output_schema_hint={
+                "workload": "string",
+                "model_family": "string",
+                "budget_level": "string",
+                "recommended_instance_family": "string",
+                "recommended_instance_type": "string",
+                "gpu_model": "string",
+                "gpu_count": "integer",
+                "vcpu": "integer",
+                "memory_gb": "integer",
+                "network_gbps": "integer",
+                "estimated_monthly_cost_cny": "number",
+                "rationale": "string[]",
+                "alternatives": "object[]",
+            },
+            session_context_bindings={
+                "workload": ["attributes.recommended_workload"],
+                "model_family": ["attributes.recommended_model_family"],
+                "budget_level": ["attributes.recommended_budget_level"],
+            },
+            session_context_output_keys=[
+                "active_products",
+                "attributes.recommended_workload",
+                "attributes.recommended_model_family",
+                "attributes.recommended_budget_level",
+                "attributes.recommended_instance_family",
+                "attributes.recommended_instance_type",
+                "attributes.recommended_gpu_model",
+                "attributes.recommended_gpu_count",
+                "attributes.recommended_vcpu",
+                "attributes.recommended_memory_gb",
+                "attributes.recommended_network_gbps",
+                "attributes.recommended_instance_summary",
+            ],
+            cache_ttl_seconds=90,
+            preview_builder=_product_recommend_instance_preview,
+            execute_builder=_product_recommend_instance_execute,
+        ),
+        _tool(
             name="support.playbook_search",
             capability="product-tech",
             description="Return troubleshooting or deployment SOP candidates.",
@@ -1552,6 +2261,116 @@ def build_catalog() -> dict[str, BusinessTool]:
             session_context_output_keys=["attributes.playbook_titles"],
             cache_ttl_seconds=60,
             preview_builder=_support_playbook_builder,
+        ),
+        _tool(
+            name="support.query_service_status",
+            capability="product-tech",
+            description="Check baseline service or instance health status for technical-support flows.",
+            tags=["support", "status", "incident", "tech"],
+            input_schema_hint={
+                "user_query": "string",
+                "instance_id": "string?",
+                "service": "string?",
+                "region": "string?",
+            },
+            output_schema_hint={
+                "instance_id": "string?",
+                "service_name": "string",
+                "region": "string",
+                "status": "healthy|degraded|outage",
+                "severity": "info|sev2|sev1",
+                "incident_code": "string?",
+                "impact_scope": "string",
+                "symptoms": "string[]",
+                "summary": "string",
+                "recommended_action": "string",
+                "checked_at": "string",
+                "escalation_recommended": "boolean",
+            },
+            session_context_bindings={
+                "instance_id": [
+                    "attributes.instance_id",
+                    "attributes.primary_instance_id",
+                    "attributes.service_affected_instance_id",
+                ],
+                "service": [
+                    "attributes.instance_product",
+                    "attributes.service_name",
+                ],
+                "region": ["attributes.service_region"],
+            },
+            session_context_output_keys=[
+                "active_products",
+                "attributes.service_status",
+                "attributes.service_severity",
+                "attributes.service_incident_code",
+                "attributes.service_status_summary",
+                "attributes.service_recommended_action",
+                "attributes.service_region",
+                "attributes.service_name",
+                "attributes.service_health_checked_at",
+                "attributes.service_affected_instance_id",
+                "attributes.service_escalation_recommended",
+            ],
+            cache_ttl_seconds=15,
+            preview_builder=_support_query_service_status_preview,
+            execute_builder=_support_query_service_status_execute,
+        ),
+        _tool(
+            name="support.handoff_brief",
+            capability="customer-service",
+            description="Prepare a structured human-operator handoff brief for escalations.",
+            tags=["support", "handoff", "human"],
+            input_schema_hint={
+                "user_query": "string",
+                "scene": "customer_service|billing|technical_support|icp|marketing|research?",
+                "urgency": "low|medium|high?",
+                "reason": "string?",
+                "conversation_summary": "string?",
+                "related_resources": "string[]?",
+                "open_ticket_id": "string?",
+                "service_status": "string?",
+                "incident_code": "string?",
+                "status_summary": "string?",
+                "recommended_action": "string?",
+            },
+            output_schema_hint={
+                "queue": "string",
+                "severity": "string",
+                "reason": "string",
+                "summary": "string",
+                "conversation_summary": "string?",
+                "related_resources": "string[]",
+                "open_ticket_id": "string?",
+                "service_status": "string?",
+                "incident_code": "string?",
+                "status_summary": "string?",
+                "recommended_action": "string?",
+                "operator_notes": "string[]",
+            },
+            session_context_bindings={
+                "conversation_summary": ["history_summary"],
+                "related_resources": ["active_products"],
+                "open_ticket_id": ["open_ticket_id"],
+                "service_status": ["attributes.service_status"],
+                "incident_code": ["attributes.service_incident_code"],
+                "status_summary": ["attributes.service_status_summary"],
+                "recommended_action": ["attributes.service_recommended_action"],
+            },
+            session_context_output_keys=[
+                "attributes.human_handoff_queue",
+                "attributes.human_handoff_severity",
+                "attributes.human_handoff_summary",
+                "attributes.human_handoff_reason",
+                "attributes.human_handoff_related_resources",
+                "attributes.human_handoff_existing_ticket_no",
+                "attributes.human_handoff_service_status",
+                "attributes.human_handoff_incident_code",
+                "attributes.human_handoff_recommended_action",
+                "attributes.human_handoff_operator_notes",
+            ],
+            cache_ttl_seconds=30,
+            preview_builder=_support_handoff_brief_builder,
         ),
         _tool(
             name="billing.query_statement",
@@ -1586,6 +2405,7 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "attributes.currency",
                 "attributes.latest_billing_total",
                 "attributes.top_instances",
+                "attributes.primary_instance_id",
             ],
             auth_requirements=ToolAuthRequirements(
                 require_user_id=True,
@@ -1598,6 +2418,62 @@ def build_catalog() -> dict[str, BusinessTool]:
             cache_ttl_seconds=30,
             preview_builder=_billing_query_statement_preview,
             execute_builder=_billing_query_statement_execute,
+        ),
+        _tool(
+            name="billing.query_instance_cost",
+            capability="finance-order",
+            description="Query billing breakdown for a specific cloud instance.",
+            tags=["billing", "instance", "cost", "query"],
+            input_schema_hint={
+                "instance_id": "string",
+                "range": "this_month|last_month|last_3_months|custom?",
+                "billing_cycle": "string?",
+            },
+            input_field_hints={
+                "instance_id": "需要确认实例 ID，例如 gpu-cn-sh2-01 或 ecs-cn-sh2-07。",
+            },
+            output_schema_hint={
+                "instance_id": "string",
+                "instance_name": "string",
+                "product": "string",
+                "billing_cycle": "string",
+                "range": "string",
+                "statement_no": "string",
+                "currency": "string",
+                "total_amount": "number",
+                "daily_average_amount": "number",
+                "compute_amount": "number",
+                "storage_amount": "number",
+                "network_amount": "number",
+                "region": "string",
+            },
+            session_context_bindings={
+                "instance_id": ["attributes.instance_id", "attributes.primary_instance_id"],
+                "range": ["attributes.instance_range", "attributes.billing_range"],
+            },
+            session_context_output_keys=[
+                "active_products",
+                "attributes.instance_id",
+                "attributes.primary_instance_id",
+                "attributes.instance_name",
+                "attributes.instance_product",
+                "attributes.instance_billing_cycle",
+                "attributes.instance_statement_no",
+                "attributes.instance_range",
+                "attributes.last_instance_cost_total",
+                "attributes.currency",
+            ],
+            auth_requirements=ToolAuthRequirements(
+                require_user_id=True,
+                require_account_id=True,
+                required_permissions=["user:billing.read"],
+            ),
+            operation_required_fields={"preview": ["instance_id"], "execute": ["instance_id"]},
+            timeout_ms=5000,
+            idempotent=True,
+            cache_ttl_seconds=30,
+            preview_builder=_billing_query_instance_cost_preview,
+            execute_builder=_billing_query_instance_cost_execute,
         ),
         _tool(
             name="order.query_order",
@@ -1757,18 +2633,76 @@ def build_catalog() -> dict[str, BusinessTool]:
         _tool(
             name="ticket.create",
             capability="finance-order",
-            description="Create a support ticket.",
+            description="Create a support ticket with optional handoff and incident context.",
             tags=["ticket", "support", "write"],
-            input_schema_hint={"subject": "string", "content": "string", "priority": "string?", "category": "string?", "attachments": "string[]?"},
+            input_schema_hint={
+                "subject": "string",
+                "content": "string",
+                "priority": "string?",
+                "category": "string?",
+                "scene": "string?",
+                "queue": "string?",
+                "incident_code": "string?",
+                "service_status": "string?",
+                "status_summary": "string?",
+                "recommended_action": "string?",
+                "related_resources": "string[]?",
+                "operator_notes": "string[]?",
+                "attachments": "string[]?",
+            },
             input_field_hints={
                 "subject": "需要确认工单主题。",
                 "content": "需要补充工单描述或排障内容。",
             },
-            output_schema_hint={"ticket_no": "string", "status": "string", "sla_minutes": "number"},
+            output_schema_hint={
+                "ticket_no": "string",
+                "status": "string",
+                "sla_minutes": "number",
+                "subject": "string",
+                "content": "string",
+                "priority": "string",
+                "category": "string",
+                "scene": "string",
+                "queue": "string?",
+                "incident_code": "string?",
+                "service_status": "string?",
+                "related_resources": "string[]",
+            },
+            session_context_bindings={
+                "subject": [
+                    "attributes.human_handoff_summary",
+                    "attributes.service_status_summary",
+                    "attributes.ticket_subject",
+                ],
+                "content": [
+                    "attributes.human_handoff_summary",
+                    "history_summary",
+                    "attributes.service_status_summary",
+                ],
+                "priority": ["attributes.human_handoff_severity", "attributes.ticket_priority"],
+                "queue": ["attributes.human_handoff_queue", "attributes.ticket_queue"],
+                "incident_code": ["attributes.human_handoff_incident_code", "attributes.service_incident_code"],
+                "service_status": ["attributes.human_handoff_service_status", "attributes.service_status"],
+                "status_summary": ["attributes.service_status_summary"],
+                "recommended_action": [
+                    "attributes.human_handoff_recommended_action",
+                    "attributes.service_recommended_action",
+                ],
+                "related_resources": [
+                    "attributes.human_handoff_related_resources",
+                    "active_products",
+                ],
+                "operator_notes": ["attributes.human_handoff_operator_notes"],
+            },
             session_context_output_keys=[
                 "open_ticket_id",
                 "attributes.ticket_status",
                 "attributes.ticket_subject",
+                "attributes.ticket_priority",
+                "attributes.ticket_category",
+                "attributes.ticket_queue",
+                "attributes.ticket_incident_code",
+                "attributes.ticket_related_resources",
             ],
             mode="write",
             auth_requirements=ToolAuthRequirements(
@@ -2070,9 +3004,33 @@ def build_catalog() -> dict[str, BusinessTool]:
             capability="ops-marketing",
             description="Find campaigns and hooks for a product or segment.",
             tags=["marketing", "campaign", "promotion"],
-            input_schema_hint={"product": "string?", "user_query": "string?"},
-            output_schema_hint={"campaigns": "object[]"},
-            session_context_output_keys=["active_products", "attributes.last_campaign_name"],
+            input_schema_hint={
+                "product": "string?",
+                "product_summary": "string?",
+                "user_query": "string?",
+            },
+            output_schema_hint={
+                "matched_query": "string",
+                "matched_product": "string",
+                "product_summary": "string?",
+                "campaigns": "object[]",
+            },
+            session_context_bindings={
+                "product": [
+                    "attributes.recommended_instance_type",
+                    "attributes.recommended_instance_family",
+                    "active_products",
+                ],
+                "product_summary": [
+                    "attributes.recommended_instance_summary",
+                    "attributes.last_marketing_product_summary",
+                ],
+            },
+            session_context_output_keys=[
+                "active_products",
+                "attributes.last_campaign_name",
+                "attributes.last_marketing_product_summary",
+            ],
             auth_requirements=ToolAuthRequirements(
                 require_user_id=True,
                 required_permissions=["user:marketing.read"],
@@ -2085,12 +3043,32 @@ def build_catalog() -> dict[str, BusinessTool]:
             capability="ops-marketing",
             description="Prepare poster/copy brief for downstream creative generation.",
             tags=["marketing", "poster", "creative"],
-            input_schema_hint={"theme": "string", "cta": "string?"},
+            input_schema_hint={
+                "theme": "string",
+                "product_summary": "string?",
+                "cta": "string?",
+            },
             input_field_hints={
                 "theme": "需要确认海报主题或宣传方向。",
             },
-            output_schema_hint={"theme": "string", "copy_points": "string[]"},
-            session_context_output_keys=["attributes.poster_theme", "attributes.poster_cta"],
+            output_schema_hint={
+                "theme": "string",
+                "product": "string",
+                "product_summary": "string?",
+                "copy_points": "string[]",
+            },
+            session_context_bindings={
+                "theme": ["attributes.poster_theme", "attributes.recommended_instance_summary"],
+                "product_summary": [
+                    "attributes.recommended_instance_summary",
+                    "attributes.last_marketing_product_summary",
+                ],
+            },
+            session_context_output_keys=[
+                "attributes.poster_theme",
+                "attributes.poster_cta",
+                "attributes.last_marketing_product_summary",
+            ],
             auth_requirements=ToolAuthRequirements(
                 require_user_id=True,
                 required_permissions=["user:marketing.write"],
@@ -2108,6 +3086,7 @@ def build_catalog() -> dict[str, BusinessTool]:
             input_schema_hint={
                 "campaign_name": "string",
                 "product": "string?",
+                "product_summary": "string?",
                 "channel": "web|wechat|email|sms?",
                 "tone": "professional|urgent|friendly?",
                 "cta": "string?",
@@ -2120,10 +3099,19 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "body": "string",
                 "bullets": "string[]",
                 "cta": "string",
+                "product_summary": "string?",
             },
             session_context_bindings={
                 "campaign_name": ["attributes.last_campaign_name"],
-                "product": ["active_products"],
+                "product": [
+                    "attributes.recommended_instance_type",
+                    "attributes.recommended_instance_family",
+                    "active_products",
+                ],
+                "product_summary": [
+                    "attributes.recommended_instance_summary",
+                    "attributes.last_marketing_product_summary",
+                ],
                 "channel": ["attributes.promotion_channel"],
             },
             session_context_output_keys=[
@@ -2132,6 +3120,7 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "attributes.last_marketing_copy_campaign_name",
                 "attributes.last_marketing_copy_channel",
                 "attributes.last_marketing_copy_cta",
+                "attributes.last_marketing_product_summary",
             ],
             prerequisite_tool_names=["marketing.campaign_lookup"],
             auth_requirements=ToolAuthRequirements(
@@ -2194,6 +3183,7 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "theme": "string",
                 "campaign_name": "string?",
                 "headline": "string?",
+                "product_summary": "string?",
                 "cta": "string?",
                 "size": "portrait|landscape|square?",
                 "channel": "web|wechat|email|sms?",
@@ -2208,11 +3198,16 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "headline": "string",
                 "size": "string",
                 "campaign_name": "string",
+                "product_summary": "string?",
             },
             session_context_bindings={
                 "theme": ["attributes.poster_theme"],
                 "campaign_name": ["attributes.last_campaign_name", "attributes.last_marketing_copy_campaign_name"],
                 "headline": ["attributes.poster_headline", "attributes.last_marketing_copy_headline"],
+                "product_summary": [
+                    "attributes.recommended_instance_summary",
+                    "attributes.last_marketing_product_summary",
+                ],
                 "cta": ["attributes.poster_cta", "attributes.last_marketing_copy_cta"],
                 "channel": ["attributes.last_marketing_copy_channel", "attributes.promotion_channel"],
             },
@@ -2224,6 +3219,7 @@ def build_catalog() -> dict[str, BusinessTool]:
                 "attributes.poster_size",
                 "attributes.poster_theme",
                 "attributes.last_campaign_name",
+                "attributes.last_marketing_product_summary",
             ],
             prerequisite_tool_names=["marketing.poster_brief"],
             mode="write",

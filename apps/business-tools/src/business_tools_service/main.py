@@ -12,11 +12,17 @@ from business_tools_service.core.config import get_settings
 from business_tools_service.core.logging import configure_logging
 
 settings = get_settings()
-configure_idempotency_store(persistence_path=settings.idempotency_store_path)
+configure_idempotency_store(
+    persistence_path=settings.idempotency_store_path,
+    redis_url=settings.redis_url,
+    redis_namespace=f"{settings.redis_namespace}:idempotency",
+)
 configure_query_cache(
     enabled=settings.tool_query_cache_enabled,
     ttl_cap_seconds=settings.tool_query_cache_ttl_cap_seconds,
     persistence_path=settings.query_cache_store_path,
+    redis_url=settings.redis_url,
+    redis_namespace=f"{settings.redis_namespace}:query-cache",
 )
 configure_logging(settings.log_level)
 

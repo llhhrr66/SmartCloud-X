@@ -8,13 +8,13 @@ export interface ErrorInfo {
 export interface TraceContextSchema {
   requestId?: string;
   traceId: string;
-  conversationId?: string;
-  userId?: string;
-  tenantId?: string;
-  callerService?: string;
-  toolCallId?: string;
-  idempotencyKey?: string;
-  operatorReason?: string;
+  conversationId?: string | null;
+  userId?: string | null;
+  tenantId?: string | null;
+  callerService?: string | null;
+  toolCallId?: string | null;
+  idempotencyKey?: string | null;
+  operatorReason?: string | null;
   tags?: string[];
 }
 
@@ -32,6 +32,30 @@ export interface HealthStatus {
   version?: string;
   timestamp?: string;
   checks?: Record<string, 'ok' | 'degraded' | 'error'>;
+}
+
+export interface RuntimeDependencyReadiness {
+  ready: boolean;
+  status: string;
+  mode: 'transport-local' | 'http';
+  service: string;
+  httpStatus?: number;
+  notReadyComponents?: string[];
+  error?: string;
+}
+
+export interface RuntimeHealthStatus {
+  status: 'ok' | 'degraded';
+  service: string;
+  degraded_components: string[];
+  runtime: Record<string, unknown>;
+}
+
+export interface RuntimeReadinessStatus {
+  status: 'ready' | 'not_ready';
+  service: string;
+  not_ready_components: string[];
+  runtime: Record<string, unknown>;
 }
 
 export interface ServiceCallerContext {
@@ -241,6 +265,32 @@ export interface AdminAuditListData extends OffsetPagination {
   items: AdminAuditRecord[];
 }
 
+export interface AdminAgentRecord {
+  name: AgentName;
+  code: string;
+  display_name: string;
+  domain: string;
+  description: string;
+  supported_scenes?: SceneName[];
+  tool_whitelist?: string[];
+  fallback_agent?: string;
+  max_tool_calls?: number;
+  enabled?: boolean;
+  timeout_seconds?: number;
+}
+
+export interface AdminAgentListData {
+  items: AdminAgentRecord[];
+  total: number;
+}
+
+export interface AdminAgentConfigUpdateRequest {
+  enabled?: boolean;
+  max_tool_calls?: number;
+  fallback_agent?: string;
+  timeout_seconds?: number;
+}
+
 export interface KnowledgeRuntimeSnapshot {
   exportedAt: string;
   service: string;
@@ -330,6 +380,22 @@ export interface OrchestratorStreamDoneEventData {
   usage: OrchestratorStreamUsage;
   next_action: string;
   pending_actions: string[];
+}
+
+export interface OrchestratorStreamEventRecord {
+  event_id: string;
+  sequence: number;
+  event: 'meta' | 'reasoning' | 'retrieval' | 'tool_call' | 'tool_result' | 'delta' | 'citation' | 'done';
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface OrchestratorStreamEventPage {
+  conversation_id: string;
+  message_id: string;
+  items: OrchestratorStreamEventRecord[];
+  next_event_id?: string | null;
+  has_more: boolean;
 }
 
 export interface MarketingCampaign {
@@ -686,7 +752,20 @@ export interface UserProfile {
   permissions?: string[];
   account_id?: string | null;
   tenant_id?: string;
+  locale?: string;
+  channel?: string;
   vip_level?: string;
+}
+
+export interface UserProfilePatch {
+  user_id?: string | null;
+  roles?: string[];
+  permissions?: string[];
+  account_id?: string | null;
+  tenant_id?: string | null;
+  locale?: string | null;
+  channel?: string | null;
+  vip_level?: string | null;
 }
 
 export interface SessionContext {
@@ -791,6 +870,7 @@ export interface ToolUserActionHint {
   requires_account_context?: boolean;
   confirmation_required?: boolean;
   session_context_bindings?: Record<string, string[]>;
+  user_profile_bindings?: Record<string, string[]>;
   confirm_tool_names?: string[];
 }
 
@@ -1080,6 +1160,7 @@ export interface PendingUserAction {
   requires_account_context?: boolean;
   confirmation_required?: boolean;
   session_context_bindings?: Record<string, string[]>;
+  user_profile_bindings?: Record<string, string[]>;
   confirm_tool_names?: string[];
 }
 
@@ -1193,6 +1274,22 @@ export interface SessionMessagesPage {
   has_more?: boolean;
 }
 
+export interface StreamEventRecord {
+  event_id: string;
+  sequence: number;
+  event: 'meta' | 'reasoning' | 'retrieval' | 'tool_call' | 'tool_result' | 'delta' | 'citation' | 'done';
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface StreamEventPage {
+  conversation_id: string;
+  message_id: string;
+  items?: StreamEventRecord[];
+  next_event_id?: string | null;
+  has_more: boolean;
+}
+
 export interface SessionRetryRequest {
   message_id: string;
   override_input?: string | null;
@@ -1204,6 +1301,7 @@ export interface SessionContinueRequest {
   field_values?: Record<string, unknown>;
   confirm_tool_names?: string[];
   session_context_patch?: Record<string, unknown>;
+  user_profile_patch?: UserProfilePatch;
 }
 
 export interface SessionCancelRequest {
@@ -1522,10 +1620,17 @@ export interface BusinessCompensationExecuteResponse {
 export type FoundationErrorCode =
   | 'AUTH_INVALID_TOKEN'
   | 'AUTH_UNAUTHORIZED'
+  | 'BUSINESS_TOOLS_CALLER_FORBIDDEN'
+  | 'ORCH_AGENT_NOT_FOUND'
   | 'CHAT_CONVERSATION_ARCHIVED'
   | 'CHAT_CONVERSATION_NOT_FOUND'
+  | 'CHAT_CONTINUATION_NOT_AVAILABLE'
+  | 'CHAT_CONVERSATION_RUNNING'
   | 'CHAT_CONVERSATION_RESTORE_INVALID'
+  | 'CHAT_MESSAGE_CANCELLED'
   | 'CHAT_MESSAGE_NOT_FOUND'
+  | 'CHAT_MESSAGE_NOT_RUNNING'
+  | 'CHAT_STREAM_EVENTS_NOT_FOUND'
   | 'IDEMPOTENCY_CONFLICT'
   | 'INTERNAL_ERROR'
   | 'KNOWLEDGE_SYNC_FAILED'
@@ -1540,15 +1645,23 @@ export type FoundationErrorCode =
   | 'RAG_RETRIEVAL_UNAVAILABLE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
+  | 'TOOL_HUB_CALLER_FORBIDDEN'
   | 'VALIDATION_ERROR';
 
 export const foundationErrorCodes: FoundationErrorCode[] = [
   'AUTH_INVALID_TOKEN',
   'AUTH_UNAUTHORIZED',
+  'BUSINESS_TOOLS_CALLER_FORBIDDEN',
+  'ORCH_AGENT_NOT_FOUND',
   'CHAT_CONVERSATION_ARCHIVED',
   'CHAT_CONVERSATION_NOT_FOUND',
+  'CHAT_CONTINUATION_NOT_AVAILABLE',
+  'CHAT_CONVERSATION_RUNNING',
   'CHAT_CONVERSATION_RESTORE_INVALID',
+  'CHAT_MESSAGE_CANCELLED',
   'CHAT_MESSAGE_NOT_FOUND',
+  'CHAT_MESSAGE_NOT_RUNNING',
+  'CHAT_STREAM_EVENTS_NOT_FOUND',
   'IDEMPOTENCY_CONFLICT',
   'INTERNAL_ERROR',
   'KNOWLEDGE_SYNC_FAILED',
@@ -1563,6 +1676,7 @@ export const foundationErrorCodes: FoundationErrorCode[] = [
   'RAG_RETRIEVAL_UNAVAILABLE',
   'RATE_LIMITED',
   'SERVICE_UNAVAILABLE',
+  'TOOL_HUB_CALLER_FORBIDDEN',
   'VALIDATION_ERROR'
 ];
 
@@ -1572,6 +1686,9 @@ export const schemaRegistry = {
     errorInfo: 'error-info.schema.json',
     healthStatus: 'health-status.schema.json',
     paginationMeta: 'pagination-meta.schema.json',
+    runtimeDependencyReadiness: 'runtime-dependency-readiness.schema.json',
+    runtimeHealthStatus: 'runtime-health-status.schema.json',
+    runtimeReadinessStatus: 'runtime-readiness-status.schema.json',
     serviceCallerContext: 'service-caller-context.schema.json',
     traceContext: 'trace-context.schema.json'
   },
@@ -1598,6 +1715,9 @@ export const schemaRegistry = {
       operationStatusData: 'external/auth/operation-status-data.schema.json'
     },
     admin: {
+      adminAgentConfigUpdateRequest: 'external/admin/admin-agent-config-update-request.schema.json',
+      adminAgentListData: 'external/admin/admin-agent-list-data.schema.json',
+      adminAgentRecord: 'external/admin/admin-agent-record.schema.json',
       adminAuditRecord: 'external/admin/admin-audit-record.schema.json',
       adminAuditListData: 'external/admin/admin-audit-list-data.schema.json',
       adminMenuItem: 'external/admin/admin-menu-item.schema.json',
@@ -1698,6 +1818,8 @@ export const schemaRegistry = {
       streamDeltaEventData: 'internal/orchestrator/stream-delta-event-data.schema.json',
       streamDoneEventData: 'internal/orchestrator/stream-done-event-data.schema.json',
       streamEvent: 'internal/orchestrator/stream-event.schema.json',
+      streamEventPage: 'internal/orchestrator/stream-event-page.schema.json',
+      streamEventRecord: 'internal/orchestrator/stream-event-record.schema.json',
       streamMetaEventData: 'internal/orchestrator/stream-meta-event-data.schema.json',
       streamReasoningEventData: 'internal/orchestrator/stream-reasoning-event-data.schema.json',
       streamRetrievalEventData: 'internal/orchestrator/stream-retrieval-event-data.schema.json',
@@ -1708,7 +1830,8 @@ export const schemaRegistry = {
       toolContextItem: 'internal/orchestrator/tool-context-item.schema.json',
       toolInvocation: 'internal/orchestrator/tool-invocation.schema.json',
       toolPlanItem: 'internal/orchestrator/tool-plan-item.schema.json',
-      userProfile: 'internal/orchestrator/user-profile.schema.json'
+      userProfile: 'internal/orchestrator/user-profile.schema.json',
+      userProfilePatch: 'internal/orchestrator/user-profile-patch.schema.json'
     },
     toolHub: {
       compensationCallRequest: 'internal/tool-hub/compensation-call-request.schema.json',

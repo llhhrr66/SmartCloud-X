@@ -24,11 +24,13 @@ def _assert_structured_error(payload: dict[str, Any], code: int) -> None:
 
 
 def _login_demo_user(tmp_path: Path) -> str:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     with service_test_client(
         "auth-user-service",
         env_overrides={
             **AUTH_ENV,
             "AUTH_USER_SERVICE_DATA_PATH": str(tmp_path / "auth-store.json"),
+            "AUTH_USER_SERVICE_DATABASE_URL": f"sqlite:///{(tmp_path / 'auth-store.db').as_posix()}",
         },
     ) as client:
         response = client.post(
@@ -136,6 +138,60 @@ def test_research_error_envelopes_cover_401_and_409(tmp_path: Path) -> None:
         assert conflict.status_code == 409
         assert_standard_headers(conflict.headers)
         _assert_structured_error(conflict.json(), 4090001)
+
+
+def test_marketing_rate_limit_returns_structured_429(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    access_token = _login_demo_user(tmp_path / "auth")
+    with service_test_client(
+        "marketing-service",
+        env_overrides={
+            **AUTH_ENV,
+            "MARKETING_SERVICE_DATA_PATH": str(tmp_path / "marketing-store.json"),
+        },
+    ) as client:
+        from app import models, routes
+
+        store = routes.get_marketing_store()
+
+        def raise_rate_limit(*, user_id: str, tenant_id: str | None, payload: Any) -> None:
+            del user_id, tenant_id, payload
+            raise models.ServiceError(
+                429,
+                4291001,
+                "marketing copy generation rate limit exceeded",
+                error_type="rate_limited",
+                details={
+                    "retry_after_seconds": 30,
+                    "scope": "marketing.copy.generate",
+                },
+            )
+
+        monkeypatch.setattr(store, "create_copy", raise_rate_limit)
+
+        response = client.post(
+            "/api/v1/marketing/copy/generate",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "campaign_id": "cmp_gpu_launch_001",
+                "topic": "QA 429 coverage",
+                "audience": "平台运营",
+                "tone": "launch",
+                "keywords": ["GPU", "限流"],
+            },
+        )
+
+        assert response.status_code == 429
+        assert_standard_headers(response.headers)
+        payload = response.json()
+        _assert_structured_error(payload, 4291001)
+        assert payload["data"] is None
+        assert payload["message"] == "marketing copy generation rate limit exceeded"
+        assert payload["error"]["type"] == "rate_limited"
+        assert payload["error"]["details"]["retry_after_seconds"] == 30
+        assert payload["error"]["details"]["scope"] == "marketing.copy.generate"
 
 
 def test_research_permission_denial_returns_structured_403(tmp_path: Path) -> None:
@@ -285,7 +341,9 @@ def test_tool_hub_timeout_returns_retryable_timeout_and_audits_it(
         assert audit_payload["error"]["details"]["exception"] == "ReadTimeout"
 
 
-def test_rag_answer_handles_empty_and_degraded_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rag_retrieve_diagnose_and_answer_handle_empty_and_degraded_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with service_test_client("rag-service") as client:
         from app.api.routes import rag as rag_routes
         from app.services import knowledge_client as knowledge_client_module
@@ -299,35 +357,98 @@ def test_rag_answer_handles_empty_and_degraded_fallbacks(monkeypatch: pytest.Mon
         monkeypatch.setattr(rag_routes, "get_retrieval_service", lambda: RetrievalService(QueryRewriter()))
         monkeypatch.setattr(RetrievalService, "search_candidates", empty_search)
 
-        response = client.post(
+        retrieve = client.post(
+            "/api/rag/v1/retrieve",
+            headers={"X-Request-Id": "qa-rag-empty-retrieve-1"},
+            json={"query": "未知问题", "topK": 3},
+        )
+        diagnose = client.post(
+            "/api/rag/v1/diagnose",
+            headers={"X-Request-Id": "qa-rag-empty-diagnose-1"},
+            json={"query": "未知问题", "topK": 3},
+        )
+        answer = client.post(
             "/api/rag/v1/answer",
-            headers={"X-Request-Id": "qa-rag-empty-1"},
+            headers={"X-Request-Id": "qa-rag-empty-answer-1"},
             json={"query": "未知问题", "topK": 3},
         )
 
-        assert response.status_code == 200
-        assert_standard_headers(response.headers)
-        payload = response.json()
-        assert payload["success"] is True
-        assert payload["data"]["degraded"] is False
-        assert "没有检索到可引用知识" in payload["data"]["answer"]
-        assert any("未检索到匹配知识" in note for note in payload["data"]["coverageNotes"])
+        assert retrieve.status_code == 200
+        assert_standard_headers(retrieve.headers)
+        retrieve_payload = retrieve.json()
+        assert retrieve_payload["success"] is True
+        assert retrieve_payload["data"]["degraded"] is False
+        assert retrieve_payload["data"]["citations"] == []
+        assert any("未检索到匹配知识" in note for note in retrieve_payload["data"]["coverageNotes"])
+
+        assert diagnose.status_code == 200
+        assert_standard_headers(diagnose.headers)
+        diagnose_payload = diagnose.json()
+        assert diagnose_payload["success"] is True
+        assert diagnose_payload["data"]["candidateCount"] == 0
+        assert diagnose_payload["data"]["citations"] == []
+        assert diagnose_payload["data"]["degraded"] is False
+        assert any("未检索到匹配知识" in note for note in diagnose_payload["data"]["coverageNotes"])
+
+        assert answer.status_code == 200
+        assert_standard_headers(answer.headers)
+        answer_payload = answer.json()
+        assert answer_payload["success"] is True
+        assert answer_payload["data"]["degraded"] is False
+        assert "没有检索到可引用知识" in answer_payload["data"]["answer"]
+        assert any("未检索到匹配知识" in note for note in answer_payload["data"]["coverageNotes"])
 
         async def broken_search(*args, **kwargs):
             raise knowledge_client_module.httpx.ReadTimeout("timed out", request=None)
 
         monkeypatch.setattr(RetrievalService, "search_candidates", broken_search)
 
-        degraded = client.post(
+        degraded_retrieve = client.post(
+            "/api/rag/v1/retrieve",
+            headers={"X-Request-Id": "qa-rag-timeout-retrieve-1"},
+            json={"query": "GPU 部署", "topK": 3},
+        )
+        degraded_diagnose = client.post(
+            "/api/rag/v1/diagnose",
+            headers={"X-Request-Id": "qa-rag-timeout-diagnose-1"},
+            json={"query": "GPU 部署", "topK": 3},
+        )
+        degraded_answer = client.post(
             "/api/rag/v1/answer",
-            headers={"X-Request-Id": "qa-rag-timeout-1"},
+            headers={"X-Request-Id": "qa-rag-timeout-answer-1"},
             json={"query": "GPU 部署", "topK": 3},
         )
 
-        assert degraded.status_code == 200
-        assert_standard_headers(degraded.headers)
-        degraded_payload = degraded.json()
-        assert degraded_payload["success"] is True
-        assert degraded_payload["data"]["degraded"] is True
-        assert "没有检索到可引用知识" in degraded_payload["data"]["answer"]
-        assert degraded_payload["data"]["coverageNotes"][0] == "knowledge-service unavailable: ReadTimeout"
+        assert degraded_retrieve.status_code == 200
+        assert_standard_headers(degraded_retrieve.headers)
+        degraded_retrieve_payload = degraded_retrieve.json()
+        assert degraded_retrieve_payload["success"] is True
+        assert degraded_retrieve_payload["data"]["degraded"] is True
+        assert degraded_retrieve_payload["data"]["citations"] == []
+        assert (
+            degraded_retrieve_payload["data"]["coverageNotes"][0]
+            == "knowledge-service unavailable: ReadTimeout"
+        )
+
+        assert degraded_diagnose.status_code == 200
+        assert_standard_headers(degraded_diagnose.headers)
+        degraded_diagnose_payload = degraded_diagnose.json()
+        assert degraded_diagnose_payload["success"] is True
+        assert degraded_diagnose_payload["data"]["candidateCount"] == 0
+        assert degraded_diagnose_payload["data"]["citations"] == []
+        assert degraded_diagnose_payload["data"]["degraded"] is True
+        assert (
+            degraded_diagnose_payload["data"]["coverageNotes"][0]
+            == "knowledge-service unavailable: ReadTimeout"
+        )
+
+        assert degraded_answer.status_code == 200
+        assert_standard_headers(degraded_answer.headers)
+        degraded_answer_payload = degraded_answer.json()
+        assert degraded_answer_payload["success"] is True
+        assert degraded_answer_payload["data"]["degraded"] is True
+        assert "没有检索到可引用知识" in degraded_answer_payload["data"]["answer"]
+        assert (
+            degraded_answer_payload["data"]["coverageNotes"][0]
+            == "knowledge-service unavailable: ReadTimeout"
+        )

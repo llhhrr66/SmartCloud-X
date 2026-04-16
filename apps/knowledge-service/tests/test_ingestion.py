@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Thread
 
 from fastapi.testclient import TestClient
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from prometheus_client.parser import text_string_to_metric_families
 
 
@@ -29,7 +30,7 @@ from app.api.routes import health as health_routes
 from app.core.config import get_settings
 from app.core.tracing import configure_tracing, get_tracer, get_tracer_provider
 from app.main import app as service_app
-from app.models.admin import KnowledgeBaseProfile, KnowledgeDocumentProfile
+from app.models.admin import AdminAsyncJob, KnowledgeBaseProfile, KnowledgeDocumentProfile
 from app.models.knowledge import (
     CreateSourceRequest,
     FileImportPreviewRequest,
@@ -44,6 +45,9 @@ from app.services.admin_audit import get_admin_audit_service
 from app.services.file_import import FileImportService, get_file_import_service
 from app.services.health import get_health_service
 from app.services import indexing_worker as indexing_worker_module
+from app.services import metadata_backend as metadata_backend_module
+from app.services import runtime_sync as runtime_sync_module
+from app.services import store as store_module
 from app.services.ingestion import IngestionService
 from app.services.ingestion import get_ingestion_service
 from app.services.indexing_worker import (
@@ -102,6 +106,23 @@ def start_trace_collector() -> tuple[ThreadingHTTPServer, Thread]:
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
+
+
+def exported_span_names() -> set[str]:
+    names: set[str] = set()
+    for request in TraceCollectorHandler.requests:
+        if request.get("path") != "/v1/traces":
+            continue
+        body = request.get("body")
+        if not isinstance(body, (bytes, bytearray)) or not body:
+            continue
+        export_request = ExportTraceServiceRequest()
+        export_request.ParseFromString(body)
+        for resource_span in export_request.resource_spans:
+            for scope_span in resource_span.scope_spans:
+                for span in scope_span.spans:
+                    names.add(span.name)
+    return names
 
 
 class ConnectorCaptureHandler(BaseHTTPRequestHandler):
@@ -263,6 +284,30 @@ class FakeRedisClient:
     def lpush(self, key: str, value: str) -> None:
         self.lists.setdefault(key, []).insert(0, value)
 
+    def rpoplpush(self, source: str, destination: str) -> str | None:
+        source_items = self.lists.setdefault(source, [])
+        if not source_items:
+            return None
+        value = source_items.pop()
+        self.lists.setdefault(destination, []).insert(0, value)
+        return value
+
+    def lrem(self, key: str, count: int, value: str) -> int:
+        items = self.lists.setdefault(key, [])
+        if count == 0:
+            removed = len([item for item in items if item == value])
+            self.lists[key] = [item for item in items if item != value]
+            return removed
+        removed = 0
+        remaining: list[str] = []
+        for item in items:
+            if item == value and removed < abs(count):
+                removed += 1
+                continue
+            remaining.append(item)
+        self.lists[key] = remaining
+        return removed
+
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.store[key] = value
 
@@ -272,6 +317,123 @@ class FakeRedisClient:
 
     def delete(self, key: str) -> None:
         self.store.pop(key, None)
+
+
+class FakeMetadataBackend:
+    kb_profiles: dict[str, KnowledgeBaseProfile] = {}
+    document_profiles: dict[str, KnowledgeDocumentProfile] = {}
+    admin_jobs: dict[str, AdminAsyncJob] = {}
+
+    def __init__(self, dsn: str) -> None:
+        self.dsn = dsn
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.kb_profiles = {}
+        cls.document_profiles = {}
+        cls.admin_jobs = {}
+
+    def sync_from_local(
+        self,
+        *,
+        knowledge_base_profiles: list[KnowledgeBaseProfile],
+        document_profiles: list[KnowledgeDocumentProfile],
+        admin_jobs: list[AdminAsyncJob],
+    ) -> None:
+        for profile in knowledge_base_profiles:
+            self.__class__.kb_profiles[profile.kb_id] = profile.model_copy(deep=True)
+        for profile in document_profiles:
+            self.__class__.document_profiles[profile.doc_id] = profile.model_copy(deep=True)
+        for job in admin_jobs:
+            self.__class__.admin_jobs[job.job_id] = job.model_copy(deep=True)
+
+    def replace_profiles(
+        self,
+        *,
+        knowledge_base_profiles: list[KnowledgeBaseProfile],
+        document_profiles: list[KnowledgeDocumentProfile],
+    ) -> None:
+        self.__class__.kb_profiles = {
+            profile.kb_id: profile.model_copy(deep=True) for profile in knowledge_base_profiles
+        }
+        self.__class__.document_profiles = {
+            profile.doc_id: profile.model_copy(deep=True) for profile in document_profiles
+        }
+
+    def list_knowledge_base_profiles(self) -> list[KnowledgeBaseProfile]:
+        return [profile.model_copy(deep=True) for profile in self.__class__.kb_profiles.values()]
+
+    def list_document_profiles(self) -> list[KnowledgeDocumentProfile]:
+        return [profile.model_copy(deep=True) for profile in self.__class__.document_profiles.values()]
+
+    def list_admin_jobs(self) -> list[AdminAsyncJob]:
+        return [job.model_copy(deep=True) for job in self.__class__.admin_jobs.values()]
+
+    def load_state(self):
+        return metadata_backend_module.KnowledgeMetadataState(
+            knowledge_base_profiles=self.list_knowledge_base_profiles(),
+            document_profiles=self.list_document_profiles(),
+            admin_jobs=self.list_admin_jobs(),
+        )
+
+    def upsert_knowledge_base_profile(self, profile: KnowledgeBaseProfile) -> None:
+        self.__class__.kb_profiles[profile.kb_id] = profile.model_copy(deep=True)
+
+    def upsert_document_profile(self, profile: KnowledgeDocumentProfile) -> None:
+        self.__class__.document_profiles[profile.doc_id] = profile.model_copy(deep=True)
+
+    def upsert_admin_job(self, job: AdminAsyncJob) -> None:
+        self.__class__.admin_jobs[job.job_id] = job.model_copy(deep=True)
+
+
+class SearchBackendHandler(BaseHTTPRequestHandler):
+    requests: list[dict[str, object]] = []
+    opensearch_hits: list[dict[str, object]] = []
+    qdrant_hits: list[dict[str, object]] = []
+    fail_requests: bool = False
+
+    def _send_json(self, status_code: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib callback signature
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        path = self.path.split("?", 1)[0]
+        self.__class__.requests.append(
+            {
+                "method": "POST",
+                "path": path,
+                "body": body.decode("utf-8"),
+            }
+        )
+        if self.__class__.fail_requests:
+            self._send_json(500, {"error": "forced failure"})
+            return
+        if path.endswith("/_search"):
+            self._send_json(200, {"hits": {"hits": self.__class__.opensearch_hits}})
+            return
+        if path.endswith("/points/search"):
+            self._send_json(200, {"result": self.__class__.qdrant_hits})
+            return
+        self._send_json(404, {"error": "not found"})
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A003 - stdlib callback signature
+        return
+
+
+def start_search_backend_server() -> tuple[ThreadingHTTPServer, Thread]:
+    SearchBackendHandler.requests = []
+    SearchBackendHandler.opensearch_hits = []
+    SearchBackendHandler.qdrant_hits = []
+    SearchBackendHandler.fail_requests = False
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SearchBackendHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
 
 
 def metric_sample_value(text: str, sample_name: str, labels: dict[str, str] | None = None) -> float:
@@ -341,6 +503,122 @@ def test_search_matches_ingested_content(tmp_path) -> None:
     assert any(bucket.label == "gpu" for bucket in result.tag_breakdown)
     assert result.results[0].chunk.document_id == response.document.id
     assert result.results[0].score > 0
+
+
+def test_search_prefers_live_backends_when_configured(tmp_path) -> None:
+    backend_server, backend_thread = start_search_backend_server()
+    backend_base = f"http://127.0.0.1:{backend_server.server_port}"
+    original_qdrant_url = os.environ.get("SMARTCLOUD_QDRANT_URL")
+    original_opensearch_url = os.environ.get("SMARTCLOUD_OPENSEARCH_URL")
+    os.environ["SMARTCLOUD_QDRANT_URL"] = backend_base
+    os.environ["SMARTCLOUD_OPENSEARCH_URL"] = backend_base
+    clear_service_caches()
+
+    try:
+        repository = KnowledgeStoreRepository(tmp_path / "knowledge.json")
+        response = IngestionService(repository).ingest_document(
+            IngestDocumentRequest(
+                source=CreateSourceRequest(name="GPU Live Backend", kind="manual", tags=["gpu"]),
+                title="GPU Live Retrieval",
+                content="GPU Live Retrieval 会验证知识搜索在配置了 Qdrant 和 OpenSearch 时优先命中实时后端结果。",
+                tags=["gpu", "live"],
+            )
+        )
+        chunk = repository.list_chunks(document_id=response.document.id)[0]
+        SearchBackendHandler.opensearch_hits = [
+            {
+                "_score": 6.4,
+                "_source": {
+                    "source_id": chunk.source_id,
+                    "source_name": "GPU Live Backend",
+                    "document_id": chunk.document_id,
+                    "document_title": chunk.document_title,
+                    "chunk_id": chunk.id,
+                    "content": chunk.content,
+                    "keywords": chunk.keywords,
+                    "tags": chunk.tags,
+                    "ordinal": chunk.ordinal,
+                    "created_at": chunk.created_at,
+                },
+            }
+        ]
+        SearchBackendHandler.qdrant_hits = [
+            {
+                "score": 0.91,
+                "payload": {
+                    "source_id": chunk.source_id,
+                    "source_name": "GPU Live Backend",
+                    "document_id": chunk.document_id,
+                    "document_title": chunk.document_title,
+                    "chunk_id": chunk.id,
+                    "content": chunk.content,
+                    "keywords": chunk.keywords,
+                    "tags": chunk.tags,
+                    "ordinal": chunk.ordinal,
+                    "created_at": chunk.created_at,
+                },
+            }
+        ]
+
+        result = SearchService(repository).search(SearchRequest(query="GPU Live Retrieval", topK=3))
+
+        assert result.total == 1
+        assert result.results[0].chunk.id == chunk.id
+        assert "hit +" in result.results[0].match_reason
+        assert any(request["path"].endswith("/_search") for request in SearchBackendHandler.requests)
+        assert any(request["path"].endswith("/points/search") for request in SearchBackendHandler.requests)
+    finally:
+        backend_server.shutdown()
+        backend_thread.join(timeout=2)
+        if original_qdrant_url is None:
+            os.environ.pop("SMARTCLOUD_QDRANT_URL", None)
+        else:
+            os.environ["SMARTCLOUD_QDRANT_URL"] = original_qdrant_url
+        if original_opensearch_url is None:
+            os.environ.pop("SMARTCLOUD_OPENSEARCH_URL", None)
+        else:
+            os.environ["SMARTCLOUD_OPENSEARCH_URL"] = original_opensearch_url
+        clear_service_caches()
+
+
+def test_search_falls_back_to_local_results_when_live_backends_fail(tmp_path) -> None:
+    backend_server, backend_thread = start_search_backend_server()
+    backend_base = f"http://127.0.0.1:{backend_server.server_port}"
+    original_qdrant_url = os.environ.get("SMARTCLOUD_QDRANT_URL")
+    original_opensearch_url = os.environ.get("SMARTCLOUD_OPENSEARCH_URL")
+    os.environ["SMARTCLOUD_QDRANT_URL"] = backend_base
+    os.environ["SMARTCLOUD_OPENSEARCH_URL"] = backend_base
+    clear_service_caches()
+    SearchBackendHandler.fail_requests = True
+
+    try:
+        repository = KnowledgeStoreRepository(tmp_path / "knowledge.json")
+        response = IngestionService(repository).ingest_document(
+            IngestDocumentRequest(
+                source=CreateSourceRequest(name="GPU Local Fallback", kind="manual", tags=["gpu"]),
+                title="GPU Local Fallback",
+                content="GPU Local Fallback 会验证实时检索后端失败时，知识服务仍然回退到本地关键词搜索。",
+                tags=["gpu", "fallback"],
+            )
+        )
+
+        result = SearchService(repository).search(SearchRequest(query="GPU Local Fallback", topK=3))
+
+        assert result.total == 1
+        assert result.results[0].chunk.document_id == response.document.id
+        assert result.results[0].match_reason.startswith("matched tokens:")
+    finally:
+        backend_server.shutdown()
+        backend_thread.join(timeout=2)
+        if original_qdrant_url is None:
+            os.environ.pop("SMARTCLOUD_QDRANT_URL", None)
+        else:
+            os.environ["SMARTCLOUD_QDRANT_URL"] = original_qdrant_url
+        if original_opensearch_url is None:
+            os.environ.pop("SMARTCLOUD_OPENSEARCH_URL", None)
+        else:
+            os.environ["SMARTCLOUD_OPENSEARCH_URL"] = original_opensearch_url
+        clear_service_caches()
 
 
 def test_ingestion_reuses_matching_source_and_duplicate_document(tmp_path) -> None:
@@ -797,6 +1075,269 @@ def test_snapshot_service_prefers_informative_profile_fields_across_legacy_dupli
     assert snapshot.document_profiles[0].file_id == "starter/gpu-snapshot-duplicate.md"
 
 
+def test_repository_reloads_metadata_from_mysql_backend_when_local_json_drifts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_path = tmp_path / "runtime" / "knowledge-store.json"
+    original_mysql_dsn = os.environ.get("SMARTCLOUD_MYSQL_DSN")
+    os.environ["SMARTCLOUD_MYSQL_DSN"] = "mysql+pymysql://smartcloud:smartcloud@mysql.test:3306/smartcloud"
+    FakeMetadataBackend.reset()
+    monkeypatch.setattr(
+        KnowledgeStoreRepository,
+        "_build_metadata_backend",
+        lambda self: None,
+    )
+    clear_service_caches()
+
+    try:
+        repository = KnowledgeStoreRepository(runtime_path)
+        repository._metadata_backend = FakeMetadataBackend(os.environ["SMARTCLOUD_MYSQL_DSN"])
+        service = IngestionService(repository)
+        response = service.ingest_document(
+            IngestDocumentRequest(
+                source=CreateSourceRequest(
+                    name="GPU Metadata Reload",
+                    kind="product",
+                    uri="kb://gpu-metadata-reload",
+                    tags=["gpu", "reload"],
+                ),
+                title="GPU Metadata Reload",
+                content="GPU Metadata Reload 会验证知识服务在本地 JSON 漂移后，仍能从 MySQL 运行时元数据恢复知识库画像和异步任务状态。",
+                tags=["gpu", "reload"],
+            )
+        )
+        source = response.source
+        profile = KnowledgeBaseProfile(
+            kb_id=source.id,
+            code="gpu-metadata-reload",
+            scene="product",
+            language="zh-CN",
+            retrieval_mode="hybrid-baseline",
+            embedding_model="baseline-keyword",
+            status="ready",
+            created_at=source.created_at,
+            updated_at=source.updated_at,
+        )
+        document_profile = KnowledgeDocumentProfile(
+            doc_id=response.document.id,
+            kb_id=source.id,
+            status="active",
+            parse_status="completed",
+            index_status="ready",
+            version_no=2,
+            file_id="starter/gpu-metadata-reload.md",
+            source_type="filesystem",
+            source_uri="file:///tmp/gpu-metadata-reload.md",
+            indexed_at=response.document.updated_at,
+            latest_job_id=response.job.id,
+        )
+        admin_job = AdminAsyncJob(
+            job_id="job-metadata-reload",
+            type="knowledge_document_create",
+            status="succeeded",
+            progress=100,
+            created_at=response.job.created_at,
+            params={"doc_id": response.document.id},
+            finished_at=response.job.completed_at,
+        )
+        repository.save_knowledge_base_profile(profile)
+        repository.save_document_profile(document_profile)
+        repository.save_admin_job(admin_job)
+
+        drifted_payload = json.loads(runtime_path.read_text(encoding="utf-8"))
+        drifted_payload["knowledge_base_profiles"] = {
+            source.id: profile.model_copy(
+                update={"retrieval_mode": "json-stale", "status": "disabled"}
+            ).model_dump(mode="json", by_alias=True)
+        }
+        drifted_payload["document_profiles"] = {
+            response.document.id: document_profile.model_copy(
+                update={
+                    "version_no": 1,
+                    "file_id": None,
+                    "source_type": "inline",
+                    "source_uri": "kb://json-stale",
+                    "latest_job_id": "job-json-stale",
+                }
+            ).model_dump(mode="json", by_alias=True)
+        }
+        drifted_payload["admin_jobs"] = {
+            admin_job.job_id: admin_job.model_copy(
+                update={
+                    "status": "running",
+                    "progress": 20,
+                    "error_message": "json drift",
+                    "finished_at": None,
+                }
+            ).model_dump(mode="json", by_alias=True)
+        }
+        runtime_path.write_text(json.dumps(drifted_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        reloaded_repository = KnowledgeStoreRepository(runtime_path)
+        reloaded_repository._metadata_backend = repository._metadata_backend
+        reloaded_repository._prime_metadata_backend()
+        reloaded_snapshot = KnowledgeSnapshotService(
+            reloaded_repository,
+            KnowledgeAnalyticsService(reloaded_repository),
+            get_admin_audit_service(),
+            KnowledgeRuntimeSyncService(reloaded_repository),
+        ).build_snapshot()
+
+        assert reloaded_repository.get_knowledge_base_profile(source.id) is not None
+        assert reloaded_repository.get_document_profile(response.document.id) is not None
+        assert reloaded_repository.get_admin_job("job-metadata-reload") is not None
+        assert reloaded_repository.get_knowledge_base_profile(source.id).retrieval_mode == "hybrid-baseline"
+        assert reloaded_repository.get_knowledge_base_profile(source.id).status == "ready"
+        assert reloaded_repository.get_document_profile(response.document.id).version_no == 2
+        assert (
+            reloaded_repository.get_document_profile(response.document.id).file_id
+            == "starter/gpu-metadata-reload.md"
+        )
+        assert reloaded_repository.get_admin_job("job-metadata-reload").status == "succeeded"
+        assert reloaded_snapshot.counts["knowledgeBases"] == 1
+        assert reloaded_snapshot.counts["documentProfiles"] == 1
+        assert reloaded_snapshot.counts["adminJobs"] >= 1
+    finally:
+        if original_mysql_dsn is None:
+            os.environ.pop("SMARTCLOUD_MYSQL_DSN", None)
+        else:
+            os.environ["SMARTCLOUD_MYSQL_DSN"] = original_mysql_dsn
+        clear_service_caches()
+
+
+def test_snapshot_service_refreshes_authoritative_metadata_before_export(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_path = tmp_path / "runtime" / "knowledge-store.json"
+    original_mysql_dsn = os.environ.get("SMARTCLOUD_MYSQL_DSN")
+    os.environ["SMARTCLOUD_MYSQL_DSN"] = "mysql+pymysql://smartcloud:smartcloud@mysql.test:3306/smartcloud"
+    FakeMetadataBackend.reset()
+    monkeypatch.setattr(
+        KnowledgeStoreRepository,
+        "_build_metadata_backend",
+        lambda self: None,
+    )
+    clear_service_caches()
+
+    try:
+        repository = KnowledgeStoreRepository(runtime_path)
+        repository._metadata_backend = FakeMetadataBackend(os.environ["SMARTCLOUD_MYSQL_DSN"])
+        service = IngestionService(repository)
+        response = service.ingest_document(
+            IngestDocumentRequest(
+                source=CreateSourceRequest(
+                    name="GPU Snapshot Refresh",
+                    kind="product",
+                    uri="kb://gpu-snapshot-refresh",
+                    tags=["gpu", "refresh"],
+                ),
+                title="GPU Snapshot Refresh",
+                content="GPU Snapshot Refresh 会验证快照导出前会先从 MySQL 运行时元数据刷新 KB、文档和异步任务状态。",
+                tags=["gpu", "refresh"],
+            )
+        )
+        source = response.source
+        profile = KnowledgeBaseProfile(
+            kb_id=source.id,
+            code="gpu-snapshot-refresh",
+            scene="product",
+            language="zh-CN",
+            retrieval_mode="hybrid-baseline",
+            embedding_model="baseline-keyword",
+            status="ready",
+            created_at=source.created_at,
+            updated_at=source.updated_at,
+        )
+        document_profile = KnowledgeDocumentProfile(
+            doc_id=response.document.id,
+            kb_id=source.id,
+            status="active",
+            parse_status="completed",
+            index_status="ready",
+            version_no=1,
+            file_id=None,
+            source_type="inline",
+            source_uri=source.uri,
+            indexed_at=response.document.updated_at,
+            latest_job_id=response.job.id,
+        )
+        repository.save_knowledge_base_profile(profile)
+        repository.save_document_profile(document_profile)
+        repository.save_admin_job(
+            AdminAsyncJob(
+                job_id=response.job.id,
+                type="knowledge_document_create",
+                status="succeeded",
+                progress=100,
+                created_at=response.job.created_at,
+                params={"doc_id": response.document.id},
+                finished_at=response.job.completed_at,
+            )
+        )
+
+        refreshed_profile = profile.model_copy(
+            update={"retrieval_mode": "hybrid-tightened", "status": "disabled"}
+        )
+        refreshed_document_profile = document_profile.model_copy(
+            update={
+                "version_no": 3,
+                "file_id": "starter/gpu-snapshot-refresh.md",
+                "source_type": "filesystem",
+                "source_uri": "file:///tmp/gpu-snapshot-refresh.md",
+                "latest_job_id": "job-refresh-snapshot",
+            }
+        )
+        refreshed_job = AdminAsyncJob(
+            job_id="job-refresh-snapshot",
+            type="knowledge_document_reindex",
+            status="succeeded",
+            progress=100,
+            created_at=response.job.created_at,
+            params={"doc_id": response.document.id, "reason": "refresh"},
+            finished_at=response.job.completed_at,
+        )
+        FakeMetadataBackend.kb_profiles[source.id] = refreshed_profile.model_copy(deep=True)
+        FakeMetadataBackend.document_profiles[response.document.id] = refreshed_document_profile.model_copy(
+            deep=True
+        )
+        FakeMetadataBackend.admin_jobs[refreshed_job.job_id] = refreshed_job.model_copy(deep=True)
+
+        snapshot = KnowledgeSnapshotService(
+            repository,
+            KnowledgeAnalyticsService(repository),
+            get_admin_audit_service(),
+            KnowledgeRuntimeSyncService(repository),
+        ).build_snapshot()
+
+        refreshed_repository_profile = repository.get_knowledge_base_profile(source.id)
+        refreshed_repository_document = repository.get_document_profile(response.document.id)
+        refreshed_repository_job = repository.get_admin_job(refreshed_job.job_id)
+
+        assert refreshed_repository_profile is not None
+        assert refreshed_repository_profile.retrieval_mode == "hybrid-tightened"
+        assert refreshed_repository_profile.status == "disabled"
+        assert refreshed_repository_document is not None
+        assert refreshed_repository_document.version_no == 3
+        assert refreshed_repository_document.file_id == "starter/gpu-snapshot-refresh.md"
+        assert refreshed_repository_document.source_type == "filesystem"
+        assert refreshed_repository_job is not None
+        assert refreshed_repository_job.type == "knowledge_document_reindex"
+        assert snapshot.knowledge_bases[0].kb_id == source.id
+        assert snapshot.knowledge_bases[0].retrieval_mode == "hybrid-tightened"
+        assert snapshot.knowledge_bases[0].status == "disabled"
+        assert snapshot.document_profiles[0].latest_job_id == "job-refresh-snapshot"
+        assert snapshot.document_profiles[0].source_type == "filesystem"
+        assert any(job.job_id == "job-refresh-snapshot" for job in snapshot.admin_jobs)
+    finally:
+        if original_mysql_dsn is None:
+            os.environ.pop("SMARTCLOUD_MYSQL_DSN", None)
+        else:
+            os.environ["SMARTCLOUD_MYSQL_DSN"] = original_mysql_dsn
+        clear_service_caches()
+
+
 def test_runtime_sync_mirrors_raw_documents_and_records_outbox(tmp_path) -> None:
     runtime_path = tmp_path / "runtime" / "knowledge-store.json"
     outbox_path = tmp_path / "runtime" / "knowledge-indexing-outbox.jsonl"
@@ -876,7 +1417,7 @@ def test_runtime_sync_mirrors_raw_documents_and_records_outbox(tmp_path) -> None
         assert integrations.pending_events == 1
         assert integrations.event_counters["queued"] == 1
         assert integrations.recent_events[0].doc_id == response.document.id
-        assert integrations.raw_storage.backend == "minio-mirror"
+        assert integrations.raw_storage.backend == "minio"
     finally:
         if original_data_path is None:
             os.environ.pop("SMARTCLOUD_KNOWLEDGE_DATA_PATH", None)
@@ -1014,6 +1555,110 @@ def test_runtime_sync_tracks_outbox_event_lifecycle(tmp_path) -> None:
             os.environ.pop("SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT", None)
         else:
             os.environ["SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT"] = original_raw_root
+        clear_service_caches()
+
+
+def test_runtime_sync_uses_redis_pending_and_processing_lists_when_configured(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_path = tmp_path / "runtime" / "knowledge-store.json"
+    outbox_path = tmp_path / "runtime" / "knowledge-indexing-outbox.jsonl"
+    raw_root = tmp_path / "runtime" / "raw-objects"
+    fake_redis = FakeRedisClient()
+
+    original_data_path = os.environ.get("SMARTCLOUD_KNOWLEDGE_DATA_PATH")
+    original_outbox_path = os.environ.get("SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH")
+    original_raw_root = os.environ.get("SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT")
+    original_redis_url = os.environ.get("SMARTCLOUD_REDIS_URL")
+    os.environ["SMARTCLOUD_KNOWLEDGE_DATA_PATH"] = str(runtime_path)
+    os.environ["SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH"] = str(outbox_path)
+    os.environ["SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT"] = str(raw_root)
+    os.environ["SMARTCLOUD_REDIS_URL"] = "redis://redis.test:6379/0"
+    clear_service_caches()
+    monkeypatch.setattr(
+        runtime_sync_module,
+        "redis",
+        type("FakeRedisModule", (), {"from_url": staticmethod(lambda *args, **kwargs: fake_redis)}),
+    )
+
+    try:
+        repository = get_repository()
+        service = IngestionService(repository)
+        source = service.create_source(
+            CreateSourceRequest(
+                name="GPU Redis Queue KB",
+                kind="product",
+                uri="kb://gpu-redis-queue",
+                tags=["gpu"],
+            )
+        )
+        repository.save_knowledge_base_profile(
+            KnowledgeBaseProfile(
+                kb_id=source.id,
+                code="gpu-redis-queue",
+                scene="product",
+                language="zh-CN",
+                retrieval_mode="hybrid-baseline",
+                embedding_model="baseline-keyword",
+                status="ready",
+                created_at=source.created_at,
+                updated_at=source.updated_at,
+            )
+        )
+
+        response = service.ingest_document(
+            IngestDocumentRequest(
+                sourceId=source.id,
+                title="GPU Redis Queue Lifecycle",
+                content="GPU Redis Queue Lifecycle 会验证 Redis pending/processing 列表会承接活动队列，而 JSONL 仅保留审计日志。",
+                tags=["gpu", "redis", "queue"],
+            )
+        )
+
+        runtime_sync = KnowledgeRuntimeSyncService(repository)
+        pending_key = f"{get_settings().redis_namespace}:{get_settings().task_queue_name}:pending"
+        processing_key = f"{get_settings().redis_namespace}:{get_settings().task_queue_name}:processing"
+        assert response.job.id
+        assert any(response.document.id in line for line in outbox_path.read_text(encoding="utf-8").splitlines())
+        assert fake_redis.lists[pending_key]
+
+        claimed = runtime_sync.claim_next_event("worker-redis")
+        assert claimed is not None
+        assert claimed.doc_id == response.document.id
+        assert fake_redis.lists[pending_key] == []
+        assert fake_redis.lists[processing_key] == [claimed.event_id]
+
+        failed = runtime_sync.mark_event_failed(claimed.event_id, "redis-backed retry")
+        assert failed is not None
+        assert failed.status == "failed"
+        assert fake_redis.lists[pending_key] == [claimed.event_id]
+        assert fake_redis.lists[processing_key] == []
+
+        retried = runtime_sync.claim_next_event("worker-redis-2")
+        completed = runtime_sync.mark_event_completed(retried.event_id) if retried else None
+        assert retried is not None
+        assert completed is not None
+        assert fake_redis.lists[pending_key] == []
+        assert fake_redis.lists[processing_key] == []
+        assert runtime_sync.build_integrations().task_queue.backend == "redis-list-primary"
+    finally:
+        if original_data_path is None:
+            os.environ.pop("SMARTCLOUD_KNOWLEDGE_DATA_PATH", None)
+        else:
+            os.environ["SMARTCLOUD_KNOWLEDGE_DATA_PATH"] = original_data_path
+        if original_outbox_path is None:
+            os.environ.pop("SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH", None)
+        else:
+            os.environ["SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH"] = original_outbox_path
+        if original_raw_root is None:
+            os.environ.pop("SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT", None)
+        else:
+            os.environ["SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT"] = original_raw_root
+        if original_redis_url is None:
+            os.environ.pop("SMARTCLOUD_REDIS_URL", None)
+        else:
+            os.environ["SMARTCLOUD_REDIS_URL"] = original_redis_url
         clear_service_caches()
 
 
@@ -2219,6 +2864,66 @@ def test_otlp_tracing_exports_ingestion_request(tmp_path) -> None:
             request["path"] == "/v1/traces" and request["body"]
             for request in TraceCollectorHandler.requests
         )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        for key, value in originals.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_service_caches()
+
+
+def test_otlp_tracing_exports_snapshot_span(tmp_path) -> None:
+    server, thread = start_trace_collector()
+    runtime_path = tmp_path / "runtime" / "knowledge-store.json"
+    outbox_path = tmp_path / "runtime" / "knowledge-indexing-outbox.jsonl"
+    raw_root = tmp_path / "runtime" / "raw-objects"
+
+    tracked_keys = {
+        "SMARTCLOUD_KNOWLEDGE_DATA_PATH": str(runtime_path),
+        "SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH": str(outbox_path),
+        "SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT": str(raw_root),
+        "SMARTCLOUD_TRACE_ENABLED": "true",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://127.0.0.1:{server.server_port}",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    }
+    originals = {key: os.environ.get(key) for key in tracked_keys}
+    for key, value in tracked_keys.items():
+        os.environ[key] = value
+
+    try:
+        clear_service_caches()
+        if hasattr(service_app.state, "tracing_configured"):
+            delattr(service_app.state, "tracing_configured")
+        configure_tracing(service_app, get_settings())
+        client = TestClient(service_app)
+        ingest_response = client.post(
+            "/api/knowledge/v1/documents:ingest",
+            json={
+                "source": {
+                    "name": "Trace Snapshot KB",
+                    "kind": "manual",
+                    "uri": "kb://trace-snapshot",
+                    "tags": ["trace", "snapshot"],
+                },
+                "title": "Trace Snapshot Export",
+                "content": "Trace Snapshot Export 会验证快照导出路径本身也会导出 OTLP span。",
+                "tags": ["trace", "snapshot"],
+            },
+        )
+        assert ingest_response.status_code == 201
+
+        snapshot_response = client.get("/api/knowledge/v1/snapshot")
+        assert snapshot_response.status_code == 200
+
+        provider = get_tracer_provider()
+        assert provider is not None
+        provider.force_flush()
+        time.sleep(0.2)
+
+        assert "knowledge.snapshot.export" in exported_span_names()
     finally:
         server.shutdown()
         thread.join(timeout=2)

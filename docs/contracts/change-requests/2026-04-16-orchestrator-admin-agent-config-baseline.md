@@ -51,3 +51,15 @@ Promote an additive orchestrator admin agent-config baseline into frozen docs/Op
   - `apps/orchestrator-service/tests/test_config.py`
 - log or failing validation reference(s):
   - current frozen docs/contracts/OpenAPI coverage does not enumerate orchestrator admin agent-config routes or the new runtime keys even though the owned service now ships them
+
+## Foundation Processing Result
+- processed at: 2026-04-16
+- decision: accepted and implemented in frozen space
+- implemented:
+  - promoted shared admin agent-config DTO baselines (`AdminAgentRecord`, `AdminAgentListData`, `AdminAgentConfigUpdateRequest`) into `@smartcloud-x/common-schemas`
+  - documented `GET /api/v1/admin/agents` plus `PATCH /api/v1/admin/agents/{agent_code}` in `openapi/orchestrator-service.openapi.yaml`, including current `scene` / `status` filters, process-local override fields, and the live `ORCH_AGENT_NOT_FOUND` failure baseline
+  - documented the owner-local orchestrator runtime knobs `DEFAULT_AGENT_TIMEOUT_SECONDS` and `AGENT_CONFIG_STORE_PATH` in shared runtime/admin baseline docs as process-local settings rather than shared root env keys
+- deferred:
+  - canonical gateway-admin envelope normalization for this route family remains future work; the current owner service still returns internal `ApiEnvelope` responses
+- rationale:
+  - the route family already exists in the owned orchestrator implementation and is reused by admin/debug tooling, so frozen shared docs/OpenAPI needed to remove ambiguity without pretending the current process-local baseline is already a distributed control plane

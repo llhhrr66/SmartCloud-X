@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/runtime-health-status.schema.json",
+  "title": "RuntimeHealthStatus",
+  "type": "object",
+  "required": [
+    "status",
+    "service",
+    "degraded_components",
+    "runtime"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "degraded"
+      ]
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "degraded_components": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

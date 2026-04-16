@@ -1,4 +1,5 @@
 import type { SceneName } from '@smartcloud-x/common-schemas';
+import type { ApiErrorDetailsInfo, ApiUserActionKind } from '../core/envelope';
 
 export type LoginType = 'password' | 'sms' | 'email_code';
 export type AuthCodeScene = 'login' | 'reset_password';
@@ -239,21 +240,35 @@ export interface ChatActionRequiredPayload {
   code: number | string;
   message: string;
   type: 'manual_intervention' | 'clarification' | 'permission';
+  action?: ApiUserActionKind;
+  toolName?: string;
+  toolCallId?: string;
+  agent?: string;
+  details?: ApiErrorDetailsInfo;
 }
 
+export interface SharedStreamRetryHint {
+  retry?: number;
+}
+
+type SharedChatStreamEvent<TEvent extends string, TData> = SharedStreamRetryHint & {
+  event: TEvent;
+  data: TData;
+};
+
 export type ChatStreamEvent =
-  | { event: 'meta'; data: ChatMetaPayload }
-  | { event: 'reasoning'; data: ChatReasoningPayload }
-  | { event: 'route'; data: ChatRoutePayload }
-  | { event: 'tool_call'; data: ToolCallRecord }
-  | { event: 'tool_result'; data: ToolCallRecord }
-  | { event: 'retrieval'; data: ChatRetrievalPayload }
-  | { event: 'delta'; data: ChatDeltaPayload }
-  | { event: 'citation'; data: ChatCitationPayload }
-  | { event: 'done'; data: ChatDonePayload }
-  | { event: 'error'; data: ChatErrorPayload }
-  | { event: 'action_required'; data: ChatActionRequiredPayload }
-  | { event: 'ping'; data: Record<string, never> };
+  | SharedChatStreamEvent<'meta', ChatMetaPayload>
+  | SharedChatStreamEvent<'reasoning', ChatReasoningPayload>
+  | SharedChatStreamEvent<'route', ChatRoutePayload>
+  | SharedChatStreamEvent<'tool_call', ToolCallRecord>
+  | SharedChatStreamEvent<'tool_result', ToolCallRecord>
+  | SharedChatStreamEvent<'retrieval', ChatRetrievalPayload>
+  | SharedChatStreamEvent<'delta', ChatDeltaPayload>
+  | SharedChatStreamEvent<'citation', ChatCitationPayload>
+  | SharedChatStreamEvent<'done', ChatDonePayload>
+  | SharedChatStreamEvent<'error', ChatErrorPayload>
+  | SharedChatStreamEvent<'action_required', ChatActionRequiredPayload>
+  | SharedChatStreamEvent<'ping', Record<string, never>>;
 
 export interface SessionListQuery {
   page?: number;

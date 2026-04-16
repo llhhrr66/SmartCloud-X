@@ -28,9 +28,11 @@ REQUIRED_ARTIFACTS = (
     "tests/e2e/playwright.root.config.ts",
     "tests/e2e/test_browser_entry.spec.ts",
     "tests/e2e/test_ui_smoke.py",
+    "scripts/qa/qa_env.sh",
     "scripts/qa/openapi_contracts.py",
     "scripts/qa/baseline_expectations.py",
     "scripts/qa/check_release_readiness.py",
+    "scripts/qa/infra_persistence_matrix.py",
     "scripts/qa/project_smoke.py",
     "scripts/qa/run_full_stack_validation.sh",
     "scripts/qa/verify_openapi_contracts.py",
@@ -94,11 +96,13 @@ def build_readiness_report() -> dict[str, object]:
             missing.append(rel_path)
 
     known_issues = parse_known_issues(REPO_ROOT / "docs" / "reviews" / "known-issues.md")
+    focused_readiness = build_focused_readiness_report()
     return {
         "ok": not missing,
         "missingArtifacts": missing,
         "artifacts": artifact_report,
-        "focusedReadiness": build_focused_readiness_report(),
+        "focusedReadiness": focused_readiness,
+        "infraPersistence": focused_readiness.get("focusAreas", {}).get("infraPersistence"),
         "openapi": build_summary(),
         "knownIssues": known_issues,
     }

@@ -12,7 +12,7 @@ import { formatDateTime, sceneLabels, toolStatusLabel } from '../lib/format';
 import { createRequestId } from '../lib/request-meta';
 import { recordTelemetryEvent } from '../lib/telemetry';
 import { buildConversationTitle, createId } from '../lib/utils';
-import { consumeSseStreamWithReconnect, isAbortError } from '../shared-sdk';
+import { classifyApiError, consumeSseStreamWithReconnect, isAbortError } from '../shared-sdk';
 import {
   conversationStoreActions,
   createInitialStreamState,
@@ -67,11 +67,7 @@ function toErrorMessage(error: unknown, fallback: string): string {
 }
 
 function isConversationNotFoundError(error: unknown): boolean {
-  if (error instanceof ApiError) {
-    return error.status === 404 || error.code === 'CHAT_CONVERSATION_NOT_FOUND' || error.code === 5002005;
-  }
-
-  return error instanceof Error && error.message.includes('会话不存在');
+  return classifyApiError(error) === 'not_found' || (error instanceof Error && error.message.includes('会话不存在'));
 }
 
 export function ChatPage(): JSX.Element {
@@ -541,9 +537,11 @@ export function ChatPage(): JSX.Element {
 
     try {
       const result = await chatService.retryMessage(activeConversation.conversationId, latestRetriableMessage.messageId);
+      const currentTraceId = getSseStoreState().stream.traceId;
       sseStoreActions.replace(activeConversation.conversationId, result.messageId, {
         ...createInitialStreamState(),
         agent: result.agentName,
+        traceId: currentTraceId,
         toolCalls: result.toolCalls ?? [],
         citations: result.citations ?? [],
         finishReason: result.finishReason,
@@ -639,15 +637,8 @@ export function ChatPage(): JSX.Element {
     setCitationError(null);
 
     try {
-      const detail = await citationService.getCitationDetail(citation.id);
-      setSelectedCitation({
-        ...detail,
-        title: detail.title || citation.title,
-        sourceType: detail.sourceType || citation.sourceType,
-        docId: detail.docId || citation.docId,
-        chunkId: detail.chunkId || citation.chunkId,
-        url: detail.url ?? citation.url
-      });
+      const detail = await citationService.getCitationDetail(citation.id, citation);
+      setSelectedCitation(detail);
     } catch (error) {
       setSelectedCitation(null);
       setCitationError(toErrorMessage(error, '加载引用详情失败'));

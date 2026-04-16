@@ -11,6 +11,10 @@ from business_tools import (
 def test_catalog_contains_spec_and_legacy_tools() -> None:
     catalog = build_catalog()
     assert "billing.query_statement" in catalog
+    assert "billing.query_instance_cost" in catalog
+    assert "product.recommend_instance" in catalog
+    assert "support.query_service_status" in catalog
+    assert "support.handoff_brief" in catalog
     assert "order.query_order" in catalog
     assert "invoice.query_invoice" in catalog
     assert "ticket.query_ticket" in catalog
@@ -47,8 +51,13 @@ def test_tool_definitions_expose_session_context_bindings_and_dependencies() -> 
     catalog = build_catalog()
     invoice_definition = catalog["billing.create_invoice"].definition
     billing_definition = catalog["billing.query_statement"].definition
+    instance_cost_definition = catalog["billing.query_instance_cost"].definition
+    product_recommend_definition = catalog["product.recommend_instance"].definition
+    service_status_definition = catalog["support.query_service_status"].definition
+    handoff_definition = catalog["support.handoff_brief"].definition
     order_query_definition = catalog["order.query_order"].definition
     invoice_query_definition = catalog["invoice.query_invoice"].definition
+    ticket_create_definition = catalog["ticket.create"].definition
     ticket_query_definition = catalog["ticket.query_ticket"].definition
     icp_verify_definition = catalog["icp.verify_subject"].definition
     icp_query_definition = catalog["icp.query_application"].definition
@@ -58,6 +67,27 @@ def test_tool_definitions_expose_session_context_bindings_and_dependencies() -> 
     export_definition = catalog["research.export_report"].definition
 
     assert billing_definition.session_context_bindings["range"] == ["attributes.billing_range"]
+    assert instance_cost_definition.session_context_bindings["instance_id"] == [
+        "attributes.instance_id",
+        "attributes.primary_instance_id",
+    ]
+    assert "attributes.last_instance_cost_total" in instance_cost_definition.session_context_output_keys
+    assert product_recommend_definition.session_context_bindings["workload"] == [
+        "attributes.recommended_workload"
+    ]
+    assert "attributes.recommended_instance_type" in product_recommend_definition.session_context_output_keys
+    assert service_status_definition.session_context_bindings["instance_id"] == [
+        "attributes.instance_id",
+        "attributes.primary_instance_id",
+        "attributes.service_affected_instance_id",
+    ]
+    assert "attributes.service_status_summary" in service_status_definition.session_context_output_keys
+    assert handoff_definition.session_context_bindings["conversation_summary"] == ["history_summary"]
+    assert handoff_definition.session_context_bindings["related_resources"] == ["active_products"]
+    assert handoff_definition.session_context_bindings["service_status"] == ["attributes.service_status"]
+    assert handoff_definition.session_context_bindings["incident_code"] == ["attributes.service_incident_code"]
+    assert "attributes.human_handoff_summary" in handoff_definition.session_context_output_keys
+    assert "attributes.human_handoff_incident_code" in handoff_definition.session_context_output_keys
     assert order_query_definition.session_context_bindings["order_no"] == [
         "attributes.order_no",
         "attributes.refund_order_no",
@@ -73,7 +103,23 @@ def test_tool_definitions_expose_session_context_bindings_and_dependencies() -> 
         "attributes.statement_nos",
         "attributes.statement_no",
         "attributes.billing_cycle",
+        "attributes.primary_instance_id",
     }
+    assert ticket_create_definition.session_context_bindings["subject"] == [
+        "attributes.human_handoff_summary",
+        "attributes.service_status_summary",
+        "attributes.ticket_subject",
+    ]
+    assert ticket_create_definition.session_context_bindings["queue"] == [
+        "attributes.human_handoff_queue",
+        "attributes.ticket_queue",
+    ]
+    assert ticket_create_definition.session_context_bindings["incident_code"] == [
+        "attributes.human_handoff_incident_code",
+        "attributes.service_incident_code",
+    ]
+    assert "attributes.ticket_queue" in ticket_create_definition.session_context_output_keys
+    assert "attributes.ticket_incident_code" in ticket_create_definition.session_context_output_keys
     assert ticket_query_definition.session_context_bindings["ticket_no"] == ["open_ticket_id"]
     assert "attributes.ticket_latest_action" in ticket_query_definition.session_context_output_keys
     assert icp_verify_definition.session_context_bindings["subject_name"] == [
@@ -96,11 +142,34 @@ def test_tool_definitions_expose_session_context_bindings_and_dependencies() -> 
     assert "attributes.website_name" in submit_definition.session_context_output_keys
     assert icp_query_definition.session_context_bindings["application_no"] == ["attributes.application_no"]
     assert "attributes.icp_current_step" in icp_query_definition.session_context_output_keys
+    campaign_definition = catalog["marketing.campaign_lookup"].definition
+    assert campaign_definition.session_context_bindings["product"] == [
+        "attributes.recommended_instance_type",
+        "attributes.recommended_instance_family",
+        "active_products",
+    ]
+    assert campaign_definition.session_context_bindings["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert copy_definition.session_context_bindings["campaign_name"] == ["attributes.last_campaign_name"]
+    assert copy_definition.session_context_bindings["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert copy_definition.prerequisite_tool_names == ["marketing.campaign_lookup"]
     assert promotion_definition.session_context_bindings["campaign_name"] == ["attributes.last_campaign_name"]
     assert promotion_definition.prerequisite_tool_names == ["marketing.campaign_lookup"]
+    poster_brief_definition = catalog["marketing.poster_brief"].definition
+    assert poster_brief_definition.session_context_bindings["theme"] == [
+        "attributes.poster_theme",
+        "attributes.recommended_instance_summary",
+    ]
     assert poster_definition.session_context_bindings["theme"] == ["attributes.poster_theme"]
+    assert poster_definition.session_context_bindings["product_summary"] == [
+        "attributes.recommended_instance_summary",
+        "attributes.last_marketing_product_summary",
+    ]
     assert poster_definition.session_context_bindings["headline"] == [
         "attributes.poster_headline",
         "attributes.last_marketing_copy_headline",
@@ -123,6 +192,12 @@ def test_billing_execute_flags_missing_auth_context() -> None:
     assert result.status == "auth-required"
     assert "account_id" in result.result["missing_context"]
     assert "permission:user:billing.read" in result.result["missing_context"]
+    assert result.user_action_hint is not None
+    assert result.user_action_hint.user_profile_bindings == {
+        "user_id": ["user_id"],
+        "account_id": ["account_id"],
+        "permissions": ["permissions"],
+    }
 
 
 def test_billing_execute_returns_session_context_patch() -> None:
@@ -143,7 +218,119 @@ def test_billing_execute_returns_session_context_patch() -> None:
     assert result.session_context_patch["attributes"]["billing_range"] == "this_month"
     assert result.session_context_patch["attributes"]["billing_cycle"] == "2026-04"
     assert result.session_context_patch["attributes"]["statement_no"] == "stmt_2026_04_001"
+    assert result.session_context_patch["attributes"]["primary_instance_id"] == "gpu-cn-sh2-01"
     assert "GPU 实例" in result.session_context_patch["active_products"]
+
+
+def test_billing_instance_cost_query_returns_session_context_patch() -> None:
+    catalog = build_catalog()
+    result = catalog["billing.query_instance_cost"].invoke(
+        ToolInvocationRequest(
+            tool_name="billing.query_instance_cost",
+            operation="execute",
+            payload={"instance_id": "gpu-cn-sh2-01", "range": "this_month"},
+            context=ToolExecutionContext(
+                user_id="u-1",
+                account_id="acct-1",
+                permissions=["user:billing.read"],
+            ),
+        )
+    )
+
+    assert result.success is True
+    assert result.result["product"] == "GPU 实例"
+    assert result.result["billing_cycle"] == "2026-04"
+    assert result.session_context_patch["attributes"]["instance_id"] == "gpu-cn-sh2-01"
+    assert result.session_context_patch["attributes"]["last_instance_cost_total"] == 412.68
+    assert result.session_context_patch["attributes"]["instance_statement_no"] == "stmt_2026_04_001"
+    assert result.session_context_patch["active_products"] == ["GPU 实例"]
+
+
+def test_product_recommendation_returns_session_context_patch() -> None:
+    catalog = build_catalog()
+    result = catalog["product.recommend_instance"].invoke(
+        ToolInvocationRequest(
+            tool_name="product.recommend_instance",
+            operation="execute",
+            payload={
+                "user_query": "我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例",
+                "workload": "inference",
+                "model_family": "llm",
+                "budget_level": "balanced",
+            },
+            context=ToolExecutionContext(),
+        )
+    )
+
+    assert result.success is True
+    assert result.result["recommended_instance_type"] == "gi4.2xlarge"
+    assert result.result["gpu_model"] == "NVIDIA L40S"
+    assert result.session_context_patch["attributes"]["recommended_instance_type"] == "gi4.2xlarge"
+    assert result.session_context_patch["attributes"]["recommended_gpu_model"] == "NVIDIA L40S"
+    assert "GPU-GI4" in result.session_context_patch["active_products"]
+
+
+def test_service_status_query_returns_diagnostic_session_context_patch() -> None:
+    catalog = build_catalog()
+    result = catalog["support.query_service_status"].invoke(
+        ToolInvocationRequest(
+            tool_name="support.query_service_status",
+            operation="execute",
+            payload={
+                "user_query": "gpu-cn-sh2-01 网络异常，帮我查下服务状态",
+                "instance_id": "gpu-cn-sh2-01",
+            },
+            context=ToolExecutionContext(),
+        )
+    )
+
+    assert result.success is True
+    assert result.status == "completed"
+    assert result.result["status"] == "degraded"
+    assert result.result["region"] == "cn-shanghai-2"
+    assert result.result["incident_code"].startswith("INC-CNSHANGHAI2-")
+    assert result.session_context_patch["attributes"]["service_status"] == "degraded"
+    assert result.session_context_patch["attributes"]["service_affected_instance_id"] == "gpu-cn-sh2-01"
+    assert result.session_context_patch["attributes"]["service_name"] == "实例网络连通性"
+    assert result.session_context_patch["active_products"] == ["实例网络连通性"]
+
+
+def test_handoff_brief_returns_human_operator_packet_and_session_patch() -> None:
+    catalog = build_catalog()
+    result = catalog["support.handoff_brief"].invoke(
+        ToolInvocationRequest(
+            tool_name="support.handoff_brief",
+            operation="execute",
+            payload={
+                "user_query": "服务异常我要转人工",
+                "scene": "technical_support",
+                "urgency": "high",
+                "conversation_summary": "用户反馈 GPU 推理服务不可用。",
+                "related_resources": ["GPU 实例", "gpu-cn-sh2-01"],
+                "service_status": "degraded",
+                "incident_code": "INC-CNSHANGHAI2-GPU-042",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议尽快处理。",
+                "recommended_action": "建议优先检查网络和安全组，并安排值班支持跟进。",
+            },
+            context=ToolExecutionContext(),
+        )
+    )
+
+    assert result.success is True
+    assert result.status == "completed"
+    assert result.result["queue"] == "technical-support-l2"
+    assert result.result["severity"] == "high"
+    assert result.result["reason"] == "service_exception"
+    assert "用户请求人工介入" in result.result["summary"]
+    assert "状态检查" in result.result["summary"]
+    assert result.result["incident_code"] == "INC-CNSHANGHAI2-GPU-042"
+    assert result.session_context_patch["attributes"]["human_handoff_queue"] == "technical-support-l2"
+    assert result.session_context_patch["attributes"]["human_handoff_service_status"] == "degraded"
+    assert result.session_context_patch["attributes"]["human_handoff_incident_code"] == "INC-CNSHANGHAI2-GPU-042"
+    assert result.session_context_patch["attributes"]["human_handoff_related_resources"] == [
+        "GPU 实例",
+        "gpu-cn-sh2-01",
+    ]
 
 
 def test_order_and_invoice_query_tools_return_session_context_patch() -> None:
@@ -340,6 +527,39 @@ def test_ticket_create_requires_ticket_write_permission() -> None:
     assert "permission:user:ticket.write" in result.result["missing_context"]
 
 
+def test_ticket_create_reuses_handoff_context_for_ticket_summary() -> None:
+    catalog = build_catalog()
+    result = catalog["ticket.create"].invoke(
+        ToolInvocationRequest(
+            tool_name="ticket.create",
+            operation="execute",
+            payload={
+                "scene": "technical_support",
+                "subject": "gpu-cn-sh2-01 异常工单",
+                "content": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "queue": "technical-support-l2",
+                "incident_code": "INC-CNSHANGHAI2-GPUINSTANCE-042",
+                "service_status": "degraded",
+                "status_summary": "gpu-cn-sh2-01 当前为 degraded，建议确认受影响资源范围。",
+                "related_resources": ["gpu-cn-sh2-01", "GPU 实例服务"],
+                "recommended_action": "建议优先检查网络和安全组，并安排值班支持跟进。",
+            },
+            context=ToolExecutionContext(
+                user_id="u-1",
+                permissions=["user:ticket.write"],
+            ),
+        )
+    )
+
+    assert result.success is True
+    assert result.result["queue"] == "technical-support-l2"
+    assert result.result["incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+    assert result.result["subject"].startswith("gpu-cn-sh2-01 异常工单")
+    assert "关联事件：INC-CNSHANGHAI2-GPUINSTANCE-042" in result.result["content"]
+    assert result.session_context_patch["attributes"]["ticket_queue"] == "technical-support-l2"
+    assert result.session_context_patch["attributes"]["ticket_incident_code"] == "INC-CNSHANGHAI2-GPUINSTANCE-042"
+
+
 def test_refund_create_requires_order_permission_before_confirmation() -> None:
     catalog = build_catalog()
     result = catalog["order.create_refund"].invoke(
@@ -455,6 +675,7 @@ def test_marketing_copy_execute_returns_session_context_patch() -> None:
             payload={
                 "campaign_name": "GPU 新客满减",
                 "product": "GPU 实例",
+                "product_summary": "gi4.2xlarge / NVIDIA L40S x2",
                 "channel": "wechat",
             },
             context=ToolExecutionContext(
@@ -465,8 +686,39 @@ def test_marketing_copy_execute_returns_session_context_patch() -> None:
     )
     assert result.success is True
     assert result.result["headline"].startswith("GPU 新客满减")
+    assert result.result["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
     assert result.session_context_patch["attributes"]["last_marketing_copy_campaign_name"] == "GPU 新客满减"
     assert result.session_context_patch["attributes"]["last_marketing_copy_channel"] == "wechat"
+    assert (
+        result.session_context_patch["attributes"]["last_marketing_product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
+
+
+def test_marketing_campaign_lookup_prefers_recommended_product_summary() -> None:
+    catalog = build_catalog()
+    result = catalog["marketing.campaign_lookup"].invoke(
+        ToolInvocationRequest(
+            tool_name="marketing.campaign_lookup",
+            operation="execute",
+            payload={
+                "product_summary": "gi4.2xlarge / NVIDIA L40S x2",
+            },
+            context=ToolExecutionContext(
+                user_id="u-1",
+                permissions=["user:marketing.read"],
+            ),
+        )
+    )
+
+    assert result.success is True
+    assert result.result["matched_product"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert result.result["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert result.result["campaigns"][0]["segment"] == "gi4.2xlarge / NVIDIA L40S x2"
+    assert (
+        result.session_context_patch["attributes"]["last_marketing_product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
 
 
 def test_marketing_poster_execute_returns_compensation_and_session_patch() -> None:

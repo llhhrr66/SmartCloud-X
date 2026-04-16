@@ -3,7 +3,7 @@ import httpx
 from app.core.business_tools_sdk import BusinessTool, filter_tool_definitions, build_catalog
 from app.core.config import Settings, get_settings
 from app.models.tools import ToolDescriptor
-from app.services.business_tools_client import BusinessToolsClient
+from app.services.business_tools_client import BusinessToolsClient, BusinessToolsDiscoveryUnavailableError
 
 
 class ToolRegistry:
@@ -23,18 +23,31 @@ class ToolRegistry:
         mode: str | None = None,
         tag: str | None = None,
         query: str | None = None,
+        strict_remote: bool = False,
     ) -> list[ToolDescriptor]:
         if self._settings.business_tools_transport == "http":
             try:
-                return [
-                    ToolDescriptor.model_validate(tool.model_dump())
-                    for tool in self._business_tools_client.list_tools(
+                remote_tools = (
+                    self._business_tools_client.discover_tools(
                         capability=capability,
                         mode=mode,
                         tag=tag,
                         query=query,
                     )
+                    if strict_remote
+                    else self._business_tools_client.list_tools(
+                        capability=capability,
+                        mode=mode,
+                        tag=tag,
+                        query=query,
+                    )
+                )
+                return [
+                    ToolDescriptor.model_validate(tool.model_dump())
+                    for tool in remote_tools
                 ]
+            except BusinessToolsDiscoveryUnavailableError:
+                raise
             except (httpx.HTTPError, ValueError):
                 pass
         return [
@@ -51,10 +64,16 @@ class ToolRegistry:
     def get_tool(self, tool_name: str) -> BusinessTool | None:
         return self._catalog.get(tool_name)
 
-    def describe_tool(self, tool_name: str) -> ToolDescriptor | None:
+    def describe_tool(self, tool_name: str, *, strict_remote: bool = False) -> ToolDescriptor | None:
         if self._settings.business_tools_transport == "http":
             try:
-                definition = self._business_tools_client.describe_tool(tool_name)
+                definition = (
+                    self._business_tools_client.discover_tool(tool_name)
+                    if strict_remote
+                    else self._business_tools_client.describe_tool(tool_name)
+                )
+            except BusinessToolsDiscoveryUnavailableError:
+                raise
             except (httpx.HTTPError, ValueError):
                 definition = None
             if definition is not None:

@@ -36,3 +36,13 @@ Priority continuation tasks for this run:
 4. Strengthen trace observability verification in owned scope so Phoenix/OTLP wiring is exercised by QA-style checks rather than only existing as env/config placeholders.
 
 Make real file changes and get this owned area from empty to usable baseline.
+
+Current override priority (2026-04-16, real infra migration):
+1. knowledge-service is now a P0 migration target. Move owned runtime off local JSON/JSONL as the authoritative store wherever feasible in this run.
+2. Specifically prioritize:
+   - making MySQL the source of truth for knowledge metadata/admin state instead of JSON files
+   - moving outbox/queue behavior from JSONL bias toward Redis/queue-backed behavior
+   - making MinIO the formal raw-object path rather than only a downstream mirror
+   - making Qdrant/OpenSearch the intended live retrieval backends rather than sync-only side targets
+3. Keep backward-compatible fallbacks only where needed for migration safety; do not leave newly touched flows depending primarily on local file stores.
+4. Add/extend tests and smoke coverage proving the owned services can persist, reload, and retrieve through the real middleware path.

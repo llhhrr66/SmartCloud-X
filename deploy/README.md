@@ -5,8 +5,8 @@ This directory contains the first runnable deployment baseline for the owned Sma
 ## Included
 - `docker-compose/docker-compose.yml`: local stack for knowledge-service, a dedicated knowledge-indexer worker, rag-service, web-admin, Redis, MySQL, Qdrant, OpenSearch, MinIO, Phoenix, Prometheus, Grafana, and cAdvisor
 - `docker-compose/.env.example`: local stack variables, including active connector wiring for MinIO/MySQL/Qdrant/OpenSearch/Redis plus Phoenix and LangSmith placeholders
-- `docker-compose/smoke-test.py`: reusable smoke validation for readiness-aware health checks, web-admin SPA serving, RAG capabilities, starter seeding, filesystem import preview/import, knowledge runtime snapshot export, connector configuration visibility, completed indexing-worker connector steps, admin knowledge-base create/update/document/reindex flows, admin document detail + job lookup, admin audit inspection, overview, direct knowledge search, diagnose, answer flows, readiness/inventory gauge exposure on `/metrics`, and standard trace/response headers
-- `docker-compose/trace-smoke.py`: QA-style OTLP smoke script that runs local knowledge-service, the knowledge indexing worker, and rag-service against a temporary collector and asserts spans are actually exported, tagged with both service names, and share propagated trace IDs after ingestion, worker processing, and answer flows
+- `docker-compose/smoke-test.py`: reusable smoke validation for readiness-aware health checks, web-admin SPA serving, RAG capabilities, starter seeding, filesystem import preview/import, knowledge runtime snapshot export, connector configuration visibility, snapshot/profile consistency, MySQL/Qdrant/OpenSearch/Redis backend intent, completed indexing-worker connector steps, admin knowledge-base create/update/document/reindex flows, admin document detail + job lookup, admin audit inspection, overview, direct knowledge search, diagnose, answer plus empty-result answer flows, readiness/inventory gauge exposure on `/metrics`, and standard trace/response headers
+- `docker-compose/trace-smoke.py`: QA-style OTLP smoke script that runs local knowledge-service, the knowledge indexing worker, and rag-service against a temporary collector and asserts spans are actually exported, tagged with both service names, and share propagated trace IDs after ingestion, snapshot export, worker processing, and answer flows
 - `k8s/README.md`: next-step notes for a Kubernetes migration
 - Prometheus alert placeholders plus configurable browser and frontend build endpoints
 
@@ -28,9 +28,9 @@ python3 deploy/docker-compose/trace-smoke.py
 - `SMARTCLOUD_MINIO_ACCESS_KEY` / `SMARTCLOUD_MINIO_SECRET_KEY`: credentials passed to the knowledge-indexer worker so raw mirrors are uploaded into MinIO instead of staying local-only
 - `SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT`: compose-visible import directory consumed by `GET /api/knowledge/v1/imports:preview` and `POST /api/knowledge/v1/files:ingest`
 - `SMARTCLOUD_MINIO_ENDPOINT` / `SMARTCLOUD_MINIO_BUCKET`: raw object mirror target advertised by `knowledge-service` integration snapshots
-- `SMARTCLOUD_MYSQL_DSN`: metadata-store target advertised by `knowledge-service` integration snapshots
+- `SMARTCLOUD_MYSQL_DSN`: metadata-store target used for knowledge runtime metadata and advertised by `knowledge-service` integration snapshots
 - `SMARTCLOUD_QDRANT_URL` / `SMARTCLOUD_QDRANT_VECTOR_SIZE` / `SMARTCLOUD_OPENSEARCH_URL`: vector and BM25 targets advertised by `knowledge-service` integration snapshots and consumed by the knowledge-indexer worker
-- `SMARTCLOUD_REDIS_URL` / `SMARTCLOUD_RAG_REDIS_URL`: knowledge outbox/task-queue and RAG cache wiring used by the local stack
+- `SMARTCLOUD_REDIS_URL` / `SMARTCLOUD_RAG_REDIS_URL`: Redis wiring used for the knowledge active queue path, worker completion fan-out, and the RAG retrieval cache in the local stack
 - `SMARTCLOUD_CONNECTOR_TIMEOUT_MS` / `SMARTCLOUD_INDEX_WORKER_POLL_SECONDS` / `SMARTCLOUD_INDEX_WORKER_BATCH_SIZE`: worker tuning knobs for connector request deadlines, idle polling, and per-batch drain size
 - `SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT`: Phoenix OTLP collector endpoint passed through to both backend services
 - `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_PROTOCOL`: standard OpenTelemetry export settings passed through to `knowledge-service` and `rag-service`
@@ -46,6 +46,7 @@ python3 deploy/docker-compose/trace-smoke.py
 - `knowledge_runtime` also persists the admin audit log so KB creation and reindex events survive local restarts.
 - `knowledge_runtime` also persists the async indexing outbox and raw mirrored source files used by the connector staging baseline.
 - the `knowledge-indexer` service drains that persisted outbox and writes connector results back into the same event records, so snapshot exports and `web-admin` can show completed versus failed connector steps.
+- when Redis is configured, the JSONL outbox acts as an auditable event log while Redis pending/processing lists carry the active queue lifecycle.
 - `../../apps/knowledge-service/data/imports` is mounted read-only into the compose knowledge-service container at `/app/imports` for starter batch-import scenarios.
 - `prometheus_data` persists scraped time-series data across local restarts.
 - `grafana_data` persists local admin credentials and dashboard state across local restarts.
@@ -57,7 +58,8 @@ python3 deploy/docker-compose/trace-smoke.py
 - `rag-service` readiness covers a live upstream probe to `knowledge-service`, so a running container is still marked unhealthy until retrieval dependencies are actually usable.
 - Prometheus scrapes now also refresh readiness gauges on `/metrics`, so Grafana and alert rules can detect “running but not usable” states without a separate JSON health poller.
 - Phoenix now receives OTLP spans for request, ingestion, indexing-worker connector processing, retrieval, and answer flows when `SMARTCLOUD_TRACE_ENABLED=true`; `healthz` and `metrics` traffic stay excluded so the UI focuses on operator and retrieval behavior instead of probes.
-- `trace-smoke.py` gives operators a fast QA loop for OTLP export itself when they want stronger tracing validation than config inspection or the standard compose smoke run; it now checks the worker span as well as both service identities and cross-service trace propagation, not just batch counts.
+- `trace-smoke.py` gives operators a fast QA loop for OTLP export itself when they want stronger tracing validation than config inspection or the standard compose smoke run; it now checks the snapshot-export span and worker span as well as both service identities and cross-service trace propagation, not just batch counts.
+- `smoke-test.py` now also fails if snapshot-exported KB/document profile rows drift from the admin/runtime state it just wrote, which keeps the migration path honest when MySQL metadata becomes authoritative.
 
 ## Default endpoints
 - Web admin: `http://localhost:8050`

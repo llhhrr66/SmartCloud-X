@@ -5,6 +5,7 @@ from threading import RLock
 
 from pydantic import BaseModel, Field
 
+from app.core.config import get_settings
 from app.models.admin import AdminAsyncJob, KnowledgeBaseProfile, KnowledgeDocumentProfile
 from app.models.knowledge import (
     IngestionJob,
@@ -13,6 +14,7 @@ from app.models.knowledge import (
     KnowledgeSource,
     SourceSeed,
 )
+from app.services.metadata_backend import KnowledgeMetadataState, MySQLKnowledgeMetadataBackend
 
 
 class StoreState(BaseModel):
@@ -55,9 +57,13 @@ def _min_timestamp(values: list[str | None], fallback: str) -> str:
 class KnowledgeStoreRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.settings = get_settings()
         self._lock = RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._state = self._load()
+        self._metadata_backend = self._build_metadata_backend()
+        self._metadata_backend_error: str | None = None
+        self._prime_metadata_backend()
 
     def _load(self) -> StoreState:
         if not self.path.exists():
@@ -72,6 +78,119 @@ class KnowledgeStoreRepository:
             encoding="utf-8",
         )
         tmp_path.replace(self.path)
+
+    def _build_metadata_backend(self) -> MySQLKnowledgeMetadataBackend | None:
+        if not self.settings.mysql_dsn:
+            return None
+        try:
+            return MySQLKnowledgeMetadataBackend(self.settings.mysql_dsn)
+        except Exception:
+            return None
+
+    def _prime_metadata_backend(self) -> None:
+        if self._metadata_backend is None:
+            return
+        try:
+            changed = self._refresh_metadata_state_locked(seed_missing_remote=True)
+            self._metadata_backend_error = None
+            if changed:
+                self._persist()
+        except Exception as exc:
+            self._metadata_backend_error = str(exc)
+
+    def _sync_metadata_backend(self, operation) -> None:
+        if self._metadata_backend is None:
+            return
+        try:
+            operation(self._metadata_backend)
+            self._metadata_backend_error = None
+        except Exception as exc:
+            self._metadata_backend_error = str(exc)
+
+    def _local_metadata_state(self) -> KnowledgeMetadataState:
+        return KnowledgeMetadataState(
+            knowledge_base_profiles=list(self._state.knowledge_base_profiles.values()),
+            document_profiles=list(self._state.document_profiles.values()),
+            admin_jobs=list(self._state.admin_jobs.values()),
+        )
+
+    def _apply_metadata_state_locked(self, state: KnowledgeMetadataState) -> bool:
+        next_knowledge_base_profiles = {
+            profile.kb_id: profile for profile in state.knowledge_base_profiles
+        }
+        next_document_profiles = {
+            profile.doc_id: profile for profile in state.document_profiles
+        }
+        next_admin_jobs = {job.job_id: job for job in state.admin_jobs}
+        changed = (
+            next_knowledge_base_profiles != self._state.knowledge_base_profiles
+            or next_document_profiles != self._state.document_profiles
+            or next_admin_jobs != self._state.admin_jobs
+        )
+        if changed:
+            self._state.knowledge_base_profiles = next_knowledge_base_profiles
+            self._state.document_profiles = next_document_profiles
+            self._state.admin_jobs = next_admin_jobs
+        return changed
+
+    def _refresh_metadata_state_locked(self, *, seed_missing_remote: bool) -> bool:
+        if self._metadata_backend is None:
+            return False
+        local_state = self._local_metadata_state()
+        remote_state = self._metadata_backend.load_state()
+        if seed_missing_remote:
+            seed_state = KnowledgeMetadataState(
+                knowledge_base_profiles=(
+                    []
+                    if remote_state.knowledge_base_profiles
+                    else local_state.knowledge_base_profiles
+                ),
+                document_profiles=(
+                    []
+                    if remote_state.document_profiles
+                    else local_state.document_profiles
+                ),
+                admin_jobs=[] if remote_state.admin_jobs else local_state.admin_jobs,
+            )
+            if (
+                seed_state.knowledge_base_profiles
+                or seed_state.document_profiles
+                or seed_state.admin_jobs
+            ):
+                self._metadata_backend.sync_from_local(
+                    knowledge_base_profiles=seed_state.knowledge_base_profiles,
+                    document_profiles=seed_state.document_profiles,
+                    admin_jobs=seed_state.admin_jobs,
+                )
+                remote_state = self._metadata_backend.load_state()
+        resolved_state = KnowledgeMetadataState(
+            knowledge_base_profiles=(
+                remote_state.knowledge_base_profiles
+                if remote_state.knowledge_base_profiles
+                else local_state.knowledge_base_profiles
+            ),
+            document_profiles=(
+                remote_state.document_profiles
+                if remote_state.document_profiles
+                else local_state.document_profiles
+            ),
+            admin_jobs=remote_state.admin_jobs if remote_state.admin_jobs else local_state.admin_jobs,
+        )
+        return self._apply_metadata_state_locked(resolved_state)
+
+    def refresh_metadata_state(self) -> bool:
+        with self._lock:
+            if self._metadata_backend is None:
+                return False
+            try:
+                changed = self._refresh_metadata_state_locked(seed_missing_remote=False)
+                self._metadata_backend_error = None
+                if changed:
+                    self._persist()
+                return changed
+            except Exception as exc:
+                self._metadata_backend_error = str(exc)
+                return False
 
     def list_sources(self) -> list[KnowledgeSource]:
         with self._lock:
@@ -101,6 +220,9 @@ class KnowledgeStoreRepository:
         with self._lock:
             self._state.knowledge_base_profiles[profile.kb_id] = profile
             self._persist()
+            self._sync_metadata_backend(
+                lambda backend: backend.upsert_knowledge_base_profile(profile)
+            )
             return profile
 
     def get_document(self, document_id: str) -> KnowledgeDocument | None:
@@ -115,6 +237,9 @@ class KnowledgeStoreRepository:
         with self._lock:
             self._state.document_profiles[profile.doc_id] = profile
             self._persist()
+            self._sync_metadata_backend(
+                lambda backend: backend.upsert_document_profile(profile)
+            )
             return profile
 
     def get_admin_job(self, job_id: str) -> AdminAsyncJob | None:
@@ -125,6 +250,9 @@ class KnowledgeStoreRepository:
         with self._lock:
             self._state.admin_jobs[job.job_id] = job
             self._persist()
+            self._sync_metadata_backend(
+                lambda backend: backend.upsert_admin_job(job)
+            )
             return job
 
     def list_admin_jobs(self) -> list[AdminAsyncJob]:
@@ -350,6 +478,26 @@ class KnowledgeStoreRepository:
                 latest_job = latest_job_by_document.get(document_id)
                 source = self._state.sources.get(document.source_id)
                 primary = candidates[0] if candidates else None
+                candidate_latest_job_id = _pick_first_non_empty(
+                    [candidate.latest_job_id for candidate in candidates],
+                    None,
+                )
+                candidate_latest_job = (
+                    self._state.admin_jobs.get(candidate_latest_job_id)
+                    if candidate_latest_job_id is not None
+                    else None
+                )
+                latest_job_id = candidate_latest_job_id
+                latest_job_timestamp = (
+                    candidate_latest_job.finished_at or candidate_latest_job.created_at
+                    if candidate_latest_job is not None
+                    else None
+                )
+                if latest_job is not None:
+                    ingestion_job_timestamp = latest_job.completed_at or latest_job.created_at
+                    if latest_job_timestamp is None or ingestion_job_timestamp > latest_job_timestamp:
+                        latest_job_id = latest_job.id
+                        latest_job_timestamp = ingestion_job_timestamp
                 merged_profile = KnowledgeDocumentProfile(
                     doc_id=document.id,
                     kb_id=document.source_id,
@@ -386,16 +534,11 @@ class KnowledgeStoreRepository:
                     indexed_at=_max_timestamp(
                         [document.updated_at]
                         + [candidate.indexed_at for candidate in candidates]
-                        + ([latest_job.completed_at] if latest_job is not None else []),
+                        + ([latest_job_timestamp] if latest_job_timestamp is not None else []),
                         document.updated_at,
                     ),
                     error_message=primary.error_message if primary is not None else None,
-                    latest_job_id=latest_job.id if latest_job else (
-                        _pick_first_non_empty(
-                            [candidate.latest_job_id for candidate in candidates],
-                            None,
-                        )
-                    ),
+                    latest_job_id=latest_job_id,
                 )
                 if primary is None:
                     normalized_document_profiles[document_id] = merged_profile
@@ -414,6 +557,12 @@ class KnowledgeStoreRepository:
                 self._state.knowledge_base_profiles = normalized_kb_profiles
             if mutated:
                 self._persist()
+                self._sync_metadata_backend(
+                    lambda backend: backend.replace_profiles(
+                        knowledge_base_profiles=list(self._state.knowledge_base_profiles.values()),
+                        document_profiles=list(self._state.document_profiles.values()),
+                    )
+                )
         return repaired
 
     def save_document(

@@ -27,6 +27,7 @@ class ToolInvokeRequest(BaseModel):
 
 
 class ToolInvokeResponse(ToolExecutionResult):
+    tool_call_id: str | None = None
     downstream_target: str = "business-tools"
     auth_requirements: ToolAuthRequirements = Field(default_factory=ToolAuthRequirements)
 

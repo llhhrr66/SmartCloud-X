@@ -1,13 +1,12 @@
 # Integration QA Baseline Review
 
 ## Findings
-- No new blocking defect is currently known inside the owned QA files after this baseline upgrade.
-- Fixed or refreshed during review:
-  - expanded the repo asset matrix to include marketing, research, tool-hub, business-tools, web-admin, and admin OpenAPI coverage in addition to the earlier auth/orchestrator/knowledge/rag/web-user/frontend-sdk baseline
-  - replaced the placeholder `tests/e2e/test_ui_smoke.py` with a real no-browser root Playwright wiring smoke and added it to `scripts/qa/run_smoke.sh`
-  - upgraded `tests/integration/test_orchestrator_smoke.py` with behavior-level coverage for `collect-auth-context` on the marketing flow and SSE replay/resume via `Last-Event-ID`
-  - upgraded `scripts/qa/check_release_readiness.py` so it emits itemized project-area readiness checklist items
-  - refreshed runbooks, reviews, status, and supervisor logs/state so the reporting layer matches the upgraded QA baseline
+- No blocking defects were found after expanding the owned RAG fallback matrix across `retrieve`/`diagnose`/`answer` and adding the repo-root billing citation happy-path browser check.
+- No blocking defects were found in the QA-owned baseline after rerunning the focused expectations checks plus the local and live orchestrator subprocess path in this turn.
+- Medium external: live shared-backend proof remains pending only for the compose-backed `knowledge-rag-admin` path in this turn. The new orchestrator timeout-chain acceptance is green; the remaining blocker is the knowledge/rag connector stack.
+- Medium: release-readiness and QA reporting docs had stale language around the orchestrator timeout-chain gap. The owned docs now reflect the newly recorded green state for the local and live timeout-chain path, plus the updated knowledge/rag blocker.
+- Medium: `auth-user-service`, `marketing-service`, and `research-service` still lack a frozen runtime backend evidence contract; see `docs/contracts/change-requests/2026-04-16-auth-marketing-research-runtime-backend-health-baseline.md`.
+- Medium external: `business-tools-tool-hub` still surfaces the existing tool-hub public-route `405` gap and frozen response drift tracked by change requests under `docs/contracts/change-requests/`.
 
 ## Scope Reviewed
 - `tests/`
@@ -18,11 +17,18 @@
 - `logs/supervisor-integration-qa/*`
 
 ## Validation Completed
-- `python3 -m py_compile scripts/qa/baseline_expectations.py scripts/qa/check_release_readiness.py scripts/qa/release_readiness.py tests/e2e/test_ui_smoke.py tests/integration/test_contract_presence.py tests/integration/test_service_smoke.py tests/integration/test_orchestrator_smoke.py`
-- `bash -n scripts/qa/run_smoke.sh scripts/qa/run_full_stack_validation.sh scripts/qa/run_local_validation.sh`
-- targeted `pytest` over `tests/e2e/test_ui_smoke.py`, `tests/integration/test_contract_presence.py`, `tests/integration/test_service_smoke.py`, `tests/integration/test_orchestrator_smoke.py`, and `tests/integration/test_error_path_smoke.py`
-- `python3 scripts/qa/check_release_readiness.py`
-- `scripts/qa/run_smoke.sh`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTEST[@]}" -q tests/integration/test_error_path_smoke.py tests/integration/test_contract_presence.py tests/e2e/test_ui_smoke.py`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && smartcloud_qa_require_playwright && smartcloud_qa_configure_browser_ports && npm --prefix tests/e2e run test:browser`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTEST[@]}" -q tests/integration/test_contract_presence.py tests/e2e/test_ui_smoke.py`
+- `git diff --check`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario orchestrator-billing`
+- `docker compose -f deploy/docker-compose/docker-compose.yml up -d mysql redis`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && SMARTCLOUD_QA_USE_LIVE_INFRA=1 "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario orchestrator-billing`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTEST[@]}" -q tests/integration/test_contract_presence.py tests/e2e/test_ui_smoke.py`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTHON[@]}" scripts/qa/check_release_readiness.py`
+- `source scripts/qa/qa_env.sh && smartcloud_qa_init && smartcloud_qa_assert_python_runtime && "${QA_PYTHON[@]}" scripts/qa/infra_persistence_matrix.py`
 
 ## Residual Risk
-- Remaining non-blocking gaps are tracked in `docs/reviews/known-issues.md`.
+- Remaining repo-level gaps are tracked in `docs/reviews/known-issues.md`.
+- `business-tools-tool-hub` and the new orchestrator timeout-chain path are recorded green in live shared-backend mode, but `knowledge-rag-admin` still needs one completed compose-backed rerun on a warmed connector stack.
+- Release promotion still depends on live shared-backend landing proof, not only config-aware or degraded-fallback health evidence.

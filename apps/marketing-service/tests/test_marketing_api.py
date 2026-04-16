@@ -151,8 +151,9 @@ def test_user_marketing_routes_only_expose_currently_active_campaigns(
     store = service_modules["store"].get_marketing_store()
     future_start = service_modules["models"].utc_now() + timedelta(days=2)
     future_end = future_start + timedelta(days=7)
-    store._snapshot.campaigns[0].start_at = future_start.isoformat()
-    store._snapshot.campaigns[0].end_at = future_end.isoformat()
+    campaign = next(item for item in store._snapshot.campaigns if item.campaign_id == "cmp_gpu_launch_001")
+    campaign.start_at = future_start.isoformat()
+    campaign.end_at = future_end.isoformat()
     store._persist()
 
     listing = client.get(
@@ -310,6 +311,7 @@ def test_poster_task_can_surface_running_state_before_auto_completion(
     assert running_result.status_code == 200
     assert running_result.json()["data"]["result_ready"] is False
 
+    task = store._snapshot.poster_tasks[0]
     task.created_at = (service_modules["models"].utc_now() - timedelta(seconds=11)).isoformat()
     task.updated_at = task.created_at
     store._persist()
@@ -703,3 +705,23 @@ def test_marketing_strict_auth_uses_validated_permissions_even_when_empty(
     assert response.status_code == 403
     assert response.json()["message"] == "missing required permissions"
     assert response.json()["error"]["details"]["missing_permissions"] == ["user:marketing.read"]
+
+
+def test_marketing_database_persists_generated_copy_across_store_reload(client, token_codec, service_modules) -> None:
+    created = client.post(
+        "/api/v1/marketing/copy/generate",
+        headers=_user_headers(token_codec, "user:marketing.write"),
+        json={
+            "campaign_id": "cmp_gpu_launch_001",
+            "topic": "数据库持久化文案",
+            "audience": "运营团队",
+            "tone": "professional",
+            "keywords": [],
+        },
+    )
+    assert created.status_code == 200
+    copy_id = created.json()["data"]["copy_id"]
+
+    service_modules["store"].get_marketing_store.cache_clear()
+    reloaded_store = service_modules["store"].get_marketing_store()
+    assert reloaded_store.get_copy(user_id="u_10001", tenant_id="default", copy_id=copy_id) is not None

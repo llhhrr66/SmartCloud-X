@@ -14,6 +14,7 @@ paths:
       tags: [health]
       operationId: orchestrator_healthz
       summary: Check orchestrator service liveness.
+      description: Runtime health route. `/healthz` may report `degraded` while the service remains live; downstream HTTP dependency state is surfaced through additive nested `runtime.toolHubTransport.dependencyReadiness`.
       x-owner-service: orchestrator-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]
@@ -25,12 +26,77 @@ paths:
           content:
             application/json:
               schema:
-                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeHealthStatus
               example:
-                status: ok
+                status: degraded
                 service: orchestrator-service
+                degraded_components: [toolHubTransport]
+                runtime:
+                  toolHubTransport:
+                    transport: http
+                    baseUrl: http://tool-hub-service:8000
+                    internalApiPrefix: /internal/v1
+                    degradedLocalFallbackEnabled: true
+                    dependencyReadiness:
+                      ready: false
+                      status: not_ready
+                      mode: http
+                      service: tool-hub-service
+                      httpStatus: 503
+                      notReadyComponents: [auditStore]
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /readyz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: orchestrator_readyz
+      summary: Check orchestrator runtime readiness for traffic.
+      description: Readiness route. `/readyz` is stricter than `/healthz` and returns `503` when required middleware or downstream HTTP dependencies are not ready for traffic.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Orchestrator runtime is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: ready
+                service: orchestrator-service
+                not_ready_components: []
+                runtime:
+                  conversationStore:
+                    backend: mysql
+                  stateStore:
+                    backend: mysql
+                  sseStore:
+                    backend: redis
+        '503':
+          description: Orchestrator runtime is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: not_ready
+                service: orchestrator-service
+                not_ready_components: [toolHubTransport]
+                runtime:
+                  toolHubTransport:
+                    transport: http
+                    dependencyReadiness:
+                      ready: false
+                      status: not_ready
+                      mode: http
+                      service: tool-hub-service
+                      httpStatus: 503
+                      notReadyComponents: [auditStore]
   /api/v1/agents:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
@@ -57,6 +123,109 @@ paths:
                 $ref: '#/components/schemas/AgentListEnvelope'
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/admin/agents:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [admin]
+      operationId: orchestrator_listAdminAgents
+      summary: List process-local orchestrator agent configuration records for admin/debug consumers.
+      description: Current owner-local admin baseline for inspecting routable/supporting-agent settings exposed by orchestrator-service. This route remains a process-local practical surface, not a distributed control plane. It currently uses the internal `ApiEnvelope` family even though the path is admin-shaped; future gateway normalization can wrap the same DTOs in the canonical external admin envelope. Supported query filters are additive `scene` and `status` (`enabled` / `disabled`).
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: scene
+          in: query
+          required: false
+          schema:
+            $ref: ./components.openapi.yaml#/components/schemas/SceneName
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [enabled, disabled]
+      responses:
+        '200':
+          description: Current process-local admin agent-config list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAgentListEnvelope'
+              example:
+                success: true
+                requestId: req_admin_agents
+                data:
+                  items:
+                    - name: product_tech_agent
+                      code: product_tech
+                      display_name: Product_Tech_Agent
+                      domain: technical_support
+                      description: 处理产品咨询、云服务器、GPU、部署与技术排障。
+                      supported_scenes: [customer_service, technical_support, research]
+                      tool_whitelist: [product.catalog_lookup, support.playbook_search]
+                      fallback_agent: orchestrator
+                      max_tool_calls: 5
+                      enabled: true
+                      timeout_seconds: 90
+                  total: 1
+  /api/v1/admin/agents/{agent_code}:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    patch:
+      tags: [admin]
+      operationId: orchestrator_updateAdminAgent
+      summary: Update a process-local orchestrator agent override record.
+      description: Current owner-local admin baseline for toggling or tuning per-agent overrides such as `enabled`, `max_tool_calls`, `fallback_agent`, and `timeout_seconds`. The route persists process-local overrides through the orchestrator-owned `AGENT_CONFIG_STORE_PATH` when configured, and default timeout behavior falls back to the owner-local `DEFAULT_AGENT_TIMEOUT_SECONDS` knob. This is not yet a distributed control plane or canonical gateway-admin surface.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_AGENT_NOT_FOUND, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: agent_code
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminAgentConfigUpdateRequest
+            example:
+              enabled: true
+              max_tool_calls: 8
+              timeout_seconds: 120
+      responses:
+        '200':
+          description: Updated process-local admin agent configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAgentRecordEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Requested agent code is unknown.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req_admin_agent_missing
+                error:
+                  code: ORCH_AGENT_NOT_FOUND
+                  message: Requested orchestrator agent configuration record does not exist.
+                  retryable: false
   /api/v1/route:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
@@ -298,6 +467,134 @@ paths:
                 $ref: '#/components/schemas/SessionMessagesPageEnvelope'
         '404':
           $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+  /api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [chat]
+      operationId: orchestrator_listMessageStreamEvents
+      summary: List stored SSE replay events for one chat message.
+      description: Additive replay/read route backed by the current orchestrator SSE event store. Consumers may paginate with `after_event_id` and should treat `CHAT_STREAM_EVENTS_NOT_FOUND` as a non-retryable replay miss for messages that never persisted stream events.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_STREAM_EVENTS_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: after_event_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Stored stream-event replay page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamEventPageEnvelope'
+        '404':
+          description: No stored event replay exists for the target message.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req-stream-events-missing
+                error:
+                  code: CHAT_STREAM_EVENTS_NOT_FOUND
+                  message: No stored stream-event replay data exists for the requested chat message.
+                  retryable: false
+  /api/v1/chat/sessions/{conversation_id}/messages/{message_id}/events/stream:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [chat]
+      operationId: orchestrator_replayMessageStreamEvents
+      summary: Replay stored SSE events for one chat message as `text/event-stream`.
+      description: Additive SSE replay route backed by the persisted orchestrator event store. The request may resume from `after_event_id` or the standard `Last-Event-ID` header. Missing replay state uses the same non-retryable `CHAT_STREAM_EVENTS_NOT_FOUND` baseline as the list route.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_STREAM_EVENTS_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: after_event_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Replayed server-sent event stream.
+          content:
+            text/event-stream:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/OrchestratorStreamEvent
+        '404':
+          description: No stored event replay exists for the target message.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req-stream-events-replay-missing
+                error:
+                  code: CHAT_STREAM_EVENTS_NOT_FOUND
+                  message: No stored stream-event replay data exists for the requested chat message.
+                  retryable: false
   /api/v1/chat/sessions/{conversation_id}/agent-routes:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
@@ -498,7 +795,7 @@ paths:
       tags: [chat]
       operationId: orchestrator_continueChatSession
       summary: Continue a paused clarification or confirmation flow within the same chat session.
-      description: Current continuation baseline for resuming a conversation after tool preflight clarification or confirmation. Callers may submit `field_values`, explicit `confirm_tool_names`, and additive `session_context_patch` without reverse-engineering owner-local session keys. The preceding response/state payloads may also expose additive `pending_user_actions[]` advisory metadata copied from tool-level `user_action_hint` fields so continuation clients can render machine-readable next-step instructions.
+      description: Current continuation baseline for resuming a conversation after tool preflight clarification, auth collection, or confirmation. Callers may submit `field_values`, explicit `confirm_tool_names`, additive `session_context_patch`, and additive `user_profile_patch` without reverse-engineering owner-local session keys. The preceding response/state payloads may also expose additive `pending_user_actions[]` advisory metadata copied from tool-level `user_action_hint` fields so continuation clients can render machine-readable next-step instructions; auth-related hints may carry `user_profile_bindings` that map missing context onto `/continue.user_profile_patch`. Current orchestrator baseline may persist collected auth/profile values into runtime `session_context.attributes.auth_profile` for later turns as a convenience layer.
       x-owner-service: orchestrator-service
       x-permission-code: service:internal.call
       x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_MESSAGE_NOT_FOUND, CHAT_CONTINUATION_NOT_AVAILABLE, CHAT_CONVERSATION_ARCHIVED, CHAT_CONVERSATION_RUNNING, CHAT_MESSAGE_CANCELLED, VALIDATION_ERROR]
@@ -520,6 +817,14 @@ paths:
           application/json:
             schema:
               $ref: ./components.openapi.yaml#/components/schemas/SessionContinueRequest
+            examples:
+              authResume:
+                summary: Resume an auth-required tool step with additive profile context
+                value:
+                  message_id: msg-auth-2
+                  user_profile_patch:
+                    account_id: acct-1001
+                    permissions: [user:billing.read]
       responses:
         '200':
           description: Continued chat completion response.
@@ -890,6 +1195,20 @@ paths:
           $ref: ./components.openapi.yaml#/components/responses/CallerForbidden
 components:
   schemas:
+    AdminAgentListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminAgentListData
+    AdminAgentRecordEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminAgentRecord
     AgentRouteListEnvelope:
       allOf:
         - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
@@ -957,6 +1276,13 @@ components:
           properties:
             data:
               $ref: ./components.openapi.yaml#/components/schemas/SessionMessagesPage
+    StreamEventPageEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/OrchestratorStreamEventPage
     OrchestratorResponseEnvelope:
       allOf:
         - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope

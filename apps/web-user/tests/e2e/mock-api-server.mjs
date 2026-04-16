@@ -496,11 +496,35 @@ function buildFileRecord(fileId, fallback = {}) {
 }
 
 function listVisibleResearchTasks() {
-  return Object.values(state.researchTasks);
+  return sortByUpdatedAt(
+    Object.values(state.researchTasks).map((task) => {
+      maybeCompleteResearchTask(task);
+      return task;
+    })
+  );
 }
 
 function listVisiblePosterTasks() {
-  return Object.values(state.marketing.posterTasks);
+  return sortByUpdatedAt(Object.values(state.marketing.posterTasks));
+}
+
+function maybeCompleteResearchTask(task) {
+  if (!state.scenarios.has('research_task_completes_with_report') || task.status === 'completed') {
+    return task;
+  }
+
+  state.counters.researchTaskPolls[task.task_id] = (state.counters.researchTaskPolls[task.task_id] ?? 0) + 1;
+  if (state.counters.researchTaskPolls[task.task_id] >= 1) {
+    task.status = 'completed';
+    task.progress = 100;
+    task.summary = '研究任务已完成，可预览导出报告。';
+    task.report_file_id = 'file_seed_001';
+    task.started_at ??= nowIso(-2 * 60 * 1000);
+    task.finished_at = nowIso();
+    task.updated_at = nowIso();
+  }
+
+  return task;
 }
 
 function normalizeAccount(value) {
@@ -1327,6 +1351,23 @@ async function handleApiRequest(req, res, url) {
     return;
   }
 
+  if (pathname === '/api/v1/marketing/posters' && req.method === 'GET') {
+    const status = searchParams.get('status');
+    const campaignId = searchParams.get('campaign_id');
+    let items = listVisiblePosterTasks();
+
+    if (status) {
+      items = items.filter((item) => item.status === status);
+    }
+
+    if (campaignId) {
+      items = items.filter((item) => item.campaign_id === campaignId);
+    }
+
+    sendSuccess(res, paginate(items, searchParams));
+    return;
+  }
+
   if (segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'marketing' && segments[3] === 'posters' && segments[4] && req.method === 'GET') {
     const taskId = decodeURIComponent(segments[4]);
     const task = state.marketing.posterTasks[taskId];
@@ -1360,6 +1401,18 @@ async function handleApiRequest(req, res, url) {
     return;
   }
 
+  if (pathname === '/api/v1/research/tasks' && req.method === 'GET') {
+    const status = searchParams.get('status');
+    let items = listVisibleResearchTasks();
+
+    if (status) {
+      items = items.filter((item) => item.status === status);
+    }
+
+    sendSuccess(res, paginate(items, searchParams));
+    return;
+  }
+
   if (segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'research' && segments[3] === 'tasks' && segments[4] && req.method === 'GET') {
     const taskId = decodeURIComponent(segments[4]);
     const task = state.researchTasks[taskId];
@@ -1368,18 +1421,7 @@ async function handleApiRequest(req, res, url) {
       return;
     }
 
-    if (state.scenarios.has('research_task_completes_with_report') && task.status !== 'completed') {
-      state.counters.researchTaskPolls[taskId] = (state.counters.researchTaskPolls[taskId] ?? 0) + 1;
-      if (state.counters.researchTaskPolls[taskId] >= 1) {
-        task.status = 'completed';
-        task.progress = 100;
-        task.summary = '研究任务已完成，可预览导出报告。';
-        task.report_file_id = 'file_seed_001';
-        task.started_at ??= nowIso(-2 * 60 * 1000);
-        task.finished_at = nowIso();
-        task.updated_at = nowIso();
-      }
-    }
+    maybeCompleteResearchTask(task);
 
     sendSuccess(res, task);
     return;

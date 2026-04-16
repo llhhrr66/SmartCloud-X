@@ -1,11 +1,19 @@
 import {
   ApiError,
+  classifyApiError,
   createApiError,
   parseResponsePayload,
   unwrapEnvelope
 } from '../core/envelope';
+import { createTransportApiError } from '../core/http';
 import { createBrowserStorageStore, type BrowserStorageStore } from '../core/storage';
-import { createRequestId, isAbortError, joinUrl, shouldDefaultJsonContentType } from '../core/utils';
+import {
+  createRequestId,
+  isAbortError,
+  isNetworkErrorLike,
+  joinUrl,
+  shouldDefaultJsonContentType
+} from '../core/utils';
 import {
   buildAuthSessionFromRefreshResponse,
   mapCurrentUser,
@@ -82,6 +90,23 @@ export function createWebUserSessionManager(options: WebUserSessionManagerOption
   const fetchFn = options.fetchFn ?? fetch;
   let refreshPromise: Promise<AuthSession | null> | null = null;
 
+  function shouldClearSessionAfterRefreshFailure(error: unknown): boolean {
+    const kind = classifyApiError(error);
+    return kind === 'unauthorized' || kind === 'forbidden' || kind === 'validation';
+  }
+
+  function createSessionTransportError(
+    error: unknown,
+    requestId: string | undefined
+  ): ApiError {
+    return createTransportApiError(
+      error,
+      requestId,
+      'Auth/session request failed',
+      isNetworkErrorLike(error) ? 503 : 500
+    );
+  }
+
   async function performSessionRequest(
     path: string,
     init: RequestInit,
@@ -89,30 +114,43 @@ export function createWebUserSessionManager(options: WebUserSessionManagerOption
   ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timeout = globalThis.setTimeout(() => controller.abort(), options.runtime.requestTimeoutMs);
+    const requestHeaders = buildWebUserHeaders(
+      options.runtime,
+      session,
+      init.headers,
+      false,
+      init.body
+    );
+    const requestId = requestHeaders.get('X-Request-Id') ?? undefined;
 
     try {
       const response = await fetchFn(joinUrl(options.runtime.apiBaseUrl, path), {
         ...init,
-        headers: buildWebUserHeaders(options.runtime, session, init.headers, false, init.body),
+        headers: requestHeaders,
         signal: controller.signal
       });
 
       const payload = await parseResponsePayload(response);
       if (!response.ok) {
-        throw createApiError(payload, response.status, response);
+        throw createApiError(payload, response.status, response, undefined, requestId);
       }
 
-      return unwrapEnvelope<Record<string, unknown>>(payload, response.status, response);
+      return unwrapEnvelope<Record<string, unknown>>(
+        payload,
+        response.status,
+        response,
+        requestId
+      );
     } catch (error) {
       if (error instanceof ApiError) {
         throw error;
       }
 
       if (isAbortError(error)) {
-        throw new ApiError('Request timed out or was aborted', 408);
+        throw new ApiError('Request timed out or was aborted', 408, undefined, undefined, requestId);
       }
 
-      throw new ApiError(error instanceof Error ? error.message : 'Unknown request error');
+      throw createSessionTransportError(error, requestId);
     } finally {
       globalThis.clearTimeout(timeout);
     }
@@ -169,8 +207,10 @@ export function createWebUserSessionManager(options: WebUserSessionManagerOption
         persistAuthSession(nextSession);
         return nextSession;
       })
-      .catch(() => {
-        clearAuthSession();
+      .catch((error) => {
+        if (shouldClearSessionAfterRefreshFailure(error)) {
+          clearAuthSession();
+        }
         return null;
       })
       .finally(() => {

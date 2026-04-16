@@ -88,7 +88,12 @@ class AgentRuntime:
                 final_answer=self._final_answer(task.agent, tool_calls, status, effective_next_agent),
                 handoff_received_from=route.tasks[index - 1].agent if index > 0 else None,
                 next_agent=effective_next_agent,
-                action_required=self._action_required(tool_calls, route.needs_human_handoff, index),
+                action_required=self._action_required(
+                    tool_calls,
+                    route.needs_human_handoff,
+                    index,
+                    effective_next_agent,
+                ),
                 risk_flags=self._risk_flags(tool_calls, route.needs_human_handoff, index),
                 trace_tags=self._trace_tags(task.agent, tool_calls),
                 handoff_reason=(f"需要切换到 {effective_next_agent} 继续处理。" if effective_next_agent else None),
@@ -434,9 +439,20 @@ class AgentRuntime:
             if final_tool_call.success:
                 return f"退款申请 {payload.get('refund_no')} 已提交，金额 {payload.get('requested_amount')} CNY。"
             return "已生成退款申请草稿，需用户确认金额和原因。"
+        if final_tool_call.tool_name == "billing.query_instance_cost":
+            return (
+                f"实例 {payload.get('instance_id')} 在 {payload.get('billing_cycle')} 的费用为 "
+                f"{payload.get('total_amount')} CNY（计算 {payload.get('compute_amount')} / "
+                f"存储 {payload.get('storage_amount')} / 网络 {payload.get('network_amount')}）。"
+            )
         if final_tool_call.tool_name == "ticket.create":
             if final_tool_call.success:
-                return f"工单 {payload.get('ticket_no')} 已创建，主题：{payload.get('subject')}。"
+                summary = f"工单 {payload.get('ticket_no')} 已创建，主题：{payload.get('subject')}。"
+                if payload.get("queue"):
+                    summary += f" 已分配到 {payload.get('queue')}。"
+                if payload.get("incident_code"):
+                    summary += f" 关联事件 {payload.get('incident_code')}。"
+                return summary
             return f"已准备创建工单，主题：{payload.get('subject')}。"
         if final_tool_call.tool_name == "ticket.query_ticket":
             summary = f"工单 {payload.get('ticket_no')} 当前状态 {payload.get('status')}"
@@ -487,12 +503,43 @@ class AgentRuntime:
             families = payload.get("product_families", [])
             if families:
                 return f"建议优先关注：{'、'.join(families[:3])}。"
+        if final_tool_call.tool_name == "product.recommend_instance":
+            workload_label = {
+                "training": "训练/微调",
+                "inference": "推理/部署",
+                "general": "通用",
+            }.get(str(payload.get("workload")), str(payload.get("workload") or "当前"))
+            return (
+                f"建议先使用 {payload.get('recommended_instance_type')} "
+                f"（{payload.get('gpu_model')} x{payload.get('gpu_count')}，"
+                f"{payload.get('vcpu')} vCPU / {payload.get('memory_gb')}GB）"
+                f"承载 {workload_label} 场景。"
+            )
+        if final_tool_call.tool_name == "support.query_service_status":
+            resource_label = payload.get("instance_id") or payload.get("service_name")
+            summary = payload.get("summary")
+            incident_code = payload.get("incident_code")
+            if incident_code:
+                return f"{resource_label} 状态检查结果：{summary} 关联事件 {incident_code}。"
+            return f"{resource_label} 状态检查结果：{summary}"
+        if final_tool_call.tool_name == "support.handoff_brief":
+            queue = payload.get("queue")
+            severity = payload.get("severity")
+            summary = payload.get("summary") or "已生成转人工交接摘要。"
+            if queue and severity:
+                return f"{summary} 建议分配到 {queue} 队列，优先级 {severity}。"
+            return str(summary)
         if status == "handoff" and next_agent:
             return f"{agent} 已完成当前阶段，准备交接给 {next_agent}。"
         return final_tool_call.summary or f"{agent} 已完成当前阶段处理。"
 
     @staticmethod
-    def _action_required(tool_calls: list[ToolInvocation], needs_human_handoff: bool, index: int) -> str | None:
+    def _action_required(
+        tool_calls: list[ToolInvocation],
+        needs_human_handoff: bool,
+        index: int,
+        next_agent: str | None,
+    ) -> str | None:
         if any(
             tool_call.status == "clarification-required"
             or (
@@ -520,7 +567,7 @@ class AgentRuntime:
             for tool_call in tool_calls
         ):
             return "collect-auth-context"
-        if needs_human_handoff and index == 0:
+        if needs_human_handoff and index == 0 and next_agent is None:
             return "handoff-to-human-operator"
         return None
 

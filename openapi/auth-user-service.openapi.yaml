@@ -14,6 +14,7 @@ paths:
       tags: [health]
       operationId: auth_healthz
       summary: Check auth-user-service liveness.
+      description: Liveness-only health contract. Backend-selection proof is not yet surfaced on this route; when auth publishes additive runtime backend evidence, it should follow `docs/contracts/shared/runtime-health.md`.
       x-owner-service: auth-user-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]

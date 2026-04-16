@@ -55,8 +55,13 @@ Because those codes are already frozen in YAML/OpenAPI examples, the frontend SD
   - `docs/status/supervisor-frontend-sdk-status.md`
 
 ## Foundation Processing Result
-- processed at:
-- decision:
+- processed at: 2026-04-16
+- decision: accepted and implemented in frozen space
 - implemented:
+  - aligned the exported `FoundationErrorCode` union and `foundationErrorCodes` list with the full frozen YAML catalog, including the already-promoted caller-forbidden and chat-continuation lifecycle codes
+  - documented the shared typed export surface in `@smartcloud-x/common-schemas` so frontend/backend consumers can rely on one frozen error-code registry instead of owned supplement lists
+  - hardened `scripts/validate_foundation.py` so future drift between `errors/error_codes.yaml` and the TypeScript exports now fails fast during foundation readiness checks
 - deferred:
+  - no additional error-code catalog restructuring was needed beyond keeping the TypeScript exports synchronized with the frozen YAML registry
 - rationale:
+  - the YAML catalog is already the frozen source of truth, so the lowest-risk fix was to keep the shared TypeScript export surface exactly in sync with it and enforce that invariant in the validator

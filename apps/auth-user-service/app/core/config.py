@@ -46,16 +46,33 @@ def _parse_csv_env_aliases(names: tuple[str, ...], default: list[str]) -> list[s
     return default
 
 
-def _resolve_path_env(name: str, default: Path) -> Path:
-    raw_value = os.getenv(name)
-    if not raw_value:
-        return default
-    return Path(raw_value).expanduser()
+def _resolve_path_env_aliases(names: tuple[str, ...], default: Path | None) -> Path | None:
+    for name in names:
+        raw_value = os.getenv(name)
+        if raw_value:
+            return Path(raw_value).expanduser()
+    return default
+
+
+def _legacy_sqlite_database_url(names: tuple[str, ...]) -> str | None:
+    path = _resolve_path_env_aliases(names, None)
+    if path is None:
+        return None
+    return f"sqlite:///{path.with_suffix('.db').as_posix()}"
+
+
+def _default_database_url() -> str:
+    return (
+        os.getenv("AUTH_USER_SERVICE_DATABASE_URL")
+        or _legacy_sqlite_database_url(("AUTH_USER_SERVICE_BOOTSTRAP_PATH", "AUTH_USER_SERVICE_DATA_PATH"))
+        or os.getenv("SMARTCLOUD_MYSQL_DSN")
+        or f"sqlite:///{(_service_root() / 'data' / 'auth-user-service.db').as_posix()}"
+    )
 
 
 class Settings(BaseModel):
     app_name: str = "smartcloud-x-auth-user-service"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     api_prefix: str = "/api/v1"
     internal_api_prefix: str = "/internal/v1"
     env: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_ENV", "local"))
@@ -111,6 +128,9 @@ class Settings(BaseModel):
     verification_code_ttl_seconds: int = Field(
         default_factory=lambda: int(os.getenv("AUTH_USER_SERVICE_CODE_TTL_SECONDS", "300"))
     )
+    verification_code_value: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_VERIFICATION_CODE_VALUE", "123456")
+    )
     reset_challenge_ttl_seconds: int = Field(
         default_factory=lambda: int(os.getenv("AUTH_USER_SERVICE_RESET_TTL_SECONDS", "600"))
     )
@@ -123,11 +143,19 @@ class Settings(BaseModel):
     default_time_zone: str = Field(
         default_factory=lambda: os.getenv("SMARTCLOUD_TIMEZONE", "Asia/Shanghai")
     )
-    data_path: Path = Field(
-        default_factory=lambda: _resolve_path_env(
-            "AUTH_USER_SERVICE_DATA_PATH",
+    database_url: str = Field(default_factory=_default_database_url)
+    bootstrap_path: Path | None = Field(
+        default_factory=lambda: _resolve_path_env_aliases(
+            ("AUTH_USER_SERVICE_BOOTSTRAP_PATH", "AUTH_USER_SERVICE_DATA_PATH"),
             _service_root() / "data" / "auth-store.json",
         )
+    )
+    redis_url: str | None = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_REDIS_URL")
+        or os.getenv("SMARTCLOUD_REDIS_URL")
+    )
+    redis_namespace: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_REDIS_NAMESPACE", "smartcloud-x:auth")
     )
     allowed_internal_callers: list[str] = Field(
         default_factory=lambda: _parse_csv_env_aliases(

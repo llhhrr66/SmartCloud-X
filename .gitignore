@@ -18,3 +18,6 @@ apps/research-service/data/*.json
 apps/knowledge-service/data/knowledge-store.json
 apps/knowledge-service/data/knowledge-*.jsonl
 apps/knowledge-service/data/raw-objects/
+apps/*/.env.dev
+apps/*/.env.local
+scripts/dev/

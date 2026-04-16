@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="smartcloud-research-tests-"))
-os.environ["RESEARCH_SERVICE_DATA_PATH"] = str(TEST_DATA_ROOT / "research-store.json")
+os.environ["RESEARCH_SERVICE_DATABASE_URL"] = f"sqlite:///{(TEST_DATA_ROOT / 'research-service.db').as_posix()}"
 
 
 def activate_service_imports() -> None:

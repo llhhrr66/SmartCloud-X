@@ -60,6 +60,231 @@ def test_runtime_executes_query_tool_and_returns_summary() -> None:
     assert "账单周期" in (executions[0].final_answer or "")
 
 
+def test_runtime_executes_instance_cost_query_from_session_context() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="帮我查下这台实例费用",
+            conversation_id="conv-instance-cost-runtime",
+            scene="billing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                account_id="acct-1",
+                permissions=["user:billing.read"],
+            ),
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                    "billing_cycle": "2026-04",
+                }
+            },
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="帮我查下这台实例费用",
+            scene="billing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                account_id="acct-1",
+                permissions=["user:billing.read"],
+            ),
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                    "billing_cycle": "2026-04",
+                }
+            },
+        ),
+        TraceContext(
+            requestId="req-instance-cost-runtime",
+            conversationId="conv-instance-cost-runtime",
+            traceId="trace-instance-cost-runtime",
+        ),
+    )
+
+    assert executions[0].status == "success"
+    assert executions[0].tool_calls[0].tool_name == "billing.query_instance_cost"
+    assert executions[0].tool_calls[0].payload["instance_id"] == "gpu-cn-sh2-01"
+    assert "gpu-cn-sh2-01" in (executions[0].final_answer or "")
+    assert "412.68" in (executions[0].final_answer or "")
+
+
+def test_runtime_executes_product_recommendation_and_returns_summary() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例规格",
+            conversation_id="conv-product-runtime",
+            scene="technical_support",
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例规格",
+            scene="technical_support",
+        ),
+        TraceContext(
+            requestId="req-product-runtime",
+            conversationId="conv-product-runtime",
+            traceId="trace-product-runtime",
+        ),
+    )
+
+    assert executions[0].status == "success"
+    assert [tool_call.tool_name for tool_call in executions[0].tool_calls] == [
+        "product.catalog_lookup",
+        "product.recommend_instance",
+    ]
+    assert "gi4.2xlarge" in (executions[0].final_answer or "")
+    assert "NVIDIA L40S" in (executions[0].final_answer or "")
+
+
+def test_runtime_executes_service_status_query_from_session_context() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="帮我查下这台实例现在是不是故障了",
+            conversation_id="conv-service-status-runtime",
+            scene="technical_support",
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                }
+            },
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="帮我查下这台实例现在是不是故障了",
+            scene="technical_support",
+            session_context={
+                "attributes": {
+                    "primary_instance_id": "gpu-cn-sh2-01",
+                }
+            },
+        ),
+        TraceContext(
+            requestId="req-service-status-runtime",
+            conversationId="conv-service-status-runtime",
+            traceId="trace-service-status-runtime",
+        ),
+    )
+
+    assert executions[0].status == "success"
+    assert executions[0].tool_calls[0].tool_name == "support.query_service_status"
+    assert executions[0].tool_calls[0].payload["instance_id"] == "gpu-cn-sh2-01"
+    assert executions[0].tool_calls[0].payload["status"] == "degraded"
+    assert "INC-" in (executions[0].final_answer or "")
+
+
+def test_runtime_executes_product_grounded_marketing_copy_chain() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="帮我给 GPU 实例写一段营销文案",
+            conversation_id="conv-product-marketing-runtime",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="帮我给 GPU 实例写一段营销文案",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+        ),
+        TraceContext(
+            requestId="req-product-marketing-runtime",
+            conversationId="conv-product-marketing-runtime",
+            traceId="trace-product-marketing-runtime",
+        ),
+    )
+
+    assert [execution.agent for execution in executions] == [
+        "product_tech_agent",
+        "ops_marketing_agent",
+    ]
+    assert executions[0].status == "handoff"
+    assert executions[0].tool_calls[-1].tool_name == "product.recommend_instance"
+    assert executions[1].status == "success"
+    assert executions[1].tool_calls[-1].tool_name == "marketing.generate_copy"
+    assert (
+        executions[1].tool_calls[-1].payload["product_summary"]
+        == "gi4.2xlarge / NVIDIA L40S x2"
+    )
+    assert "gi4.2xlarge / NVIDIA L40S x2" in executions[1].tool_calls[-1].payload["headline"]
+
+
+def test_runtime_reuses_recommendation_context_for_marketing_followup() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="把刚才推荐的 GPU 实例写成营销文案",
+            conversation_id="conv-product-marketing-followup-runtime",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+            session_context={
+                "active_products": ["GPU 实例"],
+                "attributes": {
+                    "recommended_instance_summary": "gi4.2xlarge / NVIDIA L40S x2",
+                    "recommended_instance_type": "gi4.2xlarge",
+                    "recommended_gpu_model": "NVIDIA L40S",
+                },
+            },
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="把刚才推荐的 GPU 实例写成营销文案",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+            session_context={
+                "active_products": ["GPU 实例"],
+                "attributes": {
+                    "recommended_instance_summary": "gi4.2xlarge / NVIDIA L40S x2",
+                    "recommended_instance_type": "gi4.2xlarge",
+                    "recommended_gpu_model": "NVIDIA L40S",
+                },
+            },
+        ),
+        TraceContext(
+            requestId="req-product-marketing-followup-runtime",
+            conversationId="conv-product-marketing-followup-runtime",
+            traceId="trace-product-marketing-followup-runtime",
+        ),
+    )
+
+    assert len(executions) == 1
+    assert executions[0].agent == "ops_marketing_agent"
+    assert [tool_call.tool_name for tool_call in executions[0].tool_calls] == [
+        "marketing.campaign_lookup",
+        "marketing.generate_copy",
+    ]
+    assert executions[0].tool_calls[-1].payload["product_summary"] == "gi4.2xlarge / NVIDIA L40S x2"
+
 
 def test_runtime_executes_order_status_query_from_session_context() -> None:
     router = AgentRouter()
@@ -385,7 +610,57 @@ def test_runtime_marks_human_handoff_status() -> None:
         TraceContext(requestId="req-3", conversationId="conv-human", traceId="trace-3"),
     )
     assert executions[0].status == "handoff"
+    assert executions[0].tool_calls[0].tool_name == "support.handoff_brief"
+    assert executions[0].tool_calls[0].payload["queue"] == "technical-support-l2"
+    assert "technical-support-l2" in (executions[0].final_answer or "")
     assert "human_handoff_requested" in executions[0].risk_flags
+
+
+def test_runtime_executes_technical_incident_ticket_chain_before_handoff() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="GPU 实例异常帮我转人工并创建工单",
+            conversation_id="conv-human-ticket-runtime",
+            scene="technical_support",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:ticket.write"],
+            ),
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="GPU 实例异常帮我转人工并创建工单",
+            scene="technical_support",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:ticket.write"],
+            ),
+        ),
+        TraceContext(
+            requestId="req-human-ticket-runtime",
+            conversationId="conv-human-ticket-runtime",
+            traceId="trace-human-ticket-runtime",
+        ),
+    )
+
+    assert [execution.agent for execution in executions] == [
+        "product_tech_agent",
+        "finance_order_agent",
+    ]
+    assert executions[0].status == "handoff"
+    assert [tool_call.tool_name for tool_call in executions[0].tool_calls] == [
+        "support.query_service_status",
+        "support.handoff_brief",
+    ]
+    assert executions[1].status == "success"
+    assert executions[1].tool_calls[0].tool_name == "ticket.create"
+    assert executions[1].tool_calls[0].payload["queue"] == "technical-support-l2"
+    assert executions[1].tool_calls[0].payload["incident_code"].startswith("INC-")
+    assert "工单" in (executions[1].final_answer or "")
 
 
 def test_runtime_stops_after_first_blocking_agent_result() -> None:

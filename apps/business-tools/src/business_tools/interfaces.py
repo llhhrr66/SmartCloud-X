@@ -67,6 +67,7 @@ class ToolUserActionHint(BaseModel):
     requires_account_context: bool = False
     confirmation_required: bool = False
     session_context_bindings: dict[str, list[str]] = Field(default_factory=dict)
+    user_profile_bindings: dict[str, list[str]] = Field(default_factory=dict)
     confirm_tool_names: list[str] = Field(default_factory=list)
 
 
@@ -306,6 +307,7 @@ def build_tool_user_action_hint(
             missing_auth_context=auth_context,
             required_permissions=permissions,
             requires_account_context=requires_account_context,
+            user_profile_bindings=_build_user_profile_bindings(auth_context),
         )
     if status == "confirmation-required":
         return ToolUserActionHint(
@@ -315,3 +317,18 @@ def build_tool_user_action_hint(
             confirm_tool_names=[definition.name],
         )
     return None
+
+
+def _build_user_profile_bindings(missing_auth_context: list[str]) -> dict[str, list[str]]:
+    bindings: dict[str, list[str]] = {}
+    for item in missing_auth_context:
+        normalized = str(item).strip()
+        if normalized == "user_id":
+            bindings.setdefault("user_id", []).append("user_id")
+        elif normalized == "account_id":
+            bindings.setdefault("account_id", []).append("account_id")
+        elif normalized == "roles":
+            bindings.setdefault("roles", []).append("roles")
+        elif normalized.startswith("permission:"):
+            bindings.setdefault("permissions", []).append("permissions")
+    return bindings

@@ -14,7 +14,9 @@ FastAPI-based knowledge ingestion service for SmartCloud-X.
 - service-local admin audit log persisted beside the runtime JSON store
 - owner-local audit inspection route for recent admin write events
 - async indexing outbox lifecycle scaffolding with queued/processing/failed/completed state persisted beside the runtime store
+- MySQL-backed runtime metadata mirror for knowledge-base profiles, document profiles, and admin async jobs, with local JSON retained as a migration-safety fallback
 - a practical `app.worker` indexing worker that drains the outbox into MinIO, MySQL, Qdrant, OpenSearch, and Redis when those connectors are configured
+- live-search preference for OpenSearch BM25 and Qdrant vector hits when those backends are configured, with deterministic local keyword fallback for cold or degraded environments
 - Prometheus metrics and health endpoint
 - readiness-aware health diagnostics for runtime store, audit path, starter catalog, and import-root availability
 - readiness and inventory gauges on `/metrics` so Prometheus/Grafana can observe degraded local baselines without parsing `/healthz` JSON
@@ -61,7 +63,7 @@ uvicorn app.main:app --reload --port 8030
 ## Notes
 - `GET /healthz` now returns additive readiness diagnostics (`ready`, `readinessChecks`, `warnings`) so deploy probes and `web-admin` can tell the difference between a running process and a usable local ingestion environment.
 - `/metrics` now refreshes and exports `knowledge_readiness_state`, `knowledge_readiness_check_state{check_name=...}`, `knowledge_health_warning_count`, and `knowledge_catalog_entity_count{entity=...}` for observability-friendly readiness and inventory tracking.
-- The baseline uses a local JSON store at `data/knowledge-store.json`.
+- The baseline keeps documents/chunks in a local JSON runtime store at `data/knowledge-store.json`, but when `SMARTCLOUD_MYSQL_DSN` is configured it now prefers MySQL for KB/document/admin metadata while retaining the JSON mirror as a fallback.
 - A starter catalog lives at `data/starter-catalog.json` and can be loaded through `POST /api/knowledge/v1/catalog:bootstrap`.
 - Filesystem starter docs live under `data/imports/`; the compose baseline mounts that directory into the running container and exposes it through `GET /api/knowledge/v1/imports:preview` and `POST /api/knowledge/v1/files:ingest`.
 - `SMARTCLOUD_KNOWLEDGE_DATA_PATH` lets deploy/runtime environments persist the writable store outside the image without hiding the starter catalog asset.
@@ -70,7 +72,7 @@ uvicorn app.main:app --reload --port 8030
 - `PATCH /api/v1/admin/knowledge-bases/{kb_id}` lets operators rename a KB, tune `retrieval_mode`, and toggle `status` between `ready` and `disabled` while preserving an auditable before/after record in the runtime audit log.
 - `GET /api/v1/admin/knowledge-documents/{doc_id}` returns the selected document read model together with chunk/token statistics and the latest async job id for operator drill-down.
 - `GET /api/v1/admin/jobs/{job_id}` lets the admin console resolve the latest create/reindex job record returned by the document detail payload.
-- `SMARTCLOUD_MINIO_ACCESS_KEY` and `SMARTCLOUD_MINIO_SECRET_KEY` let the worker upload raw mirrors into MinIO instead of only keeping the local mirror path.
+- `SMARTCLOUD_MINIO_ACCESS_KEY` and `SMARTCLOUD_MINIO_SECRET_KEY` let the worker upload raw mirrors into MinIO; snapshot/export payloads now treat the MinIO bucket/object key as the formal raw-object target while retaining a local mirror for migration safety.
 - `SMARTCLOUD_CONNECTOR_TIMEOUT_MS`, `SMARTCLOUD_QDRANT_VECTOR_SIZE`, `SMARTCLOUD_INDEX_WORKER_POLL_SECONDS`, and `SMARTCLOUD_INDEX_WORKER_BATCH_SIZE` tune the connector-processing worker without code changes.
 - `SMARTCLOUD_KNOWLEDGE_STARTER_CATALOG_PATH` lets operators swap in a different seed file when they need a service-local starter corpus.
 - `SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT` lets operators point filesystem imports at a different mounted directory.
@@ -78,15 +80,17 @@ uvicorn app.main:app --reload --port 8030
 - `SMARTCLOUD_TRACE_ENABLED=true` plus `OTEL_EXPORTER_OTLP_ENDPOINT` enables Phoenix-compatible OTLP tracing for request spans and ingestion/search child spans; `/healthz` and `/metrics` are intentionally excluded to keep collector noise low.
 - Filesystem import requests must keep both `directory` and `glob` inside `SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT`; parent-traversal, absolute, drive-prefixed, and out-of-root resolved matches are rejected.
 - `GET /api/knowledge/v1/overview` gives operators a quick inventory summary without requiring direct store access.
-- `GET /api/knowledge/v1/snapshot` returns a portable JSON export of the current runtime state, including overview data, raw sources/documents/chunks, KB profiles, admin jobs, and recent audit records for debugging or handoff.
-- snapshot export now reconciles missing KB/document profiles against the runtime store before building the payload, merges legacy duplicate profiles without dropping more informative file/source fields, and keeps exported outbox connector results aligned with the live runtime state.
+- `GET /api/knowledge/v1/snapshot` returns a portable JSON export of the current runtime state, including overview data, raw sources/documents/chunks, MySQL-backed KB/document/admin metadata, and recent audit records for debugging or handoff.
+- snapshot export now refreshes KB/document/admin metadata from the MySQL authority before reconciling against the runtime store, so stale local JSON profile blobs do not overwrite exported admin state during migration.
+- snapshot export also reconciles missing KB/document profiles against the runtime store, merges legacy duplicate profiles without dropping more informative file/source fields, and keeps exported outbox connector results aligned with the live runtime state.
+- snapshot export now emits its own OTLP span (`knowledge.snapshot.export`) so QA trace checks can validate export/handoff behavior alongside ingestion, indexing, and search spans.
 - `GET /api/knowledge/v1/chunks?documentId=...` powers the admin chunk inspector so operators can validate chunk boundaries and extracted keywords after ingestion.
 - `GET /api/knowledge/v1/imports:preview?directory=starter` lists candidate markdown/text files before an import run.
 - Admin document create currently treats `file_id` as a relative path inside the configured import root, which keeps the baseline practical before object storage and async parsing jobs are introduced.
 - Admin reindex returns an async-job-shaped record but performs the chunk rebuild immediately in the baseline so operators can validate chunk/output changes without a worker queue.
-- Async indexing events are persisted in JSONL form with retry-friendly lifecycle fields (`queued`, `processing`, `failed`, `completed`) plus per-connector result records so operators can see which MinIO/MySQL/Qdrant/OpenSearch/Redis steps succeeded before reprocessing an event.
+- Async indexing events are still mirrored into JSONL form with retry-friendly lifecycle fields (`queued`, `processing`, `failed`, `completed`) plus per-connector result records, but Redis pending/processing lists now act as the preferred active queue path when configured.
 - `python -m app.worker --once` drains one batch of queued indexing work, while `python -m app.worker` runs the worker loop used by the compose baseline.
 - Repeated ingestion of the same document under the same source reuses the existing record instead of inflating source counts.
 - Search responses include query tokens plus source/tag breakdowns so operators can compare direct knowledge hits with `rag-service` diagnostics.
-- The search implementation is intentionally simple and stable so `rag-service` can integrate before a vector database is introduced.
+- The search implementation now prefers live OpenSearch/Qdrant retrieval when those connectors are configured, while preserving deterministic local keyword fallback so `rag-service` remains usable during migration and cold-start scenarios.
 - When the request arrives from `rag-service` with W3C `traceparent`, the emitted knowledge-service spans join the same distributed trace while keeping the SmartCloud `X-Trace-Id` headers unchanged for local debugging.

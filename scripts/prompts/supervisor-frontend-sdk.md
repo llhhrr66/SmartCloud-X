@@ -43,3 +43,8 @@ Priority continuation tasks for this run:
 4. Keep app-local changes minimal and adoption-focused; prefer moving reusable logic/types into the shared SDK rather than leaving duplication in web-user/web-admin.
 
 Make real file changes and move this area from unassigned placeholder to usable shared frontend baseline.
+
+Current override priority (2026-04-16, real backend adoption):
+1. Help frontend surfaces consume real backend contracts cleanly instead of leaning on app-local mock-first DTO/adapters.
+2. Prefer shared live API adapters, persistence-aware state helpers, and real envelope parsing over app-local fake/demo shaping.
+3. Where web-user/web-admin still need local fallback logic, keep it explicitly degraded/dev-only and make the live path the default shared SDK story.

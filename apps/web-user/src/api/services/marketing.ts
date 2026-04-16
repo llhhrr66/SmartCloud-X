@@ -24,6 +24,59 @@ import {
   mockListPosterTasks
 } from '../mock';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function resolveCollectionItems(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(isRecord);
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const candidates = [value.items, value.tasks, value.list, value.results];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(isRecord);
+    }
+  }
+
+  if (Array.isArray(value.data)) {
+    return value.data.filter(isRecord);
+  }
+
+  if (isRecord(value.data)) {
+    return resolveCollectionItems(value.data);
+  }
+
+  return [];
+}
+
+function sortPosterTasks(tasks: PosterTask[]): PosterTask[] {
+  return [...tasks].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+}
+
+async function listTrackedPosterTasks(taskIds: string[]): Promise<PosterTask[]> {
+  if (!taskIds.length) {
+    return [];
+  }
+
+  const settled = await Promise.allSettled(taskIds.map((taskId) => getPosterTask(taskId)));
+  return settled
+    .filter((item): item is PromiseFulfilledResult<PosterTask> => item.status === 'fulfilled')
+    .map((item) => item.value);
+}
+
+function mergePosterTasks(primary: PosterTask[], secondary: PosterTask[]): PosterTask[] {
+  return sortPosterTasks([
+    ...primary,
+    ...secondary.filter((task) => !primary.some((item) => item.taskId === task.taskId))
+  ]);
+}
+
 async function getPosterTask(taskId: string): Promise<PosterTask> {
   if (appEnv.useMockApi) {
     const tasks = await mockListPosterTasks();
@@ -36,6 +89,14 @@ async function getPosterTask(taskId: string): Promise<PosterTask> {
 
   const data = await apiClient.request<Record<string, unknown>>(`/api/v1/marketing/posters/${taskId}`);
   return mapPosterTask(data);
+}
+
+async function listLivePosterTasks(): Promise<PosterTask[]> {
+  const data = await apiClient.request<Record<string, unknown>>(
+    '/api/v1/marketing/posters?page=1&page_size=20&sort_by=updated_at&sort_order=desc'
+  );
+
+  return sortPosterTasks(resolveCollectionItems(data).map(mapPosterTask));
 }
 
 export const marketingService = {
@@ -66,16 +127,24 @@ export const marketingService = {
       return mockListPosterTasks();
     }
 
-    const taskIds = listTaskIds('poster');
-    if (!taskIds.length) {
-      return [];
-    }
+    const trackedTaskIds = listTaskIds('poster');
 
-    const settled = await Promise.allSettled(taskIds.map((taskId) => getPosterTask(taskId)));
-    return settled
-      .filter((item): item is PromiseFulfilledResult<PosterTask> => item.status === 'fulfilled')
-      .map((item) => item.value)
-      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+    try {
+      const liveTasks = await listLivePosterTasks();
+      const missingTrackedIds = trackedTaskIds.filter((taskId) => !liveTasks.some((item) => item.taskId === taskId));
+      if (!missingTrackedIds.length) {
+        return liveTasks;
+      }
+
+      const trackedTasks = await listTrackedPosterTasks(missingTrackedIds);
+      return mergePosterTasks(liveTasks, trackedTasks);
+    } catch (error) {
+      if (!trackedTaskIds.length) {
+        throw error;
+      }
+
+      return sortPosterTasks(await listTrackedPosterTasks(trackedTaskIds));
+    }
   },
 
   async getPosterTask(taskId: string): Promise<PosterTask> {

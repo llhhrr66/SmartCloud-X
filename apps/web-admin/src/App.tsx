@@ -825,7 +825,12 @@ export default function App() {
           retrievalKnowledgeBaseId ? [retrievalKnowledgeBaseId] : [],
           parseCsv(filterTags),
         ),
-        diagnoseAdminRetrieval(query, 5, retrievalKnowledgeBaseId || undefined),
+        diagnoseAdminRetrieval({
+          query,
+          topK: 5,
+          knowledgeBaseId: retrievalKnowledgeBaseId || undefined,
+          includeCitations: true,
+        }),
       ]);
       startTransition(() => {
         setRetrievalState(result);
@@ -850,7 +855,12 @@ export default function App() {
           retrievalKnowledgeBaseId ? [retrievalKnowledgeBaseId] : [],
           tags,
         ),
-        searchKnowledgeAdminPreview(query, 5, retrievalKnowledgeBaseId || undefined, tags),
+        searchKnowledgeAdminPreview({
+          query,
+          topK: 5,
+          knowledgeBaseId: retrievalKnowledgeBaseId || undefined,
+          tags,
+        }),
       ]);
       startTransition(() => {
         setSearchState(result);

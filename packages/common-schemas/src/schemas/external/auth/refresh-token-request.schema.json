@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/auth/refresh-token-request.schema.json",
+  "title": "RefreshTokenRequest",
+  "type": "object",
+  "required": [
+    "refresh_token"
+  ],
+  "properties": {
+    "refresh_token": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

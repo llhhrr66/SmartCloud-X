@@ -1,0 +1,275 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Research Service API
+  version: 0.5.0
+  description: Foundation-owned placeholder baseline for current user-facing research task routes.
+x-owner-service: research-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: research_healthz
+      summary: Check research service liveness.
+      x-owner-service: research-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy research service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: research-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/research/tasks:
+    get:
+      tags: [research]
+      operationId: research_listTasks
+      summary: List research task history for the current user.
+      description: Frozen additive baseline introduced for web-user live-mode history pages.
+      x-owner-service: research-service
+      x-permission-code: user:research.read
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortByQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortOrderQuery
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, completed, failed]
+      responses:
+        '200':
+          description: Research task history response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchTaskListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+    post:
+      tags: [research]
+      operationId: research_createTask
+      summary: Create a research generation task.
+      x-owner-service: research-service
+      x-permission-code: user:research.write
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: true
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, scope, depth, output_format, reference_urls]
+              properties:
+                topic:
+                  type: string
+                  minLength: 1
+                scope:
+                  type: string
+                  minLength: 1
+                depth:
+                  type: string
+                  enum: [lite, standard, deep]
+                output_format:
+                  type: string
+                  enum: [markdown, pdf]
+                reference_urls:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+              additionalProperties: false
+      responses:
+        '202':
+          description: Research task accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchTaskCreateSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/research/tasks/{task_id}:
+    get:
+      tags: [research]
+      operationId: research_getTask
+      summary: Get a research task detail for polling or result display.
+      x-owner-service: research-service
+      x-permission-code: user:research.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Research task detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchTaskDetailSuccessEnvelope'
+              examples:
+                completedTask:
+                  summary: Completed research task detail with nullable no-error fields
+                  value:
+                    code: 0
+                    message: ok
+                    request_id: req-research-task
+                    timestamp: 1776326400000
+                    data:
+                      task_id: task-research-1
+                      status: completed
+                      topic: 企业级多智能体客服平台选型
+                      scope: 国内公有云客服场景
+                      depth: standard
+                      output_format: markdown
+                      progress: 100
+                      created_at: '2026-04-16T09:00:00Z'
+                      summary: 已生成带引用的调研摘要。
+                      report_file_id: report-1001
+                      started_at: '2026-04-16T09:01:00Z'
+                      finished_at: '2026-04-16T09:05:00Z'
+                      error_message: null
+                      updated_at: '2026-04-16T09:05:00Z'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/research/tasks/{task_id}/status:
+    get:
+      tags: [research]
+      operationId: research_getTaskStatus
+      summary: Get the current polling-oriented status view for a research task.
+      description: Additive helper route used by the owned research service to expose focused status/result-ready metadata without changing the primary task detail contract.
+      x-owner-service: research-service
+      x-permission-code: user:research.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Research task status payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchTaskStatusSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/research/tasks/{task_id}/result:
+    get:
+      tags: [research]
+      operationId: research_getTaskResult
+      summary: Get the current placeholder result payload for a research task.
+      description: Additive helper route used by the owned research service to expose report download/preview metadata without changing the primary task detail contract.
+      x-owner-service: research-service
+      x-permission-code: user:research.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Research task result placeholder payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchTaskResultSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+components:
+  schemas:
+    ResearchTaskCreateSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ResearchTaskCreateResponseData
+    ResearchTaskListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ResearchTaskListData
+    ResearchTaskDetailSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ResearchTask
+    ResearchTaskStatusSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ResearchTaskStatusData
+    ResearchTaskResultSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ResearchTaskResultData

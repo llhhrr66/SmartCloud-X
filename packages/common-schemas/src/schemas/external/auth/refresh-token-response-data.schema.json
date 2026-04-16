@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/auth/refresh-token-response-data.schema.json",
+  "title": "RefreshTokenResponseData",
+  "type": "object",
+  "required": [
+    "access_token",
+    "refresh_token",
+    "expires_in"
+  ],
+  "properties": {
+    "access_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "refresh_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expires_in": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "user": {
+      "$ref": "./auth-user-profile.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

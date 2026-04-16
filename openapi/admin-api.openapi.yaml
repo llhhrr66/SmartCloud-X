@@ -1,0 +1,673 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Admin API
+  version: 0.1.0
+  description: Foundation-owned external admin placeholder baseline aligned to spec sections 20.14 and 20.15.
+x-owner-service: gateway-service
+servers:
+  - url: /
+paths:
+  /api/v1/admin/dashboard/summary:
+    get:
+      tags: [admin-dashboard]
+      operationId: admin_getDashboardSummary
+      summary: Return the admin dashboard summary cards.
+      description: Gateway-level aggregate read for the admin dashboard baseline. Default time range is the last 7 days.
+      x-owner-service: gateway-service
+      x-permission-code: admin:ops.read
+      x-error-codes: [4010002, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: date_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Dashboard summary response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboardSummarySuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-bases:
+    get:
+      tags: [admin-kb]
+      operationId: admin_listKnowledgeBases
+      summary: List knowledge bases for the admin console.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4001001, 4010002, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: scene
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Knowledge-base list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeBaseListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+    post:
+      tags: [admin-kb]
+      operationId: admin_createKnowledgeBase
+      summary: Create a knowledge base.
+      description: Baseline admin write route owned by knowledge-service.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.write
+      x-error-codes: [4001001, 4010002, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-audit-log-required: true
+      x-operator-reason-required: true
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XOperatorReasonRequiredHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, code, scene, language, retrieval_mode, embedding_model]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                code:
+                  type: string
+                  minLength: 1
+                scene:
+                  type: string
+                  minLength: 1
+                language:
+                  type: string
+                  minLength: 1
+                retrieval_mode:
+                  type: string
+                  minLength: 1
+                embedding_model:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        '201':
+          description: Knowledge base created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeBaseSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-bases/{kb_id}:
+    patch:
+      tags: [admin-kb]
+      operationId: admin_updateKnowledgeBase
+      summary: Update mutable knowledge-base metadata.
+      description: Current placeholder baseline for renaming a KB, updating the description or retrieval mode, and toggling `status` between `ready` and `disabled`.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.write
+      x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-audit-log-required: true
+      x-operator-reason-required: true
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: kb_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XOperatorReasonRequiredHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeBaseUpdateRequest
+      responses:
+        '200':
+          description: Updated knowledge-base read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeBaseSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-bases/{kb_id}/documents:
+    get:
+      tags: [admin-kb]
+      operationId: admin_listKnowledgeDocuments
+      summary: List knowledge documents in a knowledge base.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: kb_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Knowledge-document list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeDocumentListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+    post:
+      tags: [admin-kb]
+      operationId: admin_createKnowledgeDocument
+      summary: Create a knowledge document under a knowledge base.
+      description: Baseline document-ingest contract. The current placeholder returns an accepted/processing document record.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.write
+      x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-audit-log-required: true
+      x-operator-reason-required: true
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: kb_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XOperatorReasonRequiredHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_id, title, source_type]
+              properties:
+                file_id:
+                  type: string
+                  minLength: 1
+                title:
+                  type: string
+                  minLength: 1
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                source_type:
+                  type: string
+                  minLength: 1
+                source_uri:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        '202':
+          description: Knowledge document accepted for parsing and indexing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeDocumentSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-documents/{doc_id}:
+    get:
+      tags: [admin-kb]
+      operationId: admin_getKnowledgeDocument
+      summary: Return the detail baseline for a single knowledge document.
+      description: Includes the selected document record, chunk/token statistics, and the latest async job id for operator drill-down.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Knowledge-document detail response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeDocumentDetailSuccessEnvelope'
+              examples:
+                noDocumentError:
+                  summary: Document detail with a nullable document-level error field
+                  value:
+                    code: 0
+                    message: ok
+                    request_id: req-admin-doc-detail
+                    timestamp: 1776326400000
+                    data:
+                      document:
+                        doc_id: doc-1001
+                        kb_id: kb-1001
+                        title: GPU 产品手册
+                        status: ready
+                        parse_status: completed
+                        index_status: completed
+                        version_no: 3
+                        file_id: file-1001
+                        source_type: file
+                        source_uri: minio://kb/file-1001.pdf
+                        chunk_count: 24
+                        token_count: 12800
+                        error_message: null
+                        indexed_at: '2026-04-16T09:45:00Z'
+                      chunk_stats:
+                        chunk_count: 24
+                        token_count: 12800
+                        average_tokens_per_chunk: 533.33
+                        latest_job_id: job-1001
+                      error_message: null
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-documents/{doc_id}/chunks:
+    get:
+      tags: [admin-kb]
+      operationId: admin_listKnowledgeDocumentChunks
+      summary: Preview truncated chunks for a knowledge document.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+      responses:
+        '200':
+          description: Knowledge-chunk preview response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKnowledgeChunkListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/jobs/{job_id}:
+    get:
+      tags: [admin-jobs]
+      operationId: admin_getAsyncJob
+      summary: Return a single async job record for admin polling.
+      description: Current baseline covers knowledge-document create and reindex jobs owned by knowledge-service; future gateway aggregation may widen ownership later.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:job.read
+      x-error-codes: [4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Admin async-job detail response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAsyncJobSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/knowledge-documents/{doc_id}/reindex:
+    post:
+      tags: [admin-kb]
+      operationId: admin_reindexKnowledgeDocument
+      summary: Trigger knowledge-document reindexing.
+      description: High-risk admin route. The baseline returns an async-job record and requires both `confirm_token` and `X-Operator-Reason`.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.write
+      x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-audit-log-required: true
+      x-operator-reason-required: true
+      x-confirm-token-required: true
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XOperatorReasonRequiredHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [force, confirm_token]
+              properties:
+                force:
+                  type: boolean
+                confirm_token:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        '202':
+          description: Reindex job accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAsyncJobSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/retrieval/search-preview:
+    post:
+      tags: [admin-retrieval]
+      operationId: admin_previewKnowledgeSearch
+      summary: Preview direct knowledge-search hits for an operator.
+      description: Gateway-published admin route currently backed by `POST /api/knowledge/v1/search`.
+      x-owner-service: knowledge-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4001001, 4010002, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-temporary-gateway-proxy: true
+      x-internal-owner-route: POST /api/knowledge/v1/search
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  minLength: 1
+                kb_id:
+                  type: string
+                  minLength: 1
+                top_k:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+              additionalProperties: false
+      responses:
+        '200':
+          description: Search-preview response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRetrievalSearchPreviewSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/retrieval/diagnostics:
+    post:
+      tags: [admin-retrieval]
+      operationId: admin_runRetrievalDiagnostics
+      summary: Run admin retrieval diagnostics with rewrite and coverage details.
+      description: Gateway-published admin route currently backed by `POST /api/rag/v1/diagnose`.
+      x-owner-service: rag-service
+      x-permission-code: admin:kb.read
+      x-error-codes: [4001001, 4010002, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      x-temporary-gateway-proxy: true
+      x-internal-owner-route: POST /api/rag/v1/diagnose
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  minLength: 1
+                kb_id:
+                  type: string
+                  minLength: 1
+                top_k:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                include_citations:
+                  type: boolean
+                  default: true
+              additionalProperties: false
+      responses:
+        '200':
+          description: Retrieval-diagnostics response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRetrievalDiagnosticsSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+components:
+  schemas:
+    AdminDashboardSummarySuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminDashboardSummaryData
+    AdminKnowledgeBaseSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeBase
+    AdminKnowledgeBaseListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeBaseListData
+    AdminKnowledgeDocumentSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeDocument
+    AdminKnowledgeDocumentDetailSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeDocumentDetailData
+    AdminKnowledgeDocumentListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeDocumentListData
+    AdminKnowledgeChunkListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminKnowledgeChunkListData
+    AdminAsyncJobSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminAsyncJob
+    AdminRetrievalSearchPreviewSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminRetrievalSearchPreviewData
+    AdminRetrievalDiagnosticsSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminRetrievalDiagnosticsData

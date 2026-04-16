@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/agent-name.schema.json",
+  "title": "AgentName",
+  "type": "string",
+  "enum": [
+    "product_tech_agent",
+    "finance_order_agent",
+    "icp_service_agent",
+    "ops_marketing_agent",
+    "deep_research_agent"
+  ]
+}

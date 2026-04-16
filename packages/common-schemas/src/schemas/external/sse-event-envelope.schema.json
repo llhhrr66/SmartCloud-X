@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/sse-event-envelope.schema.json",
+  "title": "SseEventEnvelope",
+  "type": "object",
+  "required": ["event", "data"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "minLength": 1
+    },
+    "data": true,
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retry": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

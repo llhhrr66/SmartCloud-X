@@ -1,0 +1,188 @@
+# Supervisor Web User Status
+
+## Completed
+- latest browser-suite stabilization pass completed:
+  - fixed the owned Playwright `/tickets` and composite `/service-desk` create-ticket coverage by scoping those assertions through the create form and using a form-scoped textarea locator instead of brittle card-wide label queries
+  - revalidated the repaired service-desk flows via a focused Playwright rerun and then reran the full browser suite, keeping login/auth recovery/chat/citation/billing/orders/profile/tickets/service-desk/ICP/marketing/research/sessions recorded as browser-validated
+  - kept the explicit browser-only gaps unchanged: research report file preview and runtime-config container override behavior are still baseline-only
+- latest browser-coverage expansion pass completed:
+  - made the Playwright live-mode mock API server stateful for password rotation and password-reset challenges so auth recovery and `/profile` password changes are truly browser-validated instead of fake happy paths
+  - added browser coverage for forgot-password -> reset -> new-password login, `/profile` profile-save + password-rotation logout/relogin, and `/sessions` rename/archive/restore/delete lifecycle actions
+  - corrected owned docs/status artifacts so `/orders`, composite `/service-desk`, `/profile`, and `/sessions` are now recorded as browser-validated; the remaining explicit browser gaps are research report file preview and runtime-config container overrides
+- latest browser-validation pass completed:
+  - fixed a live-mode runtime bug where the shared API/session factories were capturing an unbound browser `fetch`, which caused login and all live requests to fail with `Illegal invocation`
+  - added an app-local `browserFetch` wrapper and routed both the owned API client and auth session manager through it without modifying non-owned shared packages
+  - hardened the Playwright suite so selectors now target stable navigation/headings instead of ambiguous text collisions introduced by richer dashboard/service-desk/telemetry UI
+  - refined the billing recovery spec to navigate through the authenticated UI instead of a hard reload, so it validates the intended `401 -> refresh -> retry` path rather than unrelated bootstrap timing
+  - surfaced poster `theme` in the marketing task history card so newly created poster tasks expose the user-entered topic in the actual UI
+- latest telemetry + chat-stream resilience pass completed:
+  - added app-local telemetry coverage for `page_view`, `login_submit`, `api_error`, `permission_denied`, `chat_stream_start`, `chat_stream_end`, and `chat_stream_error`
+  - wrapped the owned API client so request/stream failures now record `api_error`, and surfaced the latest 40 events in the shell sidebar for QA/integration debugging
+  - implemented automatic SSE reconnect on `/chat` with a hard cap of 3 retries plus visible reconnect status, aligning the user chat baseline more closely with spec `20.15.1` / `20.15.4`
+  - refreshed owned README / API integration docs and revalidated via `npm run typecheck` + `npm run build`
+- latest service-desk upload-baseline hardening completed:
+  - separated generic `chat_attachment` staging from ICP `icp_material` staging inside `ServiceDeskPage`, using route-aware defaults so `/tickets` stays attachment-focused and `/icp` stays material-focused
+  - added removal controls for both prepared attachments and prepared ICP materials, preventing accidental cross-form contamination before ticket/refund/ICP submission
+  - refreshed owned README / API integration docs and revalidated via `npm run typecheck` + `npm run build`
+- latest runtime-config deployability pass completed:
+  - added `/runtime-config.js` loading plus app-local env merging so the user console can switch API base URL, title, version, mock flag, and timeout values at container start without rebuilding the image
+  - extended the owned Docker + Nginx baseline with a startup script that regenerates `runtime-config.js` from environment variables and serves it with `Cache-Control: no-store`
+  - surfaced `Build` vs `Runtime` config mode in the shell sidebar and refreshed owned README / API integration docs
+- latest request-metadata + task-workspace hardening pass completed:
+  - added app-local request metadata helpers so live requests now emit stable `X-Request-Id` values plus deterministic `Idempotency-Key` headers for chat/session/task/refund/file write paths
+  - hardened the billing workspace to degrade partial live failures instead of blanking the whole page when one downstream billing/order/ticket segment is unavailable
+  - hardened the marketing workspace so live poster polling now auto-refreshes every 3 seconds for up to 10 minutes, then stops and guides the user to manual refresh per spec `20.15.1`
+  - refreshed owned README / API integration docs to describe deterministic idempotency behavior, billing partial-failure UX, and the marketing polling limit
+- latest chat-route reliability pass completed:
+  - made `/chat/:conversationId` explicitly hydrate the session detail route before rendering the detail page, so direct-opened conversations outside the default list window still show the correct metadata
+  - added a 404-style empty state for missing conversations instead of falling through to a writable draft composer
+  - aligned mock message loading with the same not-found behavior and refreshed owned docs/status artifacts
+- latest chat-baseline refinement completed:
+  - added app-local `conversationStore / messageStore / sseStore` separation for `/chat`, aligning the owned frontend more closely with spec `20.15.3`
+  - added starter prompt cards for billing / technical support / ICP / marketing so the chat baseline is immediately usable from an empty state
+  - added explicit composer submitting-state UX for the request-setup window before SSE begins
+  - synchronized `/sessions` rename/archive/restore/delete actions back into the shared chat stores so `/chat` and `/sessions` stay in sync inside one browser session
+- built and kept a practical user-facing web baseline in `apps/web-user/` covering:
+  - login + auth bootstrap
+  - dashboard
+  - chat + session history + retry
+  - billing / orders / tickets / ICP / service desk
+  - marketing + research workspaces
+  - profile/password management
+  - typed API adapters, mock/live toggles, Docker/Nginx packaging, and integration docs
+- latest auth-focused baseline pass completed:
+  - added login-page send-code support for both `login` and `reset_password` scenes
+  - added forgot-password challenge + reset-password UX aligned to `/api/v1/auth/password/forgot` and `/api/v1/auth/password/reset`
+  - expanded `src/api/services/auth.ts` with password-recovery placeholders for live mode
+  - made mock auth stateful so password login, password change, and password reset share the same local credential baseline
+  - updated mock change-password behavior so account-page password rotation is now testable end-to-end in mock mode
+  - added auth fixtures for send-code / password-forgot / password-reset success flows under `apps/web-user/tests/mocks/user/auth/`
+  - refreshed owned docs to describe the new auth recovery paths and fixture coverage
+- latest self-review hardening pass completed:
+  - fixed a code-login mismatch where users could choose SMS login with an email account or email-code login with a mobile number and only discover the problem after the backend rejected it
+  - added client-side channel/account validation so `/api/v1/auth/send-code` and `/api/v1/auth/login` now fail fast with clearer UX before issuing the request
+  - refreshed README and integration notes to reflect the accepted external envelope contract and the new login validation rule
+
+## Self-review and fixes
+- the latest self-review found that the focused `/tickets` route now nests a second reply form inside the same workspace card, which made the service-desk browser spec's card-wide `内容` lookup brittle; `tests/e2e/specs/service-desk.spec.ts` now scopes through the create form and fills the first create-form textarea so `/tickets` and composite `/service-desk` validate the intended submit path again
+- the latest self-review found the new password-related Playwright cases were using ambiguous `getByLabel('新密码')` locators that also matched `确认新密码`; the new browser specs now use exact label matching so the coverage is stable against overlapping form labels
+- the latest self-review found live-mode login and every shared-client request path could fail in Chromium because detached `fetch` references lost their window binding; `src/lib/fetch.ts`, `src/api/client.ts`, and `src/auth/session-manager.ts` now force a bound browser fetch path
+- the latest self-review also found the browser suite had become brittle as the UI gained quick links, telemetry badges, and duplicate text values; the failing Playwright specs now use exact or scoped locators and the billing recovery flow now navigates through the authenticated sidebar
+- the latest self-review found poster-task history only displayed campaign name + slogan, making freshly created poster topics hard to confirm in the UI; `MarketingPage` now renders `task.theme` in the history card and the browser spec validates that visible result
+- the latest self-review found telemetry metadata serialization should not assume every payload can be stringified; `src/lib/telemetry.ts` now falls back safely on unserializable metadata instead of risking a client-side failure in the recorder
+- the latest self-review also found that chat stream start/end/error telemetry was generating unrelated request ids across the same send flow; `ChatPage` now reuses one telemetry `request_id` across normal completion, cancellation, reconnect failure, and stream-event error branches
+- the latest self-review found that service-desk upload staging reused every completed file across ticket/refund and ICP forms with no removal path; `ServiceDeskPage` now separates generic attachments from ICP materials and lets users remove staged files before submit
+- the latest self-review found that runtime title overrides would only apply after the React bundle mounted; `index.html` now applies `VITE_APP_TITLE` immediately after loading `/runtime-config.js`, avoiding a stale browser-title flash during boot
+- the latest self-review found that the first billing degradation pass could display misleading zero/empty placeholders for failed segments; `BillingPage` now renders per-domain unavailable states and suppresses the global empty state during degraded loads
+- the latest self-review also found that manual marketing-task refresh could leave a stale page error visible after a later successful refresh; the refresh path now clears that stale error on success while keeping silent auto-refresh failures as a polling notice
+- the latest self-review found that the new chat-route hydration could still lose a direct-opened conversation when the session list refreshed from an older snapshot; `ChatPage` now preserves the current route conversation from the latest store snapshot before replacing the sidebar list
+- the latest self-review found that session mutations performed on `/sessions` could leave the `/chat` sidebar and message cache stale; the session-center actions now mirror those changes into the shared chat stores
+- the latest self-review also tightened the request-setup UX on `/chat` by adding an explicit submitting state before SSE starts, preventing duplicate sends during the create-session / dispatch gap
+- self-review caught a stale-reset issue: if the user changed the account after a reset challenge was created, the page could keep the old challenge; the login page now clears the local challenge and requires re-validation
+- self-review also found that code-login / password-recovery flows still visually suggested username input; the page now uses dynamic placeholders and rejects send-code attempts unless the account looks like a bound email or mobile number
+- rechecked the mock auth flow after making password storage stateful to ensure existing password-login defaults still work before any credential rotation happens
+- hardened live password-reset success parsing during the final self-review so envelope-wrapped responses do not rely on a nullable payload shape
+- the latest self-review found that code-login still allowed login-type/account-type mismatches on submit; `LoginPage` now blocks those mismatches before calling the auth APIs, so users no longer burn a send-code/login attempt on an invalid channel
+
+## Validation
+- `npx playwright test tests/e2e/specs/service-desk.spec.ts` in `apps/web-user/` -> 3 Playwright tests passed after the create-ticket locator hardening
+- `npm run test:e2e` in `apps/web-user/` -> 14 Playwright tests passed across 9 spec files:
+  - login + dashboard baseline
+  - forgot-password send-code + challenge + reset + new-password login
+  - chat send + SSE reconnect + citation detail
+  - citation detail `403`
+  - billing `401` refresh recovery
+  - marketing permission denial
+  - marketing `429` structured API error
+  - marketing copy + poster task + research task creation
+  - order detail + refund submission/history refresh
+  - `/profile` profile-save + password rotation + forced re-login
+  - focused ticket creation
+  - composite `/service-desk` attachment separation + ticket + ICP flow
+  - focused ICP upload/precheck/submit
+  - `/sessions` rename/archive/restore/delete lifecycle
+- re-ran `npm run typecheck && npm run build` in `apps/web-user/` after the browser-coverage expansion pass
+- re-ran `npm run typecheck` and `npm run build` in `apps/web-user/` after the browser-validation fixes
+- re-ran `npm run typecheck` and `npm run build` in `apps/web-user/` after the telemetry + SSE reconnect pass and the follow-up self-review fixes
+- re-ran `npm run typecheck` and `npm run build` in `apps/web-user/` after the service-desk upload separation + removal-control fix
+- `npm ci` in `apps/web-user/`
+- `npm run typecheck && npm run build` in `apps/web-user/`
+- `docker build -f apps/web-user/Dockerfile -t smartcloud-x-web-user:runtime .`
+- `docker run --rm -d --name smartcloud-x-web-user-runtime-smoke -p 38081:80 -e VITE_API_BASE_URL=http://runtime.example.internal:9000 -e 'VITE_APP_TITLE=SmartCloud-X User Console (Runtime)' -e VITE_USE_MOCK_API=true smartcloud-x-web-user:runtime`
+- `curl http://127.0.0.1:38081/healthz`
+- `curl http://127.0.0.1:38081/runtime-config.js`
+- removed generated `apps/web-user/node_modules` and `apps/web-user/dist` after the latest validation pass to keep the workspace clean
+- `npm ci` in `apps/web-user/`
+- `npm run typecheck` in `apps/web-user/`
+- `npm run build` in `apps/web-user/`
+- removed generated `apps/web-user/node_modules` and `apps/web-user/dist` after the latest validation pass to keep the workspace clean
+- re-ran `npm ci`, `npm run typecheck`, and `npm run build` in `apps/web-user/` after the chat-route hydration + not-found fix
+- removed generated `apps/web-user/node_modules` and `apps/web-user/dist` after the latest validation pass to keep the workspace clean
+- re-ran `npm ci` in `apps/web-user/` for the final chat-store refinement pass
+- re-ran `npm run typecheck && npm run build` in `apps/web-user/` after the chat-store + sessions-sync changes
+- removed generated `apps/web-user/node_modules` and `apps/web-user/dist` after the final validation pass to keep the workspace clean
+- `npm ci` in `apps/web-user/`
+- `npm run typecheck && npm run build` in `apps/web-user/`
+- re-ran `npm ci`, `npm run typecheck`, and `npm run build` in `apps/web-user/` after the final login validation fix
+- removed generated `apps/web-user/node_modules` and `apps/web-user/dist` after validation to keep the workspace clean
+
+## Non-blocking risks / gaps
+- the owned browser suite now validates login/auth recovery/chat/billing/orders/profile/sessions/tickets/ICP/marketing/research/service-desk mainlines, but research report file preview and runtime-config container overrides are still baseline-only from a browser-coverage perspective
+- spec `20.15.3` still expects shared frontend DTO + SDK artifacts (`packages/common-schemas/frontend`, `packages/frontend-sdk/*`), but the frozen baseline does not provide them yet; web-user therefore still carries temporary app-local DTOs and API adapters
+- the new telemetry baseline is currently browser-local only; if platform owners want centralized analytics/observability ingestion for user-web page/api/chat-stream events, that still needs a shared contract or backend sink outside `apps/web-user`
+- chat-to-ticket manual assist currently bridges context through frontend query-prefill; a first-class backend conversation-to-ticket endpoint would still be needed for server-side correlation/automation beyond the web client
+- research/poster global history list contracts are still incomplete, so live mode falls back to browser-local tracked task IDs plus detail queries
+- ICP application live history still lacks a canonical list/read endpoint and currently falls back to browser-local tracked application numbers
+- live attachment staging still depends on backend file-service upload + completion semantics outside `apps/web-user`
+- order detail / refund detail UX now prefers detail endpoints, but live environments may still fall back to list-level data until backend owners publish the canonical read routes consistently
+- login/send-code/password-reset rate limits, captcha enforcement, and token revocation semantics remain backend-owned; the frontend baseline now calls the right routes but cannot simulate those security policies beyond local mock validation
+- runtime config is now solved inside `apps/web-user`, but a frozen cross-frontend runtime-config convention is still unassigned; if more frontends adopt the same pattern it should be promoted through foundation instead of duplicated ad hoc
+
+## Integration points
+- auth/account:
+  - `/api/v1/auth/login`
+  - `/api/v1/auth/send-code`
+  - `/api/v1/auth/refresh`
+  - `/api/v1/auth/me`
+  - `/api/v1/auth/logout`
+  - `/api/v1/auth/password/forgot`
+  - `/api/v1/auth/password/reset`
+  - `/api/v1/users/me`
+  - `/api/v1/users/me/change-password`
+- chat/session surfaces:
+  - `/api/v1/chat/sessions*`
+  - `/api/v1/chat/completions`
+  - `/api/v1/chat/sessions/{conversation_id}/cancel`
+  - `/api/v1/chat/sessions/{conversation_id}/retry`
+  - `/api/v1/citations/{citation_id}`
+- business workspaces:
+  - billing/orders/refunds: `/api/v1/billing/*`, `/api/v1/orders*`, `/api/v1/refunds*`
+  - tickets: `/api/v1/tickets`, `/api/v1/tickets/{ticket_no}`, `/api/v1/tickets/{ticket_no}/replies`
+  - ICP/files: `/api/v1/icp/materials/check`, `/api/v1/icp/applications*`, `/api/v1/files/*`
+  - marketing: `/api/v1/marketing/campaigns`, `/api/v1/marketing/copy/generate`, `/api/v1/marketing/posters*`
+  - research: `/api/v1/research/tasks*`
+- request metadata:
+  - `X-Request-Id`
+  - `Idempotency-Key`
+  - `X-Client-Platform`
+  - `X-Client-Version`
+  - `X-Tenant-Id`
+  - `X-User-Id`
+
+## Source of truth in app
+- telemetry store + sidebar inspector + event instrumentation: `apps/web-user/src/lib/telemetry.ts`, `apps/web-user/src/api/client.ts`, `apps/web-user/src/components/AppShell.tsx`, `apps/web-user/src/App.tsx`
+- bound live fetch wrapper for shared client/session integration: `apps/web-user/src/lib/fetch.ts`, `apps/web-user/src/api/client.ts`, `apps/web-user/src/auth/session-manager.ts`
+- service-desk upload staging separation + removal controls: `apps/web-user/src/pages/ServiceDeskPage.tsx`
+- chat state stores + helpers: `apps/web-user/src/stores/chat.ts`
+- chat page UI + starter prompts + route hydration/not-found state + SSE reconnect status: `apps/web-user/src/pages/ChatPage.tsx`
+- chat composer submitting-state UX: `apps/web-user/src/components/chat/ChatComposer.tsx`
+- session-center sync hooks into chat stores: `apps/web-user/src/pages/SessionsPage.tsx`
+- login + password recovery UI: `apps/web-user/src/pages/LoginPage.tsx`
+- auth/password recovery adapters: `apps/web-user/src/api/services/auth.ts`
+- stateful mock auth + password rotation behavior: `apps/web-user/src/api/mock.ts`, `apps/web-user/src/api/services/user.ts`
+- app-local auth/password recovery typing: `apps/web-user/src/types/domain.ts`
+- docs + fixtures: `apps/web-user/README.md`, `apps/web-user/docs/api-integration.md`, `apps/web-user/tests/mocks/user/README.md`, `apps/web-user/tests/mocks/user/auth/*.json`
+- runtime-config deployability baseline: `apps/web-user/src/config/env.ts`, `apps/web-user/index.html`, `apps/web-user/public/runtime-config.js`, `apps/web-user/docker-entrypoint.d/40-runtime-config.sh`, `apps/web-user/Dockerfile`, `apps/web-user/nginx.conf`
+- request metadata + deterministic idempotency helpers: `apps/web-user/src/lib/request-meta.ts`
+- billing/marketing live-hardening points: `apps/web-user/src/api/services/billing.ts`, `apps/web-user/src/pages/BillingPage.tsx`, `apps/web-user/src/pages/MarketingPage.tsx`
+- browser E2E coverage + helpers: `apps/web-user/playwright.config.ts`, `apps/web-user/tests/e2e/helpers.ts`, `apps/web-user/tests/e2e/mock-api-server.mjs`, `apps/web-user/tests/e2e/specs/*.spec.ts`

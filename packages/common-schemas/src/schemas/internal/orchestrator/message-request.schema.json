@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/message-request.schema.json",
+  "title": "MessageRequest",
+  "type": "object",
+  "required": [
+    "user_query"
+  ],
+  "properties": {
+    "user_query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scene": {
+      "$ref": "./scene-name.schema.json"
+    },
+    "user_profile": {
+      "$ref": "./user-profile.schema.json"
+    },
+    "session_context": {
+      "$ref": "./session-context.schema.json"
+    },
+    "retrieval_context": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "constraints": {
+      "$ref": "./runtime-constraints.schema.json"
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

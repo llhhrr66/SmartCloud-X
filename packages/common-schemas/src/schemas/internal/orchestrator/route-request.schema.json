@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/route-request.schema.json",
+  "title": "RouteRequest",
+  "type": "object",
+  "required": [
+    "user_query",
+    "conversation_id"
+  ],
+  "properties": {
+    "user_query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scene": {
+      "$ref": "./scene-name.schema.json"
+    },
+    "user_profile": {
+      "$ref": "./user-profile.schema.json"
+    },
+    "session_context": {
+      "$ref": "./session-context.schema.json"
+    },
+    "retrieval_required": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "tool_candidates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "preferred_agents": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-name.schema.json"
+      }
+    },
+    "constraints": {
+      "$ref": "./runtime-constraints.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

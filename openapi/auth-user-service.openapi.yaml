@@ -1,0 +1,769 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Auth User Service API
+  version: 0.1.0
+  description: Foundation-owned placeholder baseline for user auth, admin auth bootstrap, and internal permission-check routes aligned to spec sections 20.13, 20.14, and 20.17.
+x-owner-service: auth-user-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: auth_healthz
+      summary: Check auth-user-service liveness.
+      x-owner-service: auth-user-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy auth-user-service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: auth-user-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/auth/login:
+    post:
+      tags: [user-auth]
+      operationId: auth_login
+      summary: Login for the current end-user surface.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/LoginRequest
+      responses:
+        '200':
+          description: User login success response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginSuccessEnvelope'
+              example:
+                code: 0
+                message: ok
+                request_id: req-login-1
+                timestamp: 1776300000000
+                data:
+                  access_token: access-token
+                  refresh_token: refresh-token
+                  expires_in: 7200
+                  user:
+                    user_id: user-demo
+                    tenant_id: tenant-demo
+                    name: Demo User
+                    email: demo@smartcloud.local
+                    mobile: '13800138000'
+                    avatar_url: null
+                    locale: zh-CN
+                    time_zone: Asia/Shanghai
+                    permissions: [user:chat.use, user:research.read]
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/send-code:
+    post:
+      tags: [user-auth]
+      operationId: auth_sendCode
+      summary: Send a login or password-reset verification code.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SendCodeRequest
+      responses:
+        '200':
+          description: Verification code accepted for delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendCodeSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/refresh:
+    post:
+      tags: [user-auth]
+      operationId: auth_refresh
+      summary: Refresh the user access token pair.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/RefreshTokenRequest
+      responses:
+        '200':
+          description: Token refresh response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshTokenSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/me:
+    get:
+      tags: [user-auth]
+      operationId: auth_getCurrentUser
+      summary: Return the current authenticated user profile and permission set.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Current user profile response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserSuccessEnvelope'
+              example:
+                code: 0
+                message: ok
+                request_id: req-profile-1
+                timestamp: 1776300000000
+                data:
+                  user_id: user-demo
+                  tenant_id: tenant-demo
+                  name: Demo User
+                  email: demo@smartcloud.local
+                  mobile: '13800138000'
+                  avatar_url: null
+                  locale: zh-CN
+                  time_zone: Asia/Shanghai
+                  permissions: [user:chat.use, user:research.read]
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/profile:
+    get:
+      tags: [user-profile]
+      operationId: auth_getCurrentUserProfileAlias
+      summary: Return the current authenticated user profile through the mission-wording compatibility alias.
+      description: Additive compatibility alias for the same profile payload served by `/api/v1/auth/me`.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Current user profile response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+    patch:
+      tags: [user-profile]
+      operationId: auth_updateCurrentUserProfileAlias
+      summary: Update the mutable fields on the current user profile through the mission-wording compatibility alias.
+      description: Additive compatibility alias for the same profile update contract served by `/api/v1/users/me`.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/UserProfileUpdateRequest
+      responses:
+        '200':
+          description: Updated current user profile response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/logout:
+    post:
+      tags: [user-auth]
+      operationId: auth_logout
+      summary: Logout the current user and revoke the refresh token when provided.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/LogoutRequest
+      responses:
+        '200':
+          description: Logout succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [user-auth]
+      operationId: auth_forgotPasswordAlias
+      summary: Create a password-reset challenge through the mission-wording compatibility alias.
+      description: Additive compatibility alias for `/api/v1/auth/password/forgot`.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ForgotPasswordRequest
+      responses:
+        '200':
+          description: Password-reset challenge accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForgotPasswordSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/password/forgot:
+    post:
+      tags: [user-auth]
+      operationId: auth_forgotPassword
+      summary: Create a password-reset challenge after verifying a login code.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ForgotPasswordRequest
+      responses:
+        '200':
+          description: Password-reset challenge accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForgotPasswordSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/reset-password:
+    post:
+      tags: [user-auth]
+      operationId: auth_resetPasswordAlias
+      summary: Reset the user password through the mission-wording compatibility alias.
+      description: Additive compatibility alias for `/api/v1/auth/password/reset`.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ResetPasswordRequest
+      responses:
+        '200':
+          description: Password reset succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/password/reset:
+    post:
+      tags: [user-auth]
+      operationId: auth_resetPassword
+      summary: Reset the user password with a valid password-reset challenge.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: public-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ResetPasswordRequest
+      responses:
+        '200':
+          description: Password reset succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/users/me:
+    patch:
+      tags: [user-profile]
+      operationId: auth_updateCurrentUser
+      summary: Update the mutable fields on the current user profile.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/UserProfileUpdateRequest
+      responses:
+        '200':
+          description: Updated current user profile response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/users/me/change-password:
+    post:
+      tags: [user-profile]
+      operationId: auth_changePassword
+      summary: Change the current user password and invalidate prior sessions.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ChangePasswordRequest
+      responses:
+        '200':
+          description: Password change succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/auth/change-password:
+    post:
+      tags: [user-profile]
+      operationId: auth_changePasswordAlias
+      summary: Change the current user password through the mission-wording compatibility alias.
+      description: Additive compatibility alias for `/api/v1/users/me/change-password`.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:user
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ChangePasswordRequest
+      responses:
+        '200':
+          description: Password change succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/auth/login:
+    post:
+      tags: [admin-auth]
+      operationId: adminAuth_login
+      summary: Login for the current admin surface.
+      x-owner-service: auth-user-service
+      x-permission-code: anonymous
+      x-error-codes: [4001001, 4010001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin-auth
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminLoginRequest
+      responses:
+        '200':
+          description: Admin login success response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLoginSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/auth/me:
+    get:
+      tags: [admin-auth]
+      operationId: adminAuth_getCurrentAdmin
+      summary: Return the current authenticated admin profile, roles, permissions, and menus.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:admin
+      x-error-codes: [4010001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Current admin profile response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSessionSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/admin/auth/action-confirmations:
+    post:
+      tags: [admin-auth]
+      operationId: adminAuth_createActionConfirmation
+      summary: Request a confirm_token for a high-risk admin action.
+      x-owner-service: auth-user-service
+      x-permission-code: authenticated:admin
+      x-error-codes: [4001001, 4010001, 4030001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: admin
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminActionConfirmationRequest
+      responses:
+        '200':
+          description: Confirm-token response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminActionConfirmationSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalForbidden
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /internal/v1/auth/validate-token:
+    get:
+      tags: [internal-auth]
+      operationId: internalAuth_validateToken
+      summary: Validate a downstream bearer token and return subject claims for internal services.
+      x-owner-service: auth-user-service
+      x-permission-code: service:internal.call
+      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Internal token validation response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalTokenValidationSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+  /internal/v1/auth/check-permission:
+    post:
+      tags: [internal-auth]
+      operationId: internalAuth_checkPermission
+      summary: Check whether a subject holds the requested permission set.
+      x-owner-service: auth-user-service
+      x-permission-code: service:internal.call
+      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/PermissionCheckRequest
+      responses:
+        '200':
+          description: Internal permission-check response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionCheckSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+  /internal/v1/auth/invalidate-subject-cache:
+    post:
+      tags: [internal-auth]
+      operationId: internalAuth_invalidateSubjectCache
+      summary: Invalidate cached permission state after subject role or permission changes.
+      x-owner-service: auth-user-service
+      x-permission-code: service:internal.call
+      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/InvalidateSubjectCacheRequest
+      responses:
+        '200':
+          description: Cache invalidation request accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvalidateSubjectCacheSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+components:
+  schemas:
+    LoginSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/LoginResponseData
+    SendCodeSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SendCodeResponseData
+    RefreshTokenSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/RefreshTokenResponseData
+    CurrentUserSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AuthUserProfile
+    ForgotPasswordSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ForgotPasswordResponseData
+    OperationStatusSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/OperationStatusData
+    AdminLoginSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminLoginResponseData
+    AdminSessionSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminSessionProfile
+    AdminActionConfirmationSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminActionConfirmationResponseData
+    InternalTokenValidationSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/InternalTokenValidationResponseData
+    PermissionCheckSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PermissionCheckResponseData
+    InvalidateSubjectCacheSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/InvalidateSubjectCacheResponseData

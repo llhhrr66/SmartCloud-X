@@ -1,0 +1,10 @@
+{
+  "name": "smartcloud-x",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "check:foundation": "bash scripts/check_foundation_done.sh",
+    "validate:foundation": "python3 scripts/validate_foundation.py"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-descriptor.schema.json",
+  "title": "ToolDescriptor",
+  "allOf": [
+    {
+      "$ref": "./tool-definition.schema.json"
+    }
+  ]
+}

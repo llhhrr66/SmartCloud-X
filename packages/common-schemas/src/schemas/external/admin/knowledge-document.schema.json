@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/knowledge-document.schema.json",
+  "title": "AdminKnowledgeDocument",
+  "type": "object",
+  "required": [
+    "doc_id",
+    "kb_id",
+    "title",
+    "status",
+    "parse_status",
+    "index_status",
+    "version_no"
+  ],
+  "properties": {
+    "doc_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kb_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parse_status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "index_status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version_no": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "file_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "source_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "source_uri": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "chunk_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "token_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "error_message": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "indexed_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-user-action-hint.schema.json",
+  "title": "ToolUserActionHint",
+  "type": "object",
+  "required": [
+    "action",
+    "message"
+  ],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "clarify-tool-input",
+        "collect-auth-context",
+        "user-confirmation"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missing_payload_hints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missing_auth_context": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "requires_account_context": {
+      "type": "boolean"
+    },
+    "confirmation_required": {
+      "type": "boolean"
+    },
+    "session_context_bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "confirm_tool_names": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

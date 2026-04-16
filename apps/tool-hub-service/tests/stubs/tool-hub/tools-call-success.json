@@ -1,0 +1,80 @@
+{
+  "status": "completed",
+  "summary": "账单周期 2026-04 总金额 1288.32 CNY。",
+  "result": {
+    "billing_cycle": "2026-04",
+    "range": "this_month",
+    "total_amount": 1288.32,
+    "currency": "CNY",
+    "statement_nos": [
+      "stmt_2026_04_001"
+    ],
+    "items": [
+      {
+        "product": "GPU 实例",
+        "amount": 889.94
+      }
+    ],
+    "top_instances": [
+      {
+        "instance_id": "gpu-cn-sh2-01",
+        "amount": 412.26
+      }
+    ]
+  },
+  "citations": [
+    "billing://statement"
+  ],
+  "success": true,
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "billing_cycle": "2026-04",
+    "range": "this_month",
+    "total_amount": 1288.32,
+    "currency": "CNY",
+    "statement_nos": [
+      "stmt_2026_04_001"
+    ],
+    "items": [
+      {
+        "product": "GPU 实例",
+        "amount": 889.94
+      }
+    ],
+    "top_instances": [
+      {
+        "instance_id": "gpu-cn-sh2-01",
+        "amount": 412.26
+      }
+    ]
+  },
+  "audit_tags": [
+    "finance-order",
+    "execute",
+    "query"
+  ],
+  "session_context_patch": {
+    "active_products": [
+      "GPU 实例",
+      "对象存储",
+      "公网带宽"
+    ],
+    "attributes": {
+      "statement_nos": [
+        "stmt_2026_04_001"
+      ],
+      "statement_no": "stmt_2026_04_001",
+      "billing_cycle": "2026-04",
+      "currency": "CNY",
+      "latest_billing_total": 1288.32
+    }
+  },
+  "tool_call_id": "tc-contract-success-1",
+  "latency_ms": 12,
+  "provider": "business-tools",
+  "error": null,
+  "compensation": null,
+  "idempotency_key": "tool-contract-success-1",
+  "attempts": 1
+}

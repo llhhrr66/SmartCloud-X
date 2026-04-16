@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-call-request.schema.json",
+  "title": "ToolCallRequest",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "conversation_id",
+    "tool_call_id",
+    "tool_name",
+    "operator"
+  ],
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operator": {
+      "$ref": "./tool-call-operator.schema.json"
+    },
+    "user_context": {
+      "$ref": "./tool-call-user-context.schema.json"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "idempotency_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "operation": {
+      "$ref": "./tool-operation.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/auth/invalidate-subject-cache-request.schema.json",
+  "title": "InvalidateSubjectCacheRequest",
+  "type": "object",
+  "required": [
+    "subject_type",
+    "subject_ids"
+  ],
+  "properties": {
+    "subject_type": {
+      "type": "string",
+      "enum": [
+        "user",
+        "admin",
+        "service",
+        "agent"
+      ]
+    },
+    "subject_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

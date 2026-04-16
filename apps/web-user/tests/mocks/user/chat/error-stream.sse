@@ -1,0 +1,11 @@
+event: message.started
+data: {"conversation_id":"conv_error_001","message_id":"msg_error_001","trace_id":"trace_error_001","agent":"Orchestrator"}
+
+event: agent.routed
+data: {"from_agent":"Orchestrator","to_agent":"Finance_Order_Agent","reason":"识别到账单异常后切换到财务 Agent。"}
+
+event: tool.started
+data: {"tool_name":"billing.query_statement","tool_call_id":"tc_error_001","status":"running"}
+
+event: message.error
+data: {"code":5001002,"message":"账单服务暂不可用，请稍后重试或转人工处理。"}

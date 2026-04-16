@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/chat-completion-request.schema.json",
+  "title": "ChatCompletionRequest",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "message_id",
+    "user_input"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "user_input": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stream": {
+      "type": "boolean"
+    },
+    "scene": {
+      "oneOf": [
+        {
+          "$ref": "./scene-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "user_profile": {
+      "$ref": "./user-profile.schema.json"
+    },
+    "session_context": {
+      "$ref": "./session-context.schema.json"
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "constraints": {
+      "$ref": "./runtime-constraints.schema.json"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "context_control": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "client_meta": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

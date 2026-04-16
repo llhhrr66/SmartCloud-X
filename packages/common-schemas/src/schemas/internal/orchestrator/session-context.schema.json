@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/session-context.schema.json",
+  "title": "SessionContext",
+  "type": "object",
+  "properties": {
+    "latest_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "history_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recent_messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "active_products": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "open_ticket_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confirmed_tool_names": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

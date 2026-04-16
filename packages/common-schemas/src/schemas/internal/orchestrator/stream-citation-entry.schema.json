@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-citation-entry.schema.json",
+  "title": "OrchestratorStreamCitationEntry",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "source_type",
+    "doc_id",
+    "chunk_id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "knowledge_base",
+        "tool"
+      ]
+    },
+    "doc_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "chunk_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

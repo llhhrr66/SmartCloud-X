@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/conversation-record.schema.json",
+  "title": "ConversationRecord",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scene": {
+      "$ref": "./scene-name.schema.json"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "running",
+        "archived",
+        "closed",
+        "deleted"
+      ]
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "current_agent": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_message_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "initial_context": {
+      "$ref": "./session-context.schema.json"
+    },
+    "total_messages": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

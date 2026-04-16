@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/knowledge/knowledge-runtime-snapshot.schema.json",
+  "title": "KnowledgeRuntimeSnapshot",
+  "type": "object",
+  "required": [
+    "exportedAt",
+    "service",
+    "dataPath",
+    "auditPath",
+    "importRoot",
+    "counts",
+    "overview",
+    "sources",
+    "documents",
+    "chunks",
+    "ingestions",
+    "knowledgeBases",
+    "documentProfiles",
+    "adminJobs",
+    "recentAuditRecords",
+    "integrations"
+  ],
+  "properties": {
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "auditPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "importRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "overview": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "ingestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "knowledgeBases": {
+      "type": "array",
+      "items": {
+        "$ref": "../../external/admin/knowledge-base.schema.json"
+      }
+    },
+    "documentProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "adminJobs": {
+      "type": "array",
+      "items": {
+        "$ref": "../../external/admin/async-job.schema.json"
+      }
+    },
+    "recentAuditRecords": {
+      "type": "array",
+      "items": {
+        "$ref": "../../external/admin/admin-audit-record.schema.json"
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

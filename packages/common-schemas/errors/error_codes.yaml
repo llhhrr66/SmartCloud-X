@@ -1,0 +1,191 @@
+version: 0.2.0
+codes:
+  - code: AUTH_INVALID_TOKEN
+    numeric_code: 4010001
+    http_status: 401
+    retryable: false
+    owner: supervisor-foundation
+    category: auth
+    message: JWT is malformed, expired, or signed by an unknown issuer.
+  - code: AUTH_UNAUTHORIZED
+    numeric_code: 4010002
+    http_status: 401
+    retryable: false
+    owner: supervisor-foundation
+    category: auth
+    message: Authenticated subject does not satisfy the required contract.
+  - code: CHAT_CONVERSATION_ARCHIVED
+    numeric_code: 4092104
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Conversation is archived and cannot accept new chat completions until restored.
+  - code: CHAT_CONVERSATION_NOT_FOUND
+    numeric_code: 4042104
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Requested chat conversation does not exist.
+  - code: CHAT_CONVERSATION_RESTORE_INVALID
+    numeric_code: 4092105
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Conversation restore was requested for a conversation that is not archived.
+  - code: CHAT_CONTINUATION_NOT_AVAILABLE
+    numeric_code: 4092106
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Conversation has no pending continuation state to resume.
+  - code: CHAT_CONVERSATION_RUNNING
+    numeric_code: 4092107
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Conversation already has a running message and cannot start another turn.
+  - code: CHAT_MESSAGE_NOT_FOUND
+    numeric_code: 4042105
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Requested chat message or retry target does not exist in the conversation history.
+  - code: CHAT_MESSAGE_NOT_RUNNING
+    numeric_code: 4092108
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Requested message is not currently running and cannot be cancelled.
+  - code: CHAT_MESSAGE_CANCELLED
+    numeric_code: 4092109
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Running message was cooperatively cancelled before completion.
+  - code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+    numeric_code: 4033201
+    http_status: 403
+    retryable: false
+    owner: supervisor-foundation
+    category: business-tools
+    message: Internal caller is not allowed to access the published business-tools internal contract.
+  - code: IDEMPOTENCY_CONFLICT
+    numeric_code: 4090001
+    http_status: 409
+    retryable: false
+    owner: supervisor-foundation
+    category: platform
+    message: Idempotency key was reused with a different normalized write request context.
+  - code: INTERNAL_ERROR
+    numeric_code: 5000001
+    http_status: 500
+    retryable: false
+    owner: supervisor-foundation
+    category: platform
+    message: Unexpected platform error.
+  - code: KNOWLEDGE_SYNC_FAILED
+    numeric_code: 5004001
+    http_status: 502
+    retryable: true
+    owner: supervisor-foundation
+    category: knowledge
+    message: Knowledge synchronization or indexing handoff failed.
+  - code: ORCH_CALLER_FORBIDDEN
+    numeric_code: 4032101
+    http_status: 403
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Internal caller is not allowed to access the published orchestrator internal contract.
+  - code: ORCH_ROUTE_FAILED
+    numeric_code: 5002102
+    http_status: 500
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: Orchestrator failed to produce a valid route decision.
+  - code: ORCH_SESSION_STATE_NOT_FOUND
+    numeric_code: 4042103
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: orchestrator
+    message: No orchestration state snapshot exists for the requested conversation.
+  - code: ORCH_TOOL_NOT_FOUND
+    numeric_code: 4043002
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Requested tool is not registered in the tool hub baseline.
+  - code: ORCH_TOOL_AUTH_REQUIRED
+    numeric_code: 4033003
+    http_status: 403
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Tool execution requires additional authenticated caller context.
+  - code: ORCH_TOOL_CALL_NOT_FOUND
+    numeric_code: 4043004
+    http_status: 404
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Requested tool-call audit record does not exist.
+  - code: ORCH_TOOL_OPERATION_INVALID
+    numeric_code: 4223004
+    http_status: 422
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Tool invocation requested an operation that the target tool does not support.
+  - code: ORCH_TOOL_PAYLOAD_INVALID
+    numeric_code: 4223005
+    http_status: 422
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Tool invocation payload is missing required fields or violates the tool contract.
+  - code: TOOL_HUB_CALLER_FORBIDDEN
+    numeric_code: 4033001
+    http_status: 403
+    retryable: false
+    owner: supervisor-foundation
+    category: tool-hub
+    message: Internal caller is not allowed to access the published tool-hub internal contract.
+  - code: RAG_RETRIEVAL_UNAVAILABLE
+    numeric_code: 5002201
+    http_status: 503
+    retryable: true
+    owner: supervisor-foundation
+    category: rag
+    message: Retrieval pipeline is temporarily unavailable or degraded.
+  - code: RATE_LIMITED
+    numeric_code: 4290001
+    http_status: 429
+    retryable: true
+    owner: supervisor-foundation
+    category: platform
+    message: Caller exceeded the allowed request budget.
+  - code: SERVICE_UNAVAILABLE
+    numeric_code: 5030001
+    http_status: 503
+    retryable: true
+    owner: supervisor-foundation
+    category: platform
+    message: Dependency or target service is unavailable.
+  - code: VALIDATION_ERROR
+    numeric_code: 4000001
+    http_status: 400
+    retryable: false
+    owner: supervisor-foundation
+    category: platform
+    message: Request payload or headers do not satisfy the published contract.

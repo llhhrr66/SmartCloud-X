@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/admin-action-confirmation-response-data.schema.json",
+  "title": "AdminActionConfirmationResponseData",
+  "type": "object",
+  "required": [
+    "confirm_token",
+    "expired_at",
+    "action",
+    "resource_scope"
+  ],
+  "properties": {
+    "confirm_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resource_scope": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

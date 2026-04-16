@@ -1,0 +1,564 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Knowledge Service API
+  version: 0.5.0
+  description: Foundation-owned placeholder baseline for the current knowledge ingestion and search routes.
+x-owner-service: knowledge-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: knowledge_healthz
+      summary: Check knowledge service liveness.
+      description: Current implementation returns an internal `ApiEnvelope` with owner-defined repository and dataset details.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy knowledge service instance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+              example:
+                success: true
+                requestId: req_knowledge_health
+                data:
+                  status: ok
+                  service: knowledge-service
+                  dataPath: data
+                  starterCatalogPath: data/starter-catalog.json
+                  corsAllowedOrigins:
+                    - http://localhost:5173
+                  counts:
+                    sources: 1
+                    documents: 4
+                    chunks: 12
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /metrics:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [observability]
+      operationId: knowledge_metrics
+      summary: Expose Prometheus metrics for the knowledge service.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Prometheus exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/knowledge/v1/sources:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_listSources
+      summary: List registered knowledge sources.
+      description: Concrete source DTOs remain downstream-owned, but the route and shared envelope are reserved here.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Source list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArrayEnvelope'
+    post:
+      tags: [knowledge]
+      operationId: knowledge_createSource
+      summary: Create a knowledge source.
+      description: Concrete request and response DTOs remain downstream-owned.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpaqueObject'
+      responses:
+        '201':
+          description: Source creation envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+  /api/knowledge/v1/documents:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_listDocuments
+      summary: List ingested documents.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: sourceId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Document list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArrayEnvelope'
+  /api/knowledge/v1/chunks:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_listChunks
+      summary: List knowledge chunks with optional source and tag filters.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: documentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: sourceId
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              minLength: 1
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Chunk list envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArrayEnvelope'
+  /api/knowledge/v1/ingestions:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_listIngestions
+      summary: List ingestion history records for the current knowledge store.
+      description: Concrete ingestion record DTOs remain downstream-owned, but the route and shared envelope are reserved here.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: sourceId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Ingestion history envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArrayEnvelope'
+  /api/knowledge/v1/admin/audit-records:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_listAdminAuditRecords
+      summary: List the live knowledge-service admin audit trail used by internal diagnostics and export tooling.
+      description: Current implementation returns a paged audit read model with reusable shared audit DTOs; internal callers can filter by resource type, action, and operator without scraping owner-local log files.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - name: pageSize
+          in: query
+          required: false
+          description: Number of audit records per page. Matches the live knowledge-service `pageSize` alias.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: resourceType
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: operatorId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Paged admin audit records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAuditListEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+  /api/knowledge/v1/overview:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_overview
+      summary: Return the current analytics overview for the knowledge dataset.
+      description: Concrete analytics fields remain downstream-owned, but the route and shared envelope are reserved here.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Knowledge overview envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+  /api/knowledge/v1/snapshot:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_snapshot
+      summary: Export the live runtime snapshot for the current knowledge repository state.
+      description: Current implementation returns a structured runtime snapshot used by internal diagnostics and downstream tooling. Stable admin/audit/job slices are frozen through shared schemas, while owner-local source/document/chunk/integration sections remain intentionally opaque.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - name: auditLimit
+          in: query
+          required: false
+          description: Maximum number of recent audit records included in the exported snapshot.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: Knowledge runtime snapshot envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeRuntimeSnapshotEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+  /api/knowledge/v1/imports:preview:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [knowledge]
+      operationId: knowledge_previewImports
+      summary: Preview a local file-import batch before knowledge ingestion.
+      description: Concrete preview DTOs remain downstream-owned, but the route, query-parameter names, and shared envelope are reserved here.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: directory
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: glob
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            default: '**/*'
+        - name: maxFiles
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 12
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: File-import preview envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Owner-specific preview lookup failure.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req_import_preview
+                error:
+                  code: knowledge.import_preview_failed
+                  message: Import directory was not found.
+                  retryable: false
+  /api/knowledge/v1/documents:ingest:
+    post:
+      tags: [knowledge]
+      operationId: knowledge_ingestDocument
+      summary: Ingest a document into the current knowledge store.
+      description: Concrete request and response DTOs remain downstream-owned. Unknown source failures currently remain owner-specific.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [KNOWLEDGE_SYNC_FAILED, VALIDATION_ERROR]
+      x-idempotency-required: true
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpaqueObject'
+      responses:
+        '201':
+          description: Document ingestion envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Owner-specific knowledge lookup failure.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req_knowledge_lookup
+                error:
+                  code: knowledge.source_not_found
+                  message: Source record was not found.
+                  retryable: false
+  /api/knowledge/v1/files:ingest:
+    post:
+      tags: [knowledge]
+      operationId: knowledge_ingestFiles
+      summary: Import a batch of local files into the knowledge store.
+      description: Concrete request and response DTOs remain downstream-owned. The current implementation may fail in-band when the import directory or target source is invalid.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [KNOWLEDGE_SYNC_FAILED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpaqueObject'
+      responses:
+        '201':
+          description: File-import envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Owner-specific import lookup failure.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req_file_import
+                error:
+                  code: knowledge.file_import_failed
+                  message: Import directory was not found.
+                  retryable: false
+  /api/knowledge/v1/catalog:bootstrap:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [knowledge]
+      operationId: knowledge_bootstrapCatalog
+      summary: Seed the knowledge repository with the starter catalog baseline.
+      description: Concrete bootstrap result details remain downstream-owned.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Starter catalog bootstrap envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+  /api/knowledge/v1/search:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [knowledge]
+      operationId: knowledge_search
+      summary: Search the current knowledge store for retrieval consumers.
+      description: Concrete request and response DTOs remain downstream-owned.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpaqueObject'
+      responses:
+        '200':
+          description: Search result envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+components:
+  schemas:
+    OpaqueObject:
+      type: object
+      additionalProperties: true
+    OpaqueArray:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+    ObjectEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/OpaqueObject'
+    ArrayEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/OpaqueArray'
+    AdminAuditListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/AdminAuditListData
+    KnowledgeRuntimeSnapshotEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/KnowledgeRuntimeSnapshot

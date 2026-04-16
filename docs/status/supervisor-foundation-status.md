@@ -1,0 +1,168 @@
+# Supervisor Foundation Status
+
+## Status
+- phase: completed-solid-baseline
+- updated at: 2026-04-16T14:25:18+08:00
+- owned scope: `packages/common/`, `packages/common-schemas/`, `packages/common-auth/`, `docs/contracts/`, `openapi/`, `.env.example`, and root engineering scaffolding
+
+## Completed
+- shared-package consumption audit found a real frozen-space drift bug the previous validator missed: `@smartcloud-x/common-schemas` published an incomplete `schemaRegistry`, leaving 14 already-promoted schema files unreachable through the stable lookup surface despite an otherwise green baseline
+- completed the missing `schemaRegistry` entries, documented registry completeness in the shared schema/foundation docs, and hardened foundation validation to compare registry entries against every frozen `*.schema.json` file so shared package exports cannot silently lag future promotions
+- the stricter validation then surfaced one newly filed downstream request in frozen space: persisted marketing generated-artifact history/detail reads were live in `apps/marketing-service/`, but the shared DTO/OpenAPI baseline still treated copy and promotion-link flows as write-only
+- fresh live-route audit found two still-undocumented knowledge-service inspection routes in owned frozen space: `GET /api/knowledge/v1/admin/audit-records` and `GET /api/knowledge/v1/snapshot`
+- promoted shared `AdminAuditRecord` / `AdminAuditListData` DTOs plus a lightweight internal `KnowledgeRuntimeSnapshot` schema, wired them into shared OpenAPI components and the knowledge-service placeholder baseline, and documented the new contract slice in the shared schema/foundation docs
+- the first validator pass then exposed a real root-scaffolding gap: query-param drift checks did not resolve shared OpenAPI parameter `$ref`s, so component-backed params such as `PageQuery` could falsely fail or silently escape enforcement
+- fixed the validator to resolve shared parameter refs during query-param checks, required the new knowledge-service routes/schema files in the readiness gate, and revalidated the full frozen baseline to green
+- final governance/config sweep found one still-unprocessed frontend-sdk user-business contract request with a blank foundation result block, several older accepted requests using non-normalized decision markers, and a stale generated `packages/common-schemas/src/index.js` artifact that could drift away from the TypeScript source of truth
+- normalized the remaining change-request records, formally partially accepted and deferred frontend-only frozen DTO promotion until the backing service contracts are promoted, documented that rule in shared foundation/schema docs, removed the stale generated artifact, and hardened the validator so blank result fields plus generated source artifacts now fail fast
+- final contract review found one more real baseline gap inside owned OpenAPI placeholders: multiple routes already marked `x-permission-code: service:internal.call` still failed to publish the required `X-Caller-Service` header, leaving internal caller expectations partially undocumented for downstream consumers
+- patched the foundation-owned OpenAPI baselines to publish `X-Caller-Service` on all internal service-call routes that still lacked it, documented the rule in shared API conventions/baseline docs, and hardened the validator so the same drift now fails fast
+- hardened root baseline validation one step further by cross-checking shared env/header constants from `@smartcloud-x/common` against `.env.example`, `docs/contracts/shared/runtime-config.md`, and `openapi/components.openapi.yaml`
+- the stricter validator immediately surfaced four remaining `/healthz` omissions in the auth-user-service, business-tools-service, marketing-service, and research-service placeholder specs; patched those too and reran the full foundation validation sweep to green
+- final artifact validation surfaced one more real downstream request still outside frozen space: owner services already propagated machine-readable continuation hints, but shared contracts/OpenAPI/docs had never promoted `user_action_hint` and `pending_user_actions[]`
+- promoted the continuation-hint baseline by adding reusable `ToolUserActionHint` / `PendingUserAction` contracts, additive `user_action_hint` coverage across business-tools/tool-hub/orchestrator payloads, additive orchestrator `pending_user_actions[]`, and explicit continuation guidance in shared docs/OpenAPI
+- validated the previously claimed green baseline and found one last unprocessed downstream request in frozen space: orchestrator response-review metadata was already live in the owner service, but the shared schemas/OpenAPI/change-request tracking had never been promoted or marked complete
+- promoted the missing shared response-review baseline by adding reusable `ResponseReview` / `ResponseReviewIssue` contracts, additive `review` fields on orchestrator response/state/internal-chat payloads, the `review_result` execution-event variant, and the documented `review-answer` checkpoint marker
+- final root-scaffolding review corrected one more stale governance gap: frozen-space docs and validators still described a five-supervisor model and an unassigned frontend SDK area even though `docs/contracts/supervisor-ownership.md` already defines seven active supervisors and assigns `packages/frontend-sdk/`
+- reviewed the current frozen baseline again; the queue looked complete, but validation/self-review reopened one more unresolved tool-hub direct-response fidelity request in frozen space
+- final baseline review reopened one more time because six downstream requests still lacked explicit processing-result markers in frozen space, three already-accepted requests were missing from supervisor tracking, and shared `ApiEnvelope.meta` still rejected live `null` success-envelope payloads
+- processed and explicitly recorded the remaining downstream requests for admin document-detail nullability, admin KB update, auth alias/helper route publication, auth avatar nullability, orchestrator agent-route journal/internal caller policy, research-task nullability, tool-hub audit `completed` status, and direct invoke metadata alignment
+- aligned shared schemas/OpenAPI/docs/validator coverage so frozen space now also enforces nullable internal `meta`, nullable admin/research read-model error fields, `PATCH /api/v1/admin/knowledge-bases/{kb_id}`, `GET /api/v1/chat/sessions/{conversation_id}/agent-routes`, and `POST /api/v1/tools/{tool_name}/invoke` additive metadata
+- processed every current downstream change request under `docs/contracts/change-requests/`, including:
+  - promoted orchestrator chat-completion compatibility fields plus the soft-delete `DELETE /api/v1/chat/sessions/{conversation_id}` baseline
+  - promoted propagated tool `audit_tags` / query-cache replay (`cache-hit`) semantics across business-tools, tool-hub direct responses, and audit read models
+  - promoted the malformed-payload baseline for tool execution and audit flows: in-band `4001001`, message `invalid tool payload`, `missing_fields` detail hints, and audit status `invalid-payload`
+  - processed the previously unresolved tool-preflight clarification request and froze the shared readiness contract plus additive `input_field_hints` metadata
+  - promoted admin `GET /api/v1/admin/knowledge-documents/{doc_id}` and `GET /api/v1/admin/jobs/{job_id}` placeholder baselines plus shared document-detail/job-query DTO coverage
+  - promoted additive orchestrator/tool descriptor metadata (`version`, schema versions, lightweight input/output schemas) plus `AgentExecutionResult.risk_flags`
+  - promoted dependency-aware tool/session-context metadata (`session_context_bindings`, `session_context_output_keys`, `prerequisite_tool_names`, deferred payloads, dependencies, readiness, and handoff/task context IO fields)
+  - documented and partially accepted the frontend-sdk baseline request by freezing temporary app-local fallback rules until the dedicated `supervisor-frontend-sdk` owner landed the shared package baseline
+- reopened the baseline after finding four still-unfinished change-request promotions that the prior validator/state had not carried through to frozen space:
+  - promoted marketing copy and promotion-link shared user DTOs plus `POST /api/v1/marketing/copy/generate` and `POST /api/v1/marketing/promotion-links/generate`
+  - promoted `POST /api/v1/chat/sessions/{conversation_id}/continue` plus shared `SessionContinueRequest` coverage and surfaced preflight `session_context_bindings`
+  - promoted `POST /api/v1/chat/sessions/{conversation_id}/cancel`, shared cancel request/response schemas, and additive execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`) on shared preflight/planning contracts
+  - promoted provider-backed business-tools discovery placeholders for `GET /internal/v1/tools/{tool_name}` and `POST /internal/v1/preflight/{tool_name}`, plus shared runtime-config coverage for `BUSINESS_TOOLS_INTERNAL_API_PREFIX` and `TOOL_HUB_INTERNAL_API_PREFIX`
+- the strengthened validator then surfaced one more still-unfrozen downstream request:
+  - aligned the shared `BusinessToolExecuteResponse` contract to the live richer provider-backed payload by freezing additive `tool_name`, `operation`, `status`, `summary`, `result`, and `citations` fields while keeping `message` and `data` as compatibility aliases
+- the validator reopened once more on one additional unresolved downstream request:
+  - aligned the shared `ToolCallResponse` / `ToolCallAuditRecord` contract to the live richer tool-hub payload by freezing additive `status`, `summary`, `result`, and `citations` fields on direct tool-call responses, additive audit `summary` / `citations`, and compatibility `message` / `data` guidance
+- shared schemas/OpenAPI now publish:
+  - `ChatUsage`, `SessionDeleteResponse`, additive `context` / `options` / `context_control` / `client_meta` request fields, and additive top-level `answer` / `citations` / `tool_calls` / `usage` / `finish_reason` chat response aliases
+  - reusable `ResponseReview` / `ResponseReviewIssue` contracts plus additive `review` fields on orchestrator response/state/internal-chat payloads, the `review_result` execution-event variant, and documented `review-answer` checkpoint semantics for state/debug consumers
+  - reusable `ToolUserActionHint` / `PendingUserAction` contracts plus additive `user_action_hint` propagation across business-tools, tool-hub, and orchestrator tool payloads and additive `pending_user_actions[]` continuation metadata on orchestrator response/state/chat surfaces
+  - propagated `audit_tags` on business-tool execute responses, tool-hub direct tool-call responses, and tool-call audit records
+  - additive direct tool-call fidelity fields `status`, `summary`, `result`, and `citations` on `ToolCallResponse`, plus additive audit `summary` / `citations` on `ToolCallAuditRecord`
+  - `audit_tag` filtering on `GET /api/v1/tool-calls`, plus documented `invalid-payload` status filtering and malformed-payload response examples
+  - shared `missing_fields` error-detail support across tool-call, tool-execution, business-tool, and orchestrator tool-trace contracts
+  - canonical `POST /api/v1/tools/preflight` plus the `/internal/v1/tools/preflight` compatibility alias, `ToolPreflightResult` / `ToolPreflightResponse`, and `ToolDefinition.input_field_hints`
+  - live knowledge-service import preview / file-ingest placeholder coverage for `GET /api/knowledge/v1/imports:preview` and `POST /api/knowledge/v1/files:ingest`
+  - shared `AdminAuditRecord` / `AdminAuditListData` DTOs plus a lightweight `KnowledgeRuntimeSnapshot` schema, and matching knowledge-service placeholder coverage for `GET /api/knowledge/v1/admin/audit-records` and `GET /api/knowledge/v1/snapshot`
+  - admin document-detail/job-query contracts via `AdminKnowledgeChunkStats`, `AdminKnowledgeDocumentDetailData`, `GET /api/v1/admin/knowledge-documents/{doc_id}`, and `GET /api/v1/admin/jobs/{job_id}`
+  - additive `ToolDefinition.version/input_schema/output_schema/session_context_bindings/session_context_output_keys/prerequisite_tool_names`
+  - additive orchestrator planning metadata on `AgentTask`, `ToolPlanItem`, and `HandoffStep`, including deferred payloads, tool-call dependencies, session-context inputs/outputs, `readiness`, and execution-policy hints
+  - shared `SessionContinueRequest`, `SessionCancelRequest`, and `SessionCancelResponse` schemas plus the current continuation/cancellation lifecycle error codes
+  - external `MarketingCopyRequest`, `MarketingCopyResult`, `MarketingCopyListData`, `PromotionLinkRequest`, `PromotionLinkResult`, and `PromotionLinkListData` DTO baselines for current marketing-service/web-user integration
+  - additive marketing artifact-history/helper routes for `GET /api/v1/marketing/copies`, `GET /api/v1/marketing/copies/{copy_id}`, `GET /api/v1/marketing/promotion-links`, and `GET /api/v1/marketing/promotion-links/{link_id}`
+- shared contract docs now clarify:
+  - soft-deleted orchestrator sessions are hidden from normal list/detail/history flows and later reads normalize to `CHAT_CONVERSATION_NOT_FOUND`
+  - query/read tool cache replays must surface additive `audit_tags`, with current stable replay tag `cache-hit`
+  - direct tool-call responses may expose additive `status` / `summary` / `result` / `citations`; `result` and `data` carry the same payload in the current additive phase, and `summary` is the preferred human-readable execution text
+  - malformed required-field tool failures must surface the current frozen `4001001` / `invalid tool payload` / `missing_fields` baseline
+  - tool preflight is readiness-only: it validates missing payload/auth/confirmation blockers without executing the tool or creating a tool-call audit record
+  - continuation/cancellation are part of the frozen orchestrator chat lifecycle baseline, with additive `session_context_patch`, `field_values`, `confirm_tool_names`, and cooperative-cancel semantics documented in shared space
+  - provider-backed internal tool discovery may use `GET /internal/v1/tools/{tool_name}` / `POST /internal/v1/preflight/{tool_name}` plus the shared internal-prefix override env keys instead of hardcoded local `/internal/v1` assumptions
+  - frontend owners may temporarily keep app-local DTO/api-adapter fallbacks as long as they follow the frozen OpenAPI/common-schema contracts
+- shared service-registry/root scaffolding now also clarify:
+  - `@smartcloud-x/common` now exposes the full seven-supervisor workspace registry, with service-owning and shared-scope supervisor helpers aligned to `docs/contracts/supervisor-ownership.md`
+  - `auth-user-service`, `marketing-service`, and `research-service` remain contract-placeholder baselines in frozen space, but their owner metadata is now explicitly assigned to `supervisor-auth-marketing-research`
+  - `packages/frontend-sdk/` is treated as assigned shared-package scope owned by `supervisor-frontend-sdk`, not as an unassigned placeholder
+  - root README and validator coverage now track all seven supervisor run/prompt entrypoints instead of stale five-supervisor wording
+- root/runtime baselines now also reserve `SMARTCLOUD_CORS_ALLOWED_ORIGINS` because the current browser-facing rag/knowledge surfaces already rely on a shared origin allow-list
+- root/runtime baselines now also reserve `BUSINESS_TOOLS_INTERNAL_API_PREFIX` and `TOOL_HUB_INTERNAL_API_PREFIX` for provider-backed HTTP transport discovery
+- root-level foundation validation is stronger:
+  - readiness now fails when any change request lacks a foundation processing-result marker
+  - readiness now also fails when a change request keeps a placeholder `pending` processing result
+  - readiness now fails when an OpenAPI operation marked `x-permission-code: service:internal.call` omits the shared `X-Caller-Service` header
+  - readiness now also fails when shared env/header constants drift away from `.env.example`, shared runtime docs, or shared OpenAPI components
+  - readiness also fails if the promoted tool-preflight, knowledge-import, chat continue/cancel/delete, marketing copy/promotion-link, provider-discovery, audit-tag, malformed-payload, admin detail/job-query, agent metadata, dependency-aware planning fields, or seven-supervisor registry/readme baselines disappear from shared schema/OpenAPI/root scaffolding
+
+## Safe assumptions for downstream supervisors
+- trusted consumers may rely on `POST /api/v1/chat/completions` accepting additive compatibility fields `context`, `options`, `context_control`, and `client_meta`
+- non-stream chat-completion responses may now safely consume top-level `answer`, `citations`, `tool_calls`, `usage`, and `finish_reason` without parsing only the nested `response`
+- orchestrator/gateway/debug consumers may now rely on additive lightweight `review` metadata on shared orchestrator response/state payloads, on `ExecutionEvent.event=review_result` in persisted state journals, and on the current `review-answer` checkpoint marker when inspecting checkpoint progress
+- continuation-capable consumers may now rely on additive `user_action_hint` metadata from shared business-tools/tool-hub/orchestrator tool payloads and on additive orchestrator `pending_user_actions[]` as advisory machine-readable follow-up instructions for clarification, auth collection, and explicit confirmation flows
+- `DELETE /api/v1/chat/sessions/{conversation_id}` is the current frozen soft-delete route; deleted sessions should not appear in standard session list/detail/history reads
+- tool consumers may inspect `audit_tags` across business-tools/tool-hub/orchestrator traces; current query-cache replay uses the stable annotation `cache-hit`
+- tool-hub consumers may call `POST /api/v1/tools/preflight` to stop before execution when required payload/auth/confirmation inputs are missing; the response now freezes `missing_payload_fields`, `missing_payload_hints`, `missing_auth_context`, `confirmation_required`, `session_context_bindings`, and additive execution-policy metadata
+- trusted tool-call audit readers may filter `GET /api/v1/tool-calls` by `conversation_id`, `idempotency_key`, and `audit_tag`
+- malformed required-field tool failures should be treated as the frozen in-band business failure baseline: `code=4001001`, `message=invalid tool payload`, audit `status=invalid-payload`, and `missing_fields[]` detail hints when available
+- internal `ApiEnvelope<T>` success payloads may now omit `meta` or explicitly return `meta: null`; downstream validators should treat both as equivalent no-metadata states
+- admin consumers may rely on `GET /api/v1/admin/knowledge-documents/{doc_id}` returning `{document, chunk_stats, error_message?}` and on `GET /api/v1/admin/jobs/{job_id}` returning the shared `AdminAsyncJob` polling model
+- trusted knowledge-service tooling consumers may now rely on `GET /api/knowledge/v1/admin/audit-records` returning the shared `AdminAuditListData` shape and on `GET /api/knowledge/v1/snapshot` returning the new lightweight `KnowledgeRuntimeSnapshot` contract for its stable admin/audit/job slices
+- admin consumers may now rely on `PATCH /api/v1/admin/knowledge-bases/{kb_id}` plus the shared `AdminKnowledgeBaseUpdateRequest` payload for KB settings writes
+- tool registry consumers may now rely on additive `version`, `input_schema`, `output_schema`, `session_context_bindings`, `session_context_output_keys`, and `prerequisite_tool_names` metadata from tool-hub/business-tools surfaces
+- orchestrator route consumers may now rely on additive `ToolPlanItem.required_payload_fields`, `missing_payload_fields`, `deferred_payload_fields`, `depends_on_tool_call_ids`, `session_context_input_keys`, `session_context_output_keys`, `readiness`, and execution-policy hints, plus matching task/handoff session-context metadata
+- orchestrator/debug consumers may now rely on the frozen `GET /api/v1/chat/sessions/{conversation_id}/agent-routes` inspection route and `SessionStateSnapshot.agent_routes[]` journal data
+- chat/gateway/web consumers may now rely on `POST /api/v1/chat/sessions/{conversation_id}/continue` and `POST /api/v1/chat/sessions/{conversation_id}/cancel` as the frozen continuation/cancellation routes, including the shared lifecycle error codes `CHAT_CONTINUATION_NOT_AVAILABLE`, `CHAT_MESSAGE_NOT_RUNNING`, `CHAT_MESSAGE_CANCELLED`, and `CHAT_CONVERSATION_RUNNING`
+- marketing/web consumers may now rely on frozen shared DTO/OpenAPI coverage for copy generation, promotion-link generation, and persisted copy/promotion-link history/detail reads instead of app-local-only request/response shapes or browser-local registries
+- HTTP transport clients may now rely on frozen provider-backed discovery placeholders `GET /internal/v1/tools/{tool_name}` and `POST /internal/v1/preflight/{tool_name}` plus the shared `BUSINESS_TOOLS_INTERNAL_API_PREFIX` / `TOOL_HUB_INTERNAL_API_PREFIX` naming
+- internal service-call consumers may now rely on every frozen OpenAPI route that uses `x-permission-code: service:internal.call` also documenting the shared `X-Caller-Service` header instead of discovering that requirement only from app-local code or prose
+  - provider-backed direct invoke consumers may now rely on `BusinessToolExecuteResponse` carrying the richer execution-result fidelity fields (`tool_name`, `operation`, `status`, `summary`, `result`, `citations`) alongside the compatibility `message`/`data` aliases
+  - tool-hub/orchestrator HTTP consumers may now rely on `ToolCallResponse` carrying additive `status`, `summary`, `result`, and `citations` alongside compatibility `message`/`data`, and audit readers may rely on additive tool-call `summary` / `citations`
+  - trusted direct invoke consumers may now also rely on additive `downstream_target` and `auth_requirements`, and audit readers may treat `completed` as the frozen current success-path status while `success` remains a compatibility alias
+  - downstream root/tooling consumers may now rely on `@smartcloud-x/common` exposing the full seven-supervisor registry, including shared-scope helpers for `supervisor-frontend-sdk` / `supervisor-integration-qa` plus `supervisor-auth-marketing-research` ownership on the current auth/marketing/research contract-placeholder service descriptors
+- `packages/frontend-sdk/` is now assigned to `supervisor-frontend-sdk`; web-user/web-admin may keep thin app-local adapters temporarily during migration, but new shared SDK work should land under that owned package instead of re-opening frozen-space DTO drift
+
+## Validation
+- targeted change-request result completeness check confirms every filed request now carries a non-blank foundation `processed at` and `decision` marker
+- targeted stale-artifact absence check confirms `packages/common-schemas/src/index.js` has been removed so frozen source exports resolve only to the maintained TypeScript baseline
+- `python3 scripts/validate_foundation.py`
+- `bash scripts/check_foundation_done.sh`
+- `python3 -m py_compile scripts/validate_foundation.py`
+- direct YAML parse of `openapi/*.yaml`
+- targeted route drift check for promoted tool preflight, tool-call audit filters, and knowledge import placeholder fields
+- targeted admin detail/job-query plus agent/tool metadata drift check
+- targeted seven-supervisor registry/readme drift check for the full ownership model and root scaffolding coverage
+- targeted new-baseline drift check for marketing copy/promotion-link routes, orchestrator continue/cancel routes, provider-discovery routes, business-tools execute-response alignment, preflight/policy schema fields, and the new session lifecycle error codes
+- targeted tool-call fidelity drift check for the promoted `ToolCallResponse` / `ToolCallAuditRecord` additive fields plus tool-hub OpenAPI success examples
+- targeted nullability/admin-update/agent-route/invoke drift check for `ApiEnvelope.meta`, admin/research nullable error fields, KB update, agent-route journal, direct invoke metadata, and audit `completed` status
+- targeted response-review drift check for shared `ResponseReview` schemas, additive orchestrator `review` fields, the `review_result` event enum, and the documented `review-answer` checkpoint marker
+- targeted user-action-hint drift check for shared `ToolUserActionHint` / `PendingUserAction` schemas, additive `user_action_hint` properties, and the documented continuation-hint OpenAPI baseline
+- targeted internal-caller/env-header drift check for `service:internal.call` OpenAPI routes plus the shared env/header registry published by `@smartcloud-x/common`
+- targeted knowledge runtime/admin-audit drift check for the new shared DTO/schema files, shared OpenAPI component refs, and knowledge-service placeholder routes
+- targeted marketing-history-and-schema-registry drift check for full `schemaRegistry` coverage plus the promoted marketing copy/promotion-link history/detail routes and list DTO refs
+
+## Self-review
+- completed on 2026-04-16
+- fixes made during review:
+  - late self-review fix: completed the missing shared `schemaRegistry` entries, documented registry completeness as part of the frozen baseline, and hardened validator coverage so shared schema exports cannot silently drift behind the on-disk contract set
+  - late self-review fix: processed the newly filed marketing generated-artifact history request, promoted shared `MarketingCopyListData` / `PromotionLinkListData` DTOs plus additive `GET /api/v1/marketing/copies*` and `GET /api/v1/marketing/promotion-links*` routes, and revalidated the refreshed baseline with a targeted marketing-history/schema-registry drift check
+  - final live-route audit fix: promoted shared `AdminAuditRecord` / `AdminAuditListData` DTOs plus a lightweight `KnowledgeRuntimeSnapshot` schema for the live knowledge-service inspection routes, wired them into `openapi/components.openapi.yaml` and `openapi/knowledge-service.openapi.yaml`, and documented the new shared baseline
+  - final validator fix: resolved shared OpenAPI parameter `$ref`s during query-param drift checks so component-backed params like `PageQuery` remain enforceable, then revalidated with the ready-check, py_compile, YAML parsing, and the targeted knowledge runtime/admin-audit drift check
+  - final governance cleanup fix: processed the previously blank frontend-sdk user-business change request, normalized the remaining non-standard decision markers, documented the explicit deferral for frontend-only frozen DTO promotion, and refreshed supervisor tracking so the change-request queue and artifact set match
+  - final governance cleanup fix: hardened the validator to reject blank change-request result fields and stale generated source artifacts, removed `packages/common-schemas/src/index.js`, and revalidated the baseline with targeted governance checks
+  - processed the previously unresolved tool-preflight clarification change request after the validator surfaced the missing processing-result marker
+  - promoted shared tool preflight schemas, additive `input_field_hints`, and the canonical tool-hub preflight OpenAPI baseline
+  - aligned tool-hub audit query parameters and knowledge import preview/file-ingest placeholders to live service reality without crossing ownership into app-local business DTOs
+  - reserved the already-used shared `SMARTCLOUD_CORS_ALLOWED_ORIGINS` runtime key in `.env.example`, `@smartcloud-x/common`, and shared runtime-config docs
+  - corrected the initial `ToolPreflightResponse` schema shape during self-review by replacing a closed-schema `allOf` extension with a direct merged schema
+  - processed the remaining pending change requests for admin document detail/job query, additive agent/tool metadata, and dependency-aware session-context planning metadata after the validator reopened
+  - aligned shared admin, orchestrator, and tool definition schemas plus OpenAPI descriptions to the live knowledge-service/orchestrator/tool-hub/business-tools payload surfaces without crossing ownership into app-local business logic
+  - hardened the validator and ready-check to require the new admin detail/job-query, agent metadata, and dependency-aware planning schema baselines
+  - revalidated the full frozen baseline after the fixes; no additional blocking issues remained
+  - aligned `@smartcloud-x/common`, shared contract docs, and the root README with the current seven-supervisor ownership model by adding the shared-scope `supervisor-frontend-sdk` / `supervisor-integration-qa` helpers alongside explicit owner metadata for auth/marketing/research contract-placeholder services
+  - expanded root validation coverage to include all supervisor run/prompt scaffolding files and a targeted registry/readme drift check so the stale four-supervisor assumption does not regress
+  - normalized validator import ordering and expanded `state.json` owned-path inventory for the seven supervisor scaffolding files during the final housekeeping review
+  - processed the remaining unhandled change requests for marketing copy/promotion links, orchestrator continue/cancel lifecycle, and provider-backed business-tools discovery that the earlier baseline had not yet frozen
+  - promoted the missing shared schemas/OpenAPI/runtime-config docs, registered the new session lifecycle error codes, and tightened the validator to reject change requests that still carry placeholder `pending` results
+  - revalidated the refreshed baseline with `scripts/validate_foundation.py`, `scripts/check_foundation_done.sh`, `py_compile`, full OpenAPI YAML parsing, and a targeted new-baseline drift check; no additional issues remained
+  - final self-review fix: the stronger validator surfaced the unprocessed business-tools execute-result alignment request, so the shared execute-response contract was promoted and revalidated before foundation returned to green
+  - final self-review fix: processed the previously unhandled tool-hub internal tool-call result-fidelity request, promoted the missing shared tool-call response/audit fields, and revalidated the baseline plus targeted tool-call fidelity drift checks
+  - final baseline review fix: aligned shared `ApiEnvelope.meta` nullability with live internal success responses and updated the shared TypeScript/doc baseline accordingly
+  - final baseline review fix: recorded the remaining processed change requests in supervisor state/status so the foundation artifact set matches the actual frozen-space queue
+  - final baseline review fix: expanded validator coverage for nullable fields, admin KB update, agent-route journals, direct invoke metadata, and audit `completed` status, then revalidated with the ready-check, py_compile, YAML parsing, and targeted drift assertions
+  - post-review artifact fix: corrected a missing comma in `logs/supervisor-foundation/state.json` after refreshing the validation inventory, then reran the validator and ready-check to confirm the supervisor artifacts remained valid
+  - follow-up self-review fix: corrected the stale five-supervisor/unassigned-frontend-sdk wording in shared docs, `@smartcloud-x/common`, README scaffolding, and validator coverage, then revalidated the refreshed root baseline
+  - response-review self-review fix: processed the previously unhandled orchestrator response-review change request, promoted the shared `ResponseReview` family and additive `review`/`review_result` coverage, and revalidated the refreshed baseline with a targeted response-review drift check
+  - continuation-hint self-review fix: processed the previously unhandled `user_action_hint` / `pending_user_actions[]` change request, promoted the shared continuation-hint contracts and payload fields, and revalidated the refreshed baseline with a targeted user-action-hint drift check
+  - final contract-governance self-review fix: added the missing `X-Caller-Service` OpenAPI header coverage for internal service-call routes and hardened validator drift checks for shared env/header registries before revalidating the owned baseline

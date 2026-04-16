@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/knowledge-chunk.schema.json",
+  "title": "AdminKnowledgeChunk",
+  "type": "object",
+  "required": [
+    "chunk_id",
+    "doc_id",
+    "position",
+    "content_preview",
+    "token_count"
+  ],
+  "properties": {
+    "chunk_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "doc_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "position": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "content_preview": {
+      "type": "string",
+      "minLength": 1
+    },
+    "token_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "score": {
+      "type": "number"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-preflight-result.schema.json",
+  "title": "ToolPreflightResult",
+  "type": "object",
+  "required": [
+    "tool_name",
+    "operation",
+    "status",
+    "ready",
+    "available",
+    "high_risk",
+    "missing_payload_fields",
+    "missing_payload_hints",
+    "missing_auth_context",
+    "required_permissions",
+    "requires_account_context",
+    "confirmation_required"
+  ],
+  "properties": {
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "$ref": "./tool-operation.schema.json"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "missing-tool",
+        "missing-payload",
+        "auth-required",
+        "confirmation-required",
+        "invalid-operation"
+      ]
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "high_risk": {
+      "type": "boolean"
+    },
+    "tool_mode": {
+      "$ref": "./tool-mode.schema.json"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "idempotent": {
+      "type": "boolean"
+    },
+    "cache_ttl_seconds": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "missing_payload_fields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missing_payload_hints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missing_auth_context": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "requires_account_context": {
+      "type": "boolean"
+    },
+    "confirmation_required": {
+      "type": "boolean"
+    },
+    "session_context_bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "user_action_hint": {
+      "oneOf": [
+        {
+          "$ref": "./tool-user-action-hint.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

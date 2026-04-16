@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/knowledge-document-detail-data.schema.json",
+  "title": "AdminKnowledgeDocumentDetailData",
+  "type": "object",
+  "required": [
+    "document",
+    "chunk_stats"
+  ],
+  "properties": {
+    "document": {
+      "$ref": "./knowledge-document.schema.json"
+    },
+    "chunk_stats": {
+      "$ref": "./knowledge-chunk-stats.schema.json"
+    },
+    "error_message": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

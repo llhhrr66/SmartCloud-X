@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/admin-session-profile.schema.json",
+  "title": "AdminSessionProfile",
+  "type": "object",
+  "required": [
+    "admin_id",
+    "name",
+    "roles",
+    "permissions",
+    "menus"
+  ],
+  "properties": {
+    "admin_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "menus": {
+      "type": "array",
+      "items": {
+        "$ref": "./admin-menu-item.schema.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

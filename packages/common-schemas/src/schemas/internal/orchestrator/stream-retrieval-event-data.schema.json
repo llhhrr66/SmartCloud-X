@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-retrieval-event-data.schema.json",
+  "title": "OrchestratorStreamRetrievalEventData",
+  "type": "object",
+  "required": [
+    "query",
+    "top_k",
+    "sources"
+  ],
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "top_k": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "./stream-retrieval-source.schema.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

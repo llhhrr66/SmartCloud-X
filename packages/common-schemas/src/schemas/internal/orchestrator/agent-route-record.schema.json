@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/agent-route-record.schema.json",
+  "title": "AgentRouteRecord",
+  "type": "object",
+  "required": [
+    "step_id",
+    "order",
+    "agent",
+    "objective"
+  ],
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "order": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "agent": {
+      "$ref": "./agent-name.schema.json"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "handoff_received_from": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "handoff_to": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "handoff_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "action_required": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool_names": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tool_call_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tool_statuses": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "depends_on_tool_call_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "session_context_inputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "session_context_outputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "context_highlights": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

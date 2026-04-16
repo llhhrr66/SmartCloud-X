@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-operation.schema.json",
+  "title": "ToolOperation",
+  "type": "string",
+  "enum": ["preview", "execute"]
+}

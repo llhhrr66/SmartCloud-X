@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_id": "poster_20260416001",
+    "campaign_id": "cmp_gpu_launch_001",
+    "campaign_name": "GPU 云主机上新季",
+    "theme": "新品首发",
+    "slogan": "AI 算力一键起飞",
+    "size": "1024x1536",
+    "status": "completed",
+    "created_at": "2026-04-16T00:20:00Z",
+    "estimated_seconds": 45,
+    "image_url": "https://cdn.smartcloud.local/posters/poster_20260416001.png",
+    "updated_at": "2026-04-16T00:20:42Z"
+  },
+  "request_id": "req_poster_detail_001",
+  "timestamp": "2026-04-16T00:20:42Z"
+}

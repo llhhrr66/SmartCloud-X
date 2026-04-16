@@ -1,0 +1,34 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "application_no": "ICP20260416001",
+    "status": "reviewing",
+    "current_step": "operator_review",
+    "domain": "llm-demo.smartcloud.local",
+    "website_name": "SmartCloud 模型体验站",
+    "subject_type": "enterprise",
+    "contacts": [
+      "李雷 138****0001"
+    ],
+    "materials": [
+      {
+        "file_id": "file_business_license_001",
+        "file_name": "business-license.pdf",
+        "type": "business_license",
+        "status": "verified",
+        "required": true
+      },
+      {
+        "file_id": "file_domain_certificate_001",
+        "file_name": "domain-certificate.pdf",
+        "type": "domain_certificate",
+        "status": "verified",
+        "required": true
+      }
+    ],
+    "submitted_at": "2026-04-16T00:15:00Z"
+  },
+  "request_id": "req_icp_detail_001",
+  "timestamp": "2026-04-16T00:15:03Z"
+}

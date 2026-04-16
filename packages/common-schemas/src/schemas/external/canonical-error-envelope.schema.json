@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/canonical-error-envelope.schema.json",
+  "title": "CanonicalErrorEnvelope",
+  "type": "object",
+  "required": ["code", "message", "request_id", "timestamp"],
+  "properties": {
+    "code": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "data": {
+      "type": "null"
+    },
+    "error": {
+      "$ref": "./canonical-error-detail.schema.json"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,50 @@
+{
+  "tool_name": "order.create_refund",
+  "operation": "execute",
+  "status": "invalid-payload",
+  "summary": "order.create_refund 缺少必要字段：order_no, amount。",
+  "result": {
+    "missing_fields": [
+      "order_no",
+      "amount"
+    ],
+    "required_fields": [
+      "order_no",
+      "reason",
+      "amount"
+    ]
+  },
+  "citations": [],
+  "success": false,
+  "code": 4001001,
+  "message": "invalid tool payload",
+  "data": {
+    "missing_fields": [
+      "order_no",
+      "amount"
+    ],
+    "required_fields": [
+      "order_no",
+      "reason",
+      "amount"
+    ]
+  },
+  "audit_tags": [
+    "finance-order",
+    "execute",
+    "write",
+    "invalid-payload"
+  ],
+  "session_context_patch": {},
+  "retryable": false,
+  "cache_ttl_seconds": null,
+  "provider": "business-tools",
+  "error_detail": {
+    "missing_fields": [
+      "order_no",
+      "amount"
+    ]
+  },
+  "compensation": null,
+  "idempotency_key": "tool-biz-contract-invalid-1"
+}

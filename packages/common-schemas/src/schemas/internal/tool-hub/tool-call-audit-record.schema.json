@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-call-audit-record.schema.json",
+  "title": "ToolCallAuditRecord",
+  "type": "object",
+  "required": [
+    "tool_call_id",
+    "trace_id",
+    "conversation_id",
+    "tool_name",
+    "operation",
+    "status",
+    "success",
+    "code",
+    "message",
+    "latency_ms",
+    "tenant_id",
+    "operator",
+    "user_context",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "tool_call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "$ref": "./tool-operation.schema.json"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "completed",
+        "invalid-payload",
+        "auth-required",
+        "idempotency-conflict",
+        "confirmation-required",
+        "timeout",
+        "failed"
+      ]
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "code": {
+      "type": "integer"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operator": {
+      "$ref": "./tool-call-operator.schema.json"
+    },
+    "user_context": {
+      "$ref": "./tool-call-user-context.schema.json"
+    },
+    "idempotency_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "audit_tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "data_preview": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "./tool-call-error.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "session_context_patch": {
+      "$ref": "../orchestrator/session-context.schema.json"
+    },
+    "user_action_hint": {
+      "oneOf": [
+        {
+          "$ref": "./tool-user-action-hint.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operator_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 3,
+      "maxLength": 500
+    }
+  },
+  "additionalProperties": false
+}

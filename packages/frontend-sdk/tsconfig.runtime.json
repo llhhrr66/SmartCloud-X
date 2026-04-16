@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "../../.tmp/frontend-sdk-runtime",
+    "rootDir": "../../packages",
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src"]
+}

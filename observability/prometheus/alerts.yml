@@ -1,0 +1,112 @@
+groups:
+  - name: smartcloud-knowledge-rag
+    rules:
+      - alert: SmartCloudKnowledgeServiceDown
+        expr: up{job="knowledge-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge-service is unavailable
+          description: The knowledge-service metrics endpoint has been down for more than 2 minutes.
+
+      - alert: SmartCloudRagServiceDown
+        expr: up{job="rag-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: rag-service is unavailable
+          description: The rag-service metrics endpoint has been down for more than 2 minutes.
+
+      - alert: SmartCloudKnowledgeReadinessDegraded
+        expr: knowledge_readiness_state == 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge-service is running but not ready
+          description: knowledge-service readiness checks have remained degraded for more than 5 minutes.
+
+      - alert: SmartCloudRagReadinessDegraded
+        expr: rag_readiness_state == 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: rag-service is running but not ready
+          description: rag-service readiness or upstream dependency checks have remained degraded for more than 5 minutes.
+
+      - alert: SmartCloudRagUpstreamErrors
+        expr: increase(rag_upstream_errors_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: rag-service is seeing knowledge-service upstream failures
+          description: rag-service recorded upstream knowledge-service errors during the last 10 minutes.
+
+      - alert: SmartCloudRagUpstreamErrorRateHigh
+        expr: increase(rag_upstream_errors_total[15m]) / clamp_min(increase(rag_retrieval_requests_total[15m]), 1) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: rag-service upstream failure ratio is high
+          description: More than 20% of rag retrieval attempts have seen upstream errors during the last 15 minutes.
+
+      - alert: SmartCloudRagEmptyRetrievalRateHigh
+        expr: increase(rag_empty_retrievals_total[15m]) / clamp_min(increase(rag_retrieval_requests_total[15m]), 1) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: rag-service empty-retrieval ratio is high
+          description: More than half of recent rag retrieval attempts produced zero citations during the last 15 minutes.
+
+      - alert: SmartCloudKnowledgeFileImportFailures
+        expr: increase(knowledge_file_import_failures_total[15m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge-service filesystem imports are failing
+          description: knowledge-service recorded filesystem import failures during the last 15 minutes.
+
+      - alert: SmartCloudKnowledgeAdminReindexRejected
+        expr: increase(knowledge_document_reindexes_total{outcome="rejected"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge-service rejected admin reindex attempts
+          description: knowledge-service rejected one or more admin document reindex requests during the last 15 minutes, usually because the confirm token was invalid.
+
+      - alert: SmartCloudKnowledgeIndexWorkerFailures
+        expr: increase(knowledge_index_worker_runs_total{outcome="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge indexing worker is failing
+          description: The knowledge-indexer worker reported one or more failed event-processing runs during the last 15 minutes.
+
+      - alert: SmartCloudKnowledgeConnectorFailures
+        expr: increase(knowledge_index_connector_writes_total{outcome="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: knowledge indexing connector writes are failing
+          description: One or more MinIO/MySQL/Qdrant/OpenSearch/Redis connector steps failed during recent knowledge indexing runs.

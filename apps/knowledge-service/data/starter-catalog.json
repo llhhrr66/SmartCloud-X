@@ -1,0 +1,43 @@
+{
+  "documents": [
+    {
+      "source": {
+        "name": "产品技术知识库",
+        "kind": "manual",
+        "uri": "starter://product-tech",
+        "description": "云产品与技术支持启动知识",
+        "tags": ["product", "gpu", "ops"]
+      },
+      "title": "GPU 云主机部署检查清单",
+      "content": "GPU 云主机适合训练与推理负载。部署前需要确认实例规格、驱动版本、镜像兼容性、网络带宽、弹性扩容策略以及监控告警阈值。若用于生产环境，应同时准备回滚方案和故障转移联系人。",
+      "tags": ["gpu", "deploy", "checklist"],
+      "language": "zh-CN"
+    },
+    {
+      "source": {
+        "name": "财务与订单 FAQ",
+        "kind": "faq",
+        "uri": "starter://finance-faq",
+        "description": "账单、发票与异常扣费常见问题",
+        "tags": ["billing", "invoice", "finance"]
+      },
+      "title": "账单与发票处理基线",
+      "content": "账单中心支持按月汇总、明细下载和发票进度查询。发现异常扣费时，应先核对资源规格、自动续费策略、优惠抵扣记录和账期，再整理订单号提交财务工单，避免重复申请退款。",
+      "tags": ["billing", "invoice", "refund"],
+      "language": "zh-CN"
+    },
+    {
+      "source": {
+        "name": "备案与合规指南",
+        "kind": "policy",
+        "uri": "starter://icp-policy",
+        "description": "备案办理与合规资料准备说明",
+        "tags": ["icp", "compliance", "policy"]
+      },
+      "title": "ICP备案资料准备说明",
+      "content": "ICP备案前需准备主体证件、负责人联系方式、服务内容说明和接入资源信息。提交前应核验域名实名认证状态、服务器地域、网站名称规范以及应急联系电话，避免因资料不一致导致退回。",
+      "tags": ["icp", "compliance", "review"],
+      "language": "zh-CN"
+    }
+  ]
+}

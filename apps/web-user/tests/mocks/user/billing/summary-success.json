@@ -1,0 +1,35 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "total_amount": "328.00",
+    "currency": "CNY",
+    "range": "this_month",
+    "top_products": [
+      {
+        "product_type": "云服务器",
+        "amount": "300.00",
+        "ratio": 0.91
+      },
+      {
+        "product_type": "公网带宽",
+        "amount": "28.00",
+        "ratio": 0.09
+      }
+    ],
+    "top_instances": [
+      {
+        "instance_id": "ins_gpu_cn2_01",
+        "instance_name": "gpu-training-01",
+        "amount": "188.00"
+      },
+      {
+        "instance_id": "ins_web_cn2_03",
+        "instance_name": "web-frontend-03",
+        "amount": "82.00"
+      }
+    ]
+  },
+  "request_id": "req_billing_summary_001",
+  "timestamp": "2026-04-16T00:00:00Z"
+}

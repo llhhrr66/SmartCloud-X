@@ -1,0 +1,11 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "scene": "reset_password",
+    "masked_account": "d***@smartcloud.local",
+    "expire_in": 300
+  },
+  "request_id": "req_auth_send_code_success",
+  "timestamp": "2026-04-16T08:05:00+08:00"
+}

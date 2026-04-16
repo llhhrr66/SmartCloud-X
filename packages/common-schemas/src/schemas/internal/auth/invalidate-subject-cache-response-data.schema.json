@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/auth/invalidate-subject-cache-response-data.schema.json",
+  "title": "InvalidateSubjectCacheResponseData",
+  "type": "object",
+  "required": [
+    "invalidated_subject_ids"
+  ],
+  "properties": {
+    "invalidated_subject_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

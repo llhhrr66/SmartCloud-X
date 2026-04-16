@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/intent-summary.schema.json",
+  "title": "IntentSummary",
+  "type": "object",
+  "required": [
+    "domain"
+  ],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "minLength": 1
+    },
+    "matched_domains": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "$ref": "./intent-signal.schema.json"
+      }
+    },
+    "urgency": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "needs_human_handoff": {
+      "type": "boolean"
+    },
+    "scene": {
+      "$ref": "./scene-name.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/internal-chat-request.schema.json",
+  "title": "InternalChatRequest",
+  "type": "object",
+  "required": [
+    "request_id",
+    "trace_id",
+    "user",
+    "chat_request"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "user": {
+      "$ref": "./internal-chat-user.schema.json"
+    },
+    "chat_request": {
+      "$ref": "./internal-chat-payload.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

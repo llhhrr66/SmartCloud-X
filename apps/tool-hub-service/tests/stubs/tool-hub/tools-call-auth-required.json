@@ -1,0 +1,39 @@
+{
+  "status": "auth-required",
+  "summary": "ticket.create 执行前需补充鉴权上下文。",
+  "result": {
+    "missing_context": [
+      "permission:user:ticket.write"
+    ]
+  },
+  "citations": [],
+  "success": false,
+  "code": 4030001,
+  "message": "auth context missing",
+  "data": {
+    "missing_context": [
+      "permission:user:ticket.write"
+    ]
+  },
+  "audit_tags": [
+    "finance-order",
+    "execute",
+    "write"
+  ],
+  "session_context_patch": {},
+  "tool_call_id": "tc-contract-auth-1",
+  "latency_ms": 11,
+  "provider": "business-tools",
+  "error": {
+    "retryable": false,
+    "provider": "business-tools",
+    "details": {
+      "missing_context": [
+        "permission:user:ticket.write"
+      ]
+    }
+  },
+  "compensation": null,
+  "idempotency_key": "tool-contract-auth-1",
+  "attempts": 1
+}

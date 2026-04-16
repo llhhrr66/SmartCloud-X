@@ -1,0 +1,279 @@
+services:
+  knowledge-service:
+    build:
+      context: ../../apps/knowledge-service
+      dockerfile: Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_TRACE_ENABLED: ${SMARTCLOUD_TRACE_ENABLED:-true}
+      SMARTCLOUD_OPERATOR_REASON_HEADER: ${SMARTCLOUD_OPERATOR_REASON_HEADER:-X-Operator-Reason}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173}
+      SMARTCLOUD_KNOWLEDGE_DATA_PATH: ${SMARTCLOUD_KNOWLEDGE_DATA_PATH:-/app/runtime/knowledge-store.json}
+      SMARTCLOUD_KNOWLEDGE_AUDIT_PATH: ${SMARTCLOUD_KNOWLEDGE_AUDIT_PATH:-/app/runtime/knowledge-admin-audit.jsonl}
+      SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH: ${SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH:-/app/runtime/knowledge-indexing-outbox.jsonl}
+      SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT: ${SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT:-/app/imports}
+      SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT: ${SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT:-/app/runtime/raw-objects}
+      SMARTCLOUD_MINIO_ENDPOINT: ${SMARTCLOUD_MINIO_ENDPOINT:-http://minio:9000}
+      SMARTCLOUD_MINIO_BUCKET: ${SMARTCLOUD_MINIO_BUCKET:-knowledge-raw}
+      SMARTCLOUD_MINIO_ACCESS_KEY: ${SMARTCLOUD_MINIO_ACCESS_KEY:-smartcloud}
+      SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_QDRANT_URL: ${SMARTCLOUD_QDRANT_URL:-http://qdrant:6333}
+      SMARTCLOUD_QDRANT_VECTOR_SIZE: ${SMARTCLOUD_QDRANT_VECTOR_SIZE:-32}
+      SMARTCLOUD_OPENSEARCH_URL: ${SMARTCLOUD_OPENSEARCH_URL:-http://opensearch:9200}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      SMARTCLOUD_CONNECTOR_TIMEOUT_MS: ${SMARTCLOUD_CONNECTOR_TIMEOUT_MS:-5000}
+      SMARTCLOUD_INDEX_WORKER_POLL_SECONDS: ${SMARTCLOUD_INDEX_WORKER_POLL_SECONDS:-2}
+      SMARTCLOUD_INDEX_WORKER_BATCH_SIZE: ${SMARTCLOUD_INDEX_WORKER_BATCH_SIZE:-10}
+      SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT: ${SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:4317}
+      OTEL_SERVICE_NAME: smartcloud-x-knowledge-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x-local}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+    ports:
+      - "8030:8030"
+    volumes:
+      - knowledge_runtime:/app/runtime
+      - ../../apps/knowledge-service/data/imports:/app/imports:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8030/healthz')); raise SystemExit(0 if payload.get('data', {}).get('ready') else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  knowledge-indexer:
+    build:
+      context: ../../apps/knowledge-service
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.worker"]
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_TRACE_ENABLED: ${SMARTCLOUD_TRACE_ENABLED:-true}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173}
+      SMARTCLOUD_KNOWLEDGE_DATA_PATH: ${SMARTCLOUD_KNOWLEDGE_DATA_PATH:-/app/runtime/knowledge-store.json}
+      SMARTCLOUD_KNOWLEDGE_AUDIT_PATH: ${SMARTCLOUD_KNOWLEDGE_AUDIT_PATH:-/app/runtime/knowledge-admin-audit.jsonl}
+      SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH: ${SMARTCLOUD_KNOWLEDGE_OUTBOX_PATH:-/app/runtime/knowledge-indexing-outbox.jsonl}
+      SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT: ${SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT:-/app/imports}
+      SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT: ${SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT:-/app/runtime/raw-objects}
+      SMARTCLOUD_MINIO_ENDPOINT: ${SMARTCLOUD_MINIO_ENDPOINT:-http://minio:9000}
+      SMARTCLOUD_MINIO_BUCKET: ${SMARTCLOUD_MINIO_BUCKET:-knowledge-raw}
+      SMARTCLOUD_MINIO_ACCESS_KEY: ${SMARTCLOUD_MINIO_ACCESS_KEY:-smartcloud}
+      SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_QDRANT_URL: ${SMARTCLOUD_QDRANT_URL:-http://qdrant:6333}
+      SMARTCLOUD_QDRANT_VECTOR_SIZE: ${SMARTCLOUD_QDRANT_VECTOR_SIZE:-32}
+      SMARTCLOUD_OPENSEARCH_URL: ${SMARTCLOUD_OPENSEARCH_URL:-http://opensearch:9200}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      SMARTCLOUD_CONNECTOR_TIMEOUT_MS: ${SMARTCLOUD_CONNECTOR_TIMEOUT_MS:-5000}
+      SMARTCLOUD_INDEX_WORKER_POLL_SECONDS: ${SMARTCLOUD_INDEX_WORKER_POLL_SECONDS:-2}
+      SMARTCLOUD_INDEX_WORKER_BATCH_SIZE: ${SMARTCLOUD_INDEX_WORKER_BATCH_SIZE:-10}
+      SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT: ${SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:4317}
+      OTEL_SERVICE_NAME: smartcloud-x-knowledge-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x-local}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+    depends_on:
+      knowledge-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      opensearch:
+        condition: service_started
+      minio:
+        condition: service_started
+    volumes:
+      - knowledge_runtime:/app/runtime
+      - ../../apps/knowledge-service/data/imports:/app/imports:ro
+    restart: unless-stopped
+
+  rag-service:
+    build:
+      context: ../../apps/rag-service
+      dockerfile: Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_TRACE_ENABLED: ${SMARTCLOUD_TRACE_ENABLED:-true}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173}
+      SMARTCLOUD_REQUEST_TIMEOUT_MS: ${SMARTCLOUD_REQUEST_TIMEOUT_MS:-10000}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_RAG_REDIS_URL:-redis://redis:6379/1}
+      SMARTCLOUD_RAG_CACHE_ENABLED: ${SMARTCLOUD_RAG_CACHE_ENABLED:-true}
+      KNOWLEDGE_SERVICE_BASE_URL: http://knowledge-service:8030
+      SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT: ${SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:4317}
+      OTEL_SERVICE_NAME: smartcloud-x-rag-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x-local}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+    ports:
+      - "8040:8040"
+    depends_on:
+      knowledge-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8040/healthz')); raise SystemExit(0 if payload.get('data', {}).get('ready') else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web-admin:
+    build:
+      context: ../../apps/web-admin
+      dockerfile: Dockerfile
+      args:
+        VITE_KNOWLEDGE_SERVICE_BASE_URL: ${VITE_KNOWLEDGE_SERVICE_BASE_URL:-http://localhost:8030/api/knowledge/v1}
+        VITE_RAG_SERVICE_BASE_URL: ${VITE_RAG_SERVICE_BASE_URL:-http://localhost:8040/api/rag/v1}
+        VITE_OPERATOR_REASON_HEADER: ${VITE_OPERATOR_REASON_HEADER:-X-Operator-Reason}
+    ports:
+      - "8050:80"
+    depends_on:
+      rag-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-smartcloud}
+      MYSQL_USER: ${MYSQL_USER:-smartcloud}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartcloud}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-smartcloud-root}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_INITIAL_ADMIN_PASSWORD:-Smartcloud123!}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-smartcloud}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-smartcloud123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      knowledge-service:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+
+volumes:
+  knowledge_runtime:
+  prometheus_data:
+  grafana_data:
+  qdrant_data:
+  minio_data:
+  mysql_data:
+  opensearch_data:

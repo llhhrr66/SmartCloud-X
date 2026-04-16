@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/retrieval-search-preview-data.schema.json",
+  "title": "AdminRetrievalSearchPreviewData",
+  "type": "object",
+  "required": [
+    "query",
+    "total",
+    "items"
+  ],
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rewritten_query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "./retrieval-search-source.schema.json"
+      }
+    },
+    "degraded": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/saga-compensation-step.schema.json",
+  "title": "SagaCompensationStep",
+  "type": "object",
+  "required": ["saga_id", "step_id", "tool_name", "compensation"],
+  "properties": {
+    "saga_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "step_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compensation": {
+      "$ref": "../tool-hub/tool-compensation-action.schema.json"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["armed", "completed", "failed"]
+    }
+  },
+  "additionalProperties": false
+}

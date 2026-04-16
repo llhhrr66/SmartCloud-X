@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/route-decision.schema.json",
+  "title": "RouteDecision",
+  "type": "object",
+  "required": ["primary_agent", "intent", "summary"],
+  "properties": {
+    "primary_agent": {
+      "$ref": "./agent-name.schema.json"
+    },
+    "supporting_agents": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-name.schema.json"
+      }
+    },
+    "requires_retrieval": {
+      "type": "boolean"
+    },
+    "requires_tools": {
+      "type": "boolean"
+    },
+    "needs_human_handoff": {
+      "type": "boolean"
+    },
+    "intent": {
+      "$ref": "./intent-summary.schema.json"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-task.schema.json"
+      }
+    },
+    "handoff_plan": {
+      "type": "array",
+      "items": {
+        "$ref": "./handoff-step.schema.json"
+      }
+    },
+    "tool_plan": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-plan-item.schema.json"
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "$ref": "./execution-checkpoint.schema.json"
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

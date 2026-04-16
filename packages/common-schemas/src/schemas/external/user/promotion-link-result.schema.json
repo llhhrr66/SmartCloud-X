@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/user/promotion-link-result.schema.json",
+  "title": "PromotionLinkResult",
+  "type": "object",
+  "required": [
+    "link_id",
+    "campaign_id",
+    "campaign_name",
+    "channel",
+    "short_url",
+    "landing_page_url",
+    "tracking_code",
+    "created_at",
+    "note"
+  ],
+  "properties": {
+    "link_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaign_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "channel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "short_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "landing_page_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tracking_code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

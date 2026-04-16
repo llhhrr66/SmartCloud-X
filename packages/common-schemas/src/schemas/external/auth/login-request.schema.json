@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/auth/login-request.schema.json",
+  "title": "LoginRequest",
+  "type": "object",
+  "required": [
+    "login_type",
+    "account"
+  ],
+  "properties": {
+    "login_type": {
+      "type": "string",
+      "enum": [
+        "password",
+        "sms",
+        "email_code"
+      ]
+    },
+    "account": {
+      "type": "string",
+      "minLength": 1
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sms_code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "email_code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "captcha_token": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

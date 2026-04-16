@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/session-state-snapshot.schema.json",
+  "title": "SessionStateSnapshot",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "primary_agent"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "primary_agent": {
+      "$ref": "./agent-name.schema.json"
+    },
+    "current_agent": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "session_context": {
+      "$ref": "./session-context.schema.json"
+    },
+    "agent_routes": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-route-record.schema.json"
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "$ref": "./execution-checkpoint.schema.json"
+      }
+    },
+    "tool_results": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-invocation.schema.json"
+      }
+    },
+    "tool_context": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-context-item.schema.json"
+      }
+    },
+    "compensation_stack": {
+      "type": "array",
+      "items": {
+        "$ref": "./saga-compensation-step.schema.json"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "./execution-event.schema.json"
+      }
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pending_user_actions": {
+      "type": "array",
+      "items": {
+        "$ref": "./pending-user-action.schema.json"
+      }
+    },
+    "final_response_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "review": {
+      "description": "Persisted lightweight response-review result for the current session state snapshot.",
+      "oneOf": [
+        {
+          "$ref": "./response-review.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,239 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Business Tools Service API
+  version: 0.6.0
+  description: Foundation-owned baseline for the current internal business-tools routes used by tool-hub.
+x-owner-service: business-tools-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: businessTools_healthz
+      summary: Check business-tools service liveness.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy business-tools service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: business-tools-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /internal/v1/tools:
+    get:
+      tags: [business-tools]
+      operationId: businessTools_listTools
+      summary: List the current business-tools catalog descriptors.
+      description: Business-tool descriptors now publish additive metadata including `version`, `input_schema`, `output_schema`, `session_context_bindings`, `session_context_output_keys`, `prerequisite_tool_names`, and the existing `input_field_hints` guidance used by tool-hub/orchestrator consumers. Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `BUSINESS_TOOLS_CALLER_FORBIDDEN`.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [BUSINESS_TOOLS_CALLER_FORBIDDEN]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+      responses:
+        '200':
+          description: Current business-tools catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BusinessToolListResponse'
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/BusinessToolsCallerForbidden
+  /internal/v1/tools/{tool_name}:
+    get:
+      tags: [business-tools]
+      operationId: businessTools_getTool
+      summary: Return a single provider-backed business-tool descriptor.
+      description: Additive provider-facing discovery route used by tool-hub HTTP transport when a deployed business-tools provider publishes live descriptor metadata. Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `BUSINESS_TOOLS_CALLER_FORBIDDEN`.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [BUSINESS_TOOLS_CALLER_FORBIDDEN, ORCH_TOOL_NOT_FOUND]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - name: tool_name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Current business-tool descriptor.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolDefinition
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/BusinessToolsCallerForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+  /internal/v1/execute/{tool_name}:
+    post:
+      tags: [business-tools]
+      operationId: businessTools_executeTool
+      summary: Execute a single business tool through the internal HTTP bridge.
+      description: Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `BUSINESS_TOOLS_CALLER_FORBIDDEN`. Write-mode tools may replay a prior successful result when the same `Idempotency-Key` is reused with the same normalized payload/context. Reusing the key with a different normalized write request must return in-band conflict `4090001`. Successful responses may include additive `session_context_patch` hints for downstream runtime-context merging. Query/read tools may also replay from a local cache and should surface additive `audit_tags` such as `cache-hit`. The execute response now also aligns with the richer `ToolExecutionResult` fidelity fields (`tool_name`, `operation`, `status`, `summary`, `result`, `citations`) while keeping `message` and `data` as compatibility aliases during the additive phase. Follow-up-required failures may surface additive `user_action_hint` metadata for clarification/auth/confirmation resumes. Malformed required-field payloads must fail fast in-band with `code=4001001`, `message=invalid tool payload`, and `error_detail.missing_fields[]`.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [BUSINESS_TOOLS_CALLER_FORBIDDEN, ORCH_TOOL_NOT_FOUND, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+      x-idempotency-required: true
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - name: tool_name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XToolCallIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTenantIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/BusinessToolExecuteRequest
+      responses:
+        '200':
+          description: Business-tool execution result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/BusinessToolExecuteResponse
+              examples:
+                invalidPayload:
+                  summary: Missing required business-tool fields
+                  value:
+                    success: false
+                    code: 4001001
+                    message: invalid tool payload
+                    audit_tags: [refund, execute, write, invalid-payload]
+                    user_action_hint:
+                      action: clarify-tool-input
+                      message: 请先提供订单号和退款金额后再继续。
+                      missing_fields: [order_no, amount]
+                    error_detail:
+                      missing_fields: [order_no, amount]
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/BusinessToolsCallerForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+  /internal/v1/preflight/{tool_name}:
+    post:
+      tags: [business-tools]
+      operationId: businessTools_preflightTool
+      summary: Validate readiness for a single business-tool invocation without execution.
+      description: Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `BUSINESS_TOOLS_CALLER_FORBIDDEN`. Additive provider-facing readiness route used by tool-hub HTTP transport when a deployed business-tools provider publishes live preflight metadata. The response mirrors missing-field/auth/confirmation blockers plus `session_context_bindings`, machine-readable `user_action_hint`, and execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`) without creating an audit record or executing the tool.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [BUSINESS_TOOLS_CALLER_FORBIDDEN, ORCH_TOOL_NOT_FOUND, VALIDATION_ERROR]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - name: tool_name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XToolCallIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTenantIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/BusinessToolExecuteRequest
+      responses:
+        '200':
+          description: Business-tool preflight readiness response.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolPreflightResult
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/BusinessToolsCallerForbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+  /internal/v1/compensations/execute:
+    post:
+      tags: [business-tools]
+      operationId: businessTools_executeCompensation
+      summary: Execute a single business-tool compensation action.
+      description: Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `BUSINESS_TOOLS_CALLER_FORBIDDEN`. Internal rollback route used by tool-hub/orchestrator Saga compensation flows. Business failures are returned in-band inside the response body.
+      x-owner-service: business-tools-service
+      x-permission-code: service:internal.call
+      x-error-codes: [BUSINESS_TOOLS_CALLER_FORBIDDEN, VALIDATION_ERROR]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/BusinessCompensationExecuteRequest
+      responses:
+        '200':
+          description: Business-tool compensation execution result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/BusinessCompensationExecuteResponse
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/BusinessToolsCallerForbidden
+components:
+  schemas:
+    BusinessToolListResponse:
+      type: object
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: ./components.openapi.yaml#/components/schemas/ToolDefinition
+      additionalProperties: false

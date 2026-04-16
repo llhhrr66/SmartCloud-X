@@ -1,0 +1,35 @@
+{
+  "status": "idempotency-conflict",
+  "summary": "幂等键已被其他写入请求占用。",
+  "result": {
+    "idempotency_key": "tool-contract-conflict-1"
+  },
+  "citations": [],
+  "success": false,
+  "code": 4090001,
+  "message": "idempotency conflict",
+  "data": {
+    "idempotency_key": "tool-contract-conflict-1"
+  },
+  "audit_tags": [
+    "finance-order",
+    "execute",
+    "write",
+    "high-risk",
+    "idempotency-conflict"
+  ],
+  "session_context_patch": {},
+  "tool_call_id": "tc-contract-conflict-1",
+  "latency_ms": 15,
+  "provider": "business-tools",
+  "error": {
+    "retryable": false,
+    "provider": "business-tools",
+    "details": {
+      "reason": "idempotency_conflict"
+    }
+  },
+  "compensation": null,
+  "idempotency_key": "tool-contract-conflict-1",
+  "attempts": 1
+}

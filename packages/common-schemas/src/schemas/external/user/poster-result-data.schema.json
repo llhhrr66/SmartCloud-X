@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/user/poster-result-data.schema.json",
+  "title": "PosterResultData",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "result_ready",
+    "campaign_id",
+    "theme",
+    "size"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "completed", "failed"]
+    },
+    "result_ready": {
+      "type": "boolean"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaign_name": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "theme": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slogan": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "size": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image_url": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "preview_url": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "download_url": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "mime_type": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

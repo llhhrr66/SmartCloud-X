@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/execution-event.schema.json",
+  "title": "ExecutionEvent",
+  "type": "object",
+  "required": [
+    "sequence",
+    "event",
+    "message"
+  ],
+  "properties": {
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "route_selected",
+        "checkpoint_updated",
+        "tool_call",
+        "tool_result",
+        "agent_result",
+        "review_result",
+        "compensation_result",
+        "state_persisted"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "data": {
+      "description": "Event-specific payload. `review_result` mirrors the additive ResponseReview status/escalation/issues baseline.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

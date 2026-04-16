@@ -1,0 +1,500 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Marketing Service API
+  version: 0.6.0
+  description: Foundation-owned placeholder baseline for current user-facing marketing routes.
+x-owner-service: marketing-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: marketing_healthz
+      summary: Check marketing service liveness.
+      x-owner-service: marketing-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy marketing service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: marketing-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/marketing/campaigns:
+    get:
+      tags: [marketing]
+      operationId: marketing_listCampaigns
+      summary: List published marketing campaigns for the current user surface.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - name: product_type
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [published, draft, expired]
+      responses:
+        '200':
+          description: Campaign list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/copy/generate:
+    post:
+      tags: [marketing]
+      operationId: marketing_generateCopy
+      summary: Generate user-facing marketing copy for a campaign.
+      description: Current practical baseline for campaign copy generation used by the owned marketing service and downstream web-user integration.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.write
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/MarketingCopyRequest
+      responses:
+        '200':
+          description: Generated marketing copy payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketingCopySuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/copies:
+    get:
+      tags: [marketing]
+      operationId: marketing_listGeneratedCopies
+      summary: List generated marketing-copy history for the current user.
+      description: Additive helper route used by the owned marketing service to expose persisted marketing-copy artifacts instead of forcing downstream clients to rely only on immediate POST responses or local browser storage.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortByQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortOrderQuery
+        - name: campaign_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: tone
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [professional, growth, launch]
+      responses:
+        '200':
+          description: Generated marketing-copy history response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketingCopyListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/copies/{copy_id}:
+    get:
+      tags: [marketing]
+      operationId: marketing_getGeneratedCopy
+      summary: Get a generated marketing-copy artifact by id.
+      description: Additive helper route used by the owned marketing service to read back previously generated copy artifacts scoped to the authenticated user and tenant.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: copy_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Generated marketing-copy detail payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketingCopySuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/promotion-links/generate:
+    post:
+      tags: [marketing]
+      operationId: marketing_generatePromotionLink
+      summary: Generate a tracked promotion link for a campaign and channel.
+      description: Current practical baseline for share-link generation used by the owned marketing service and downstream web-user integration.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.write
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/PromotionLinkRequest
+      responses:
+        '200':
+          description: Generated promotion-link payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionLinkSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/promotion-links:
+    get:
+      tags: [marketing]
+      operationId: marketing_listPromotionLinks
+      summary: List generated promotion-link history for the current user.
+      description: Additive helper route used by the owned marketing service to expose persisted promotion-link artifacts for later reuse and auditing in downstream clients.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortByQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortOrderQuery
+        - name: campaign_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: channel
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Generated promotion-link history response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionLinkListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/promotion-links/{link_id}:
+    get:
+      tags: [marketing]
+      operationId: marketing_getPromotionLink
+      summary: Get a generated promotion-link artifact by id.
+      description: Additive helper route used by the owned marketing service to read back previously generated promotion-link artifacts scoped to the authenticated user and tenant.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: link_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Generated promotion-link detail payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionLinkSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/posters:
+    get:
+      tags: [marketing]
+      operationId: marketing_listPosterTasks
+      summary: List poster task history for the current user.
+      description: Frozen additive baseline introduced for web-user live-mode history pages.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortByQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/SortOrderQuery
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, completed, failed]
+        - name: campaign_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Poster task history response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosterTaskListSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+    post:
+      tags: [marketing]
+      operationId: marketing_createPosterTask
+      summary: Create a poster generation task.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.write
+      x-error-codes: [4001001, 4010002, 4290001]
+      x-idempotency-required: true
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/IdempotencyKeyHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [campaign_id, theme, slogan, size]
+              properties:
+                campaign_id:
+                  type: string
+                  minLength: 1
+                theme:
+                  type: string
+                  minLength: 1
+                slogan:
+                  type: string
+                  minLength: 1
+                size:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        '202':
+          description: Poster task accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosterTaskCreateSuccessEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalValidationError
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/posters/{task_id}:
+    get:
+      tags: [marketing]
+      operationId: marketing_getPosterTask
+      summary: Get a poster task detail for polling or result display.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Poster task detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosterTaskDetailSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+  /api/v1/marketing/posters/{task_id}/result:
+    get:
+      tags: [marketing]
+      operationId: marketing_getPosterResult
+      summary: Get the current poster result asset placeholder for a completed or pending task.
+      description: Additive helper route used by the owned marketing service to expose preview/download asset metadata without changing the primary poster-task detail contract.
+      x-owner-service: marketing-service
+      x-permission-code: user:marketing.read
+      x-error-codes: [4010002, 4040001, 4290001]
+      x-idempotency-required: false
+      x-rate-limit-scope: user
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Poster result placeholder payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosterResultSuccessEnvelope'
+        '401':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalUnauthorized
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalNotFound
+        '429':
+          $ref: ./components.openapi.yaml#/components/responses/CanonicalRateLimited
+components:
+  schemas:
+    CampaignListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/MarketingCampaignListData
+    MarketingCopySuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/MarketingCopyResult
+    MarketingCopyListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/MarketingCopyListData
+    PosterTaskCreateSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PosterTaskCreateResponseData
+    PosterTaskListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PosterTaskListData
+    PosterTaskDetailSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PosterTask
+    PosterResultSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PosterResultData
+    PromotionLinkSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PromotionLinkResult
+    PromotionLinkListSuccessEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/CanonicalSuccessEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/PromotionLinkListData

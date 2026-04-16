@@ -1,0 +1,648 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Tool Hub Service API
+  version: 0.7.0
+  description: Foundation-owned baseline for the current tool-hub routes in this workspace.
+x-owner-service: tool-hub-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: toolHub_healthz
+      summary: Check tool-hub service liveness.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy tool-hub service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: tool-hub-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/tools:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [tools]
+      operationId: toolHub_listTools
+      summary: List registered baseline tools.
+      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools`. Tool descriptors now publish additive metadata including `version`, `input_schema`, `output_schema`, `session_context_bindings`, `session_context_output_keys`, `prerequisite_tool_names`, and existing field-level clarification hints. The internal compatibility alias `/internal/v1/tools` requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list and returns `TOOL_HUB_CALLER_FORBIDDEN` when missing or rejected.
+      x-owner-service: tool-hub-service
+      x-legacy-paths:
+        - /api/tool-hub/v1/tools
+      x-internal-paths:
+        - /internal/v1/tools
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: TOOL_HUB_CALLER_FORBIDDEN
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Published tool registry entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolDescriptorListEnvelope'
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/tools/{tool_name}:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [tools]
+      operationId: toolHub_getTool
+      summary: Return the current descriptor for a registered tool.
+      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools/{tool_name}`. Tool descriptors now publish additive metadata including `version`, `input_schema`, `output_schema`, `session_context_bindings`, `session_context_output_keys`, `prerequisite_tool_names`, and existing field-level clarification hints. The internal compatibility alias `/internal/v1/tools/{tool_name}` requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list and returns `TOOL_HUB_CALLER_FORBIDDEN` when missing or rejected.
+      x-owner-service: tool-hub-service
+      x-legacy-paths:
+        - /api/tool-hub/v1/tools/{tool_name}
+      x-internal-paths:
+        - /internal/v1/tools/{tool_name}
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: TOOL_HUB_CALLER_FORBIDDEN
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_NOT_FOUND, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: tool_name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Tool descriptor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolDescriptorEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /internal/v1/tool-compensations/call:
+    post:
+      tags: [compensation]
+      operationId: toolHub_callCompensation
+      summary: Execute a compensation action through the current tool-hub bridge.
+      description: Internal rollback bridge used by orchestrator Saga compensation flows. Trusted callers must send `X-Caller-Service`, and the route rejects callers outside the service-local `ALLOWED_INTERNAL_CALLERS` allow-list with `TOOL_HUB_CALLER_FORBIDDEN`. The current implementation returns an in-band result model instead of envelope-wrapped transport errors for handled business failures.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: [TOOL_HUB_CALLER_FORBIDDEN, SERVICE_UNAVAILABLE, VALIDATION_ERROR]
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: TOOL_HUB_CALLER_FORBIDDEN
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/CompensationCallRequest
+      responses:
+        '200':
+          description: Compensation execution bridge result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/CompensationCallResponse
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/ToolHubCallerForbidden
+  /api/v1/tools/{tool_name}/invoke:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [tools]
+      operationId: toolHub_invokeTool
+      summary: Invoke a registered tool through the current baseline dispatcher.
+      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools/{tool_name}/invoke`. Successful direct invoke responses may include additive metadata such as `downstream_target` and `auth_requirements` alongside the execution-result fields. Follow-up-required results may also surface additive `user_action_hint` metadata so trusted callers can render clarification/auth/confirmation instructions without parsing summary text.
+      x-owner-service: tool-hub-service
+      x-legacy-paths:
+        - /api/tool-hub/v1/tools/{tool_name}/invoke
+      x-internal-paths:
+        - /internal/v1/tools/{tool_name}/invoke
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_NOT_FOUND, ORCH_TOOL_AUTH_REQUIRED, ORCH_TOOL_OPERATION_INVALID, ORCH_TOOL_PAYLOAD_INVALID, VALIDATION_ERROR, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: tool_name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolInvokeRequest
+      responses:
+        '200':
+          description: Tool invocation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolInvokeResponseEnvelope'
+              examples:
+                successWithMetadata:
+                  summary: Direct invoke response with downstream routing and auth metadata
+                  value:
+                    success: true
+                    requestId: req-invoke-1
+                    data:
+                      tool_name: billing.get_statement
+                      operation: preview
+                      status: completed
+                      summary: Prepared the latest billing statement preview.
+                      result:
+                        account_id: acct-1001
+                        statement_no: ST-2026-04
+                      citations: [billing_statement:ST-2026-04]
+                      success: true
+                      code: 0
+                      message: ok
+                      provider: business-tools
+                      downstream_target: business-tools
+                      auth_requirements:
+                        require_user_id: true
+                        require_account_id: true
+                        required_permissions: [user:billing.read]
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+        '422':
+          $ref: ./components.openapi.yaml#/components/responses/UnprocessableEntity
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/tools/call:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [tools]
+      operationId: toolHub_callTool
+      summary: Execute the direct tool-call bridge response contract.
+      description: Canonical route. Legacy compatibility alias remains `/api/tool-hub/v1/tools/call`. Internal compatibility alias remains `/internal/v1/tools/call`, and that internal alias requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list. Write-mode calls may replay a prior successful result when the same `Idempotency-Key` is reused with the same normalized payload/context, or return in-band conflict `4090001` when the key is reused for a different write request. Responses may include additive downstream fidelity fields `status`, `summary`, `result`, and `citations` while keeping `message` and `data` as compatibility aliases; `result` and `data` carry the same payload in the current additive phase. Responses may also include `attempts` when retry-aware dispatch was used, may forward additive `session_context_patch` hints from business-tools, may expose propagated `audit_tags` such as `cache-hit` when a query/read result was replayed from cache, may surface additive `user_action_hint` metadata for clarification/auth/confirmation follow-up, and may return in-band malformed-payload failures with `code=4001001`, `message=invalid tool payload`, and `error.details.missing_fields[]`.
+      x-owner-service: tool-hub-service
+      x-legacy-paths:
+        - /api/tool-hub/v1/tools/call
+      x-internal-paths:
+        - /internal/v1/tools/call
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: TOOL_HUB_CALLER_FORBIDDEN
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_NOT_FOUND, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolCallRequest
+      responses:
+        '200':
+          description: Direct tool-call result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolCallResponse
+              examples:
+                successWithFidelity:
+                  summary: Successful direct tool-call with richer downstream fidelity
+                  value:
+                    success: true
+                    code: 0
+                    message: ok
+                    status: success
+                    summary: Retrieved the latest billing statement for the requested account.
+                    result:
+                      account_id: acct-1001
+                      statement_no: ST-2026-04
+                      balance_due: 188
+                    data:
+                      account_id: acct-1001
+                      statement_no: ST-2026-04
+                      balance_due: 188
+                    citations: [billing_statement:ST-2026-04]
+                    tool_call_id: tc-billing-1
+                    latency_ms: 14
+                    provider: business-tools
+                    audit_tags: [billing, query, cache-hit]
+                    attempts: 1
+                invalidPayload:
+                  summary: Missing required tool payload fields
+                  value:
+                    success: false
+                    code: 4001001
+                    message: invalid tool payload
+                    tool_call_id: tc-invalid-1
+                    latency_ms: 0
+                    provider: business-tools
+                    audit_tags: [refund, execute, write, invalid-payload]
+                    user_action_hint:
+                      action: clarify-tool-input
+                      message: 请先提供订单号和退款金额后再继续。
+                      missing_fields: [order_no, amount]
+                    error:
+                      retryable: false
+                      provider: business-tools
+                      details:
+                        missing_fields: [order_no, amount]
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+  /api/v1/tools/preflight:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [tools]
+      operationId: toolHub_preflightTool
+      summary: Validate a tool call for clarification, auth, or confirmation blockers before execution.
+      description: Canonical route. Internal compatibility alias remains `/internal/v1/tools/preflight`, and that internal alias requires `X-Caller-Service` to match the service-local `ALLOWED_INTERNAL_CALLERS` allow-list. Preflight validates tool availability, operation support, missing payload fields, auth context, and confirmation requirements without executing the tool or creating a tool-call audit record. Responses now also surface additive `session_context_bindings`, machine-readable `user_action_hint`, plus execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`) so continuation/planning callers can inspect how missing fields may be satisfied and how the downstream tool will execute.
+      x-owner-service: tool-hub-service
+      x-internal-paths:
+        - /internal/v1/tools/preflight
+      x-internal-caller-policy:
+        config_key: ALLOWED_INTERNAL_CALLERS
+        header: X-Caller-Service
+        error_code: TOOL_HUB_CALLER_FORBIDDEN
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_NOT_FOUND, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolCallRequest
+      responses:
+        '200':
+          description: Tool preflight readiness response.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolPreflightResponse
+              examples:
+                missingPayload:
+                  summary: Missing required payload fields before execution
+                  value:
+                    tool_name: order.create_refund
+                    operation: execute
+                    status: missing-payload
+                    ready: false
+                    available: true
+                    high_risk: true
+                    tool_mode: write
+                    timeout_ms: 10000
+                    idempotent: true
+                    cache_ttl_seconds: null
+                    missing_payload_fields: [order_no, amount]
+                    missing_payload_hints:
+                      order_no: 请先提供需要退款的订单号。
+                      amount: 请先确认本次退款金额。
+                    missing_auth_context: []
+                    required_permissions: [user:order.read]
+                    requires_account_context: false
+                    confirmation_required: true
+                    user_action_hint:
+                      action: clarify-tool-input
+                      message: 请先补充订单号和退款金额。
+                      missing_fields: [order_no, amount]
+                      session_context_bindings:
+                        order_no: [attributes.order_no]
+                        amount: [attributes.refund_amount]
+                    session_context_bindings:
+                      order_no: [attributes.order_no]
+                      amount: [attributes.refund_amount]
+                    downstream_target: business-tools
+                    provider: business-tools
+                confirmationRequired:
+                  summary: High-risk write is otherwise ready but still requires explicit confirmation
+                  value:
+                    tool_name: billing.create_invoice
+                    operation: execute
+                    status: confirmation-required
+                    ready: false
+                    available: true
+                    high_risk: true
+                    tool_mode: write
+                    timeout_ms: 10000
+                    idempotent: true
+                    cache_ttl_seconds: null
+                    missing_payload_fields: []
+                    missing_payload_hints: {}
+                    missing_auth_context: []
+                    required_permissions: [user:billing.read]
+                    requires_account_context: true
+                    confirmation_required: true
+                    user_action_hint:
+                      action: user-confirmation
+                      message: 该操作需要显式确认后才能继续。
+                      confirmation_required: true
+                      requires_account_context: true
+                      confirm_tool_names: [billing.create_invoice]
+                    session_context_bindings:
+                      statement_nos: [attributes.billing_statement_nos]
+                    downstream_target: business-tools
+                    provider: business-tools
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+  /api/v1/tool-calls:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [audit]
+      operationId: toolHub_listToolCalls
+      summary: List tool-call audit records from the current tool-hub baseline store.
+      description: Canonical audit-read route for current in-memory tool-call tracing. Intended for trusted admin, gateway, or observability consumers. Audit records may include additive execution `summary` / `citations`, a preview of forwarded `session_context_patch` data, additive `user_action_hint` follow-up metadata, and propagated `audit_tags`; current query-cache replays use the stable tag `cache-hit`, malformed required-field failures use the stable status `invalid-payload`, and the current success-path persisted audit status is `completed` (`success` remains the older compatibility vocabulary).
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: tool_name
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [success, completed, invalid-payload, auth-required, idempotency-conflict, confirmation-required, timeout, failed]
+        - name: trace_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: conversation_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: idempotency_key
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: audit_tag
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Tool-call audit records sorted by newest update first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCallAuditRecordListEnvelope'
+  /api/v1/tool-calls/{tool_call_id}:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [audit]
+      operationId: toolHub_getToolCall
+      summary: Retrieve a single tool-call audit record.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_CALL_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: tool_call_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Tool-call audit record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCallAuditRecordEnvelope'
+              examples:
+                successWithFidelity:
+                  summary: Audit view of a successful tool call with downstream fidelity
+                  value:
+                    success: true
+                    data:
+                      tool_call_id: tc-billing-1
+                      trace_id: trace-billing-1
+                      conversation_id: conv-billing-1
+                      tool_name: billing.get_statement
+                      operation: query
+                      status: completed
+                      success: true
+                      code: 0
+                      message: ok
+                      summary: Retrieved the latest billing statement for the requested account.
+                      citations: [billing_statement:ST-2026-04]
+                      provider: business-tools
+                      retryable: false
+                      latency_ms: 14
+                      attempts: 1
+                      tenant_id: default
+                      operator:
+                        type: agent
+                        id: Finance_Order_Agent
+                      user_context:
+                        user_id: u-1
+                        permissions: [user:billing.read]
+                      audit_tags: [billing, query, cache-hit]
+                      data_preview:
+                        account_id: acct-1001
+                        statement_no: ST-2026-04
+                        balance_due: 188
+                      created_at: '2026-04-16T10:40:00Z'
+                      updated_at: '2026-04-16T10:40:00Z'
+                invalidPayload:
+                  summary: Audit view of a malformed tool payload
+                  value:
+                    success: true
+                    data:
+                      tool_call_id: tc-invalid-1
+                      trace_id: trace-invalid-1
+                      conversation_id: conv-invalid-1
+                      tool_name: order.create_refund
+                      operation: execute
+                      status: invalid-payload
+                      success: false
+                      code: 4001001
+                      message: invalid tool payload
+                      provider: business-tools
+                      retryable: false
+                      latency_ms: 0
+                      attempts: 1
+                      tenant_id: default
+                      operator:
+                        type: agent
+                        id: Finance_Order_Agent
+                      user_context:
+                        user_id: u-1
+                        permissions: [user:order.read]
+                      audit_tags: [refund, execute, write, invalid-payload]
+                      user_action_hint:
+                        action: clarify-tool-input
+                        message: 请先提供订单号和退款金额后再继续。
+                        missing_fields: [order_no, amount]
+                      error:
+                        retryable: false
+                        provider: business-tools
+                        details:
+                          missing_fields: [order_no, amount]
+                      created_at: '2026-04-16T07:00:00Z'
+                      updated_at: '2026-04-16T07:00:00Z'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ToolCallAuditNotFound
+  /tools/list:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [mcp]
+      operationId: toolHub_mcpListTools
+      summary: List tools through the MCP compatibility surface.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: MCP tool-list response.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/McpToolsListResponse
+  /tools/call:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [mcp]
+      operationId: toolHub_mcpCallTool
+      summary: Execute a tool through the MCP compatibility surface.
+      description: Same bridge semantics as `/api/v1/tools/call`, including additive `status` / `summary` / `result` / `citations` fidelity fields with compatibility `message`/`data` aliases, optional retry `attempts` metadata, propagated `audit_tags`, cache-replay annotations such as `cache-hit`, in-band malformed-payload failures with `4001001` + `missing_fields`, and in-band `4090001` idempotency conflicts for mismatched write replays.
+      x-owner-service: tool-hub-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_TOOL_NOT_FOUND, IDEMPOTENCY_CONFLICT, VALIDATION_ERROR, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolCallRequest
+      responses:
+        '200':
+          description: MCP tool-call result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolCallResponse
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/NotFound
+components:
+  schemas:
+    ToolDescriptorEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolDefinition
+    ToolDescriptorListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolDefinition
+    ToolInvokeResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolInvokeResponse
+    ToolCallAuditRecordEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ToolCallAuditRecord
+    ToolCallAuditRecordListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: ./components.openapi.yaml#/components/schemas/ToolCallAuditRecord

@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_id": "task_20260416001",
+    "topic": "LangGraph vs CrewAI vs AutoGen",
+    "scope": "面向生产客服编排的工程能力对比",
+    "depth": "standard",
+    "output_format": "markdown",
+    "status": "completed",
+    "progress": 100,
+    "summary": "已生成研究草稿，包含结论、对比矩阵与实施建议。",
+    "created_at": "2026-04-16T00:25:00Z",
+    "report_file_id": "file_report_20260416001",
+    "updated_at": "2026-04-16T00:28:00Z",
+    "reference_urls": [
+      "https://docs.langchain.com/oss/python/langgraph/overview"
+    ]
+  },
+  "request_id": "req_research_detail_001",
+  "timestamp": "2026-04-16T00:28:00Z"
+}

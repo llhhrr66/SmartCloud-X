@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/session-create-request.schema.json",
+  "title": "SessionCreateRequest",
+  "type": "object",
+  "properties": {
+    "scene": {
+      "$ref": "./scene-name.schema.json"
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "initial_context": {
+      "$ref": "./session-context.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

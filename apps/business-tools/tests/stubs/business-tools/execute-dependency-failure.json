@@ -1,0 +1,22 @@
+{
+  "tool_name": "business-tools",
+  "operation": "execute",
+  "status": "failed",
+  "summary": "downstream timeout",
+  "result": {},
+  "citations": [],
+  "success": false,
+  "code": 5003002,
+  "message": "downstream timeout",
+  "data": {},
+  "audit_tags": [],
+  "session_context_patch": {},
+  "retryable": true,
+  "cache_ttl_seconds": null,
+  "provider": "business-tools",
+  "error_detail": {
+    "exception": "TimeoutException"
+  },
+  "compensation": null,
+  "idempotency_key": "tool-biz-contract-timeout-1"
+}

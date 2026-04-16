@@ -1,0 +1,19 @@
+{
+  "name": "@smartcloud-x/frontend-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.ts",
+    "./web-user": "./src/web-user/index.ts",
+    "./web-admin": "./src/web-admin/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@smartcloud-x/common-schemas": "workspace:*"
+  }
+}

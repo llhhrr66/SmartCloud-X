@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/admin/admin-login-response-data.schema.json",
+  "title": "AdminLoginResponseData",
+  "type": "object",
+  "required": [
+    "access_token",
+    "refresh_token",
+    "admin"
+  ],
+  "properties": {
+    "access_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "refresh_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "admin": {
+      "$ref": "./admin-session-profile.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+event: message.started
+data: {"conversation_id":"conv_demo_001","message_id":"msg_demo_001","agent":"Finance_Order_Agent","trace_id":"trace_demo_001"}
+
+event: message.delta
+data: {"delta":"最近三个月账单总额为 "}
+
+event: message.delta
+data: {"delta":"932.50 元，其中云服务器 780.00 元。"}
+
+event: citation.delta
+data: {"citation_id":"cite_demo_001","title":"账单说明","doc_id":"doc_billing_001","chunk_id":"chunk_billing_001"}
+
+event: message.completed
+data: {"message_id":"msg_demo_001","finish_reason":"stop","usage":{"prompt_tokens":432,"completion_tokens":128,"total_tokens":560},"citations":[{"citation_id":"cite_demo_001","title":"账单说明","doc_id":"doc_billing_001","chunk_id":"chunk_billing_001"}],"tool_calls":[]}
+

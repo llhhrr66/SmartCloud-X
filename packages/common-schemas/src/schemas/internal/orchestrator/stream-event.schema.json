@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-event.schema.json",
+  "title": "OrchestratorStreamEvent",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "meta"
+        },
+        "data": {
+          "$ref": "./stream-meta-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "reasoning"
+        },
+        "data": {
+          "$ref": "./stream-reasoning-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "retrieval"
+        },
+        "data": {
+          "$ref": "./stream-retrieval-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "tool_call"
+        },
+        "data": {
+          "$ref": "./stream-tool-call-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "tool_result"
+        },
+        "data": {
+          "$ref": "./stream-tool-result-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "delta"
+        },
+        "data": {
+          "$ref": "./stream-delta-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "citation"
+        },
+        "data": {
+          "$ref": "./stream-citation-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "event",
+        "data"
+      ],
+      "properties": {
+        "event": {
+          "const": "done"
+        },
+        "data": {
+          "$ref": "./stream-done-event-data.schema.json"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

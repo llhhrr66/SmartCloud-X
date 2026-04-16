@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/mcp-tools-list-response.schema.json",
+  "title": "McpToolsListResponse",
+  "type": "object",
+  "properties": {
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-definition.schema.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

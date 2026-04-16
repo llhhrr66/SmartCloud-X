@@ -1,0 +1,18 @@
+event: message.started
+data: {"conversation_id":"conv_demo_002","message_id":"msg_demo_002","agent":"Orchestrator","trace_id":"trace_demo_002"}
+
+event: agent.routed
+data: {"from_agent":"Orchestrator","to_agent":"Ops_Marketing_Agent","reason":"用户询问 GPU 活动与推广素材，转给营销 Agent 处理"}
+
+event: tool.started
+data: {"tool_call_id":"tc_demo_001","tool_name":"marketing.campaign.recommend","input_summary":"查询 GPU 活动"}
+
+event: tool.finished
+data: {"tool_call_id":"tc_demo_001","tool_name":"marketing.campaign.recommend","status":"success","latency_ms":615,"output_summary":"命中算力焕新季活动"}
+
+event: message.delta
+data: {"delta":"当前推荐参与“算力焕新季”活动，并可继续生成推广海报。"}
+
+event: message.completed
+data: {"message_id":"msg_demo_002","finish_reason":"stop","usage":{"prompt_tokens":388,"completion_tokens":96,"total_tokens":484},"citations":[],"tool_calls":[{"tool_call_id":"tc_demo_001","tool_name":"marketing.campaign.recommend","status":"success","latency_ms":615,"output_summary":"命中算力焕新季活动"}]}
+

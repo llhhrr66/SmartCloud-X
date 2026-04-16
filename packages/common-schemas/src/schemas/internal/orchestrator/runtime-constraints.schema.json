@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/runtime-constraints.schema.json",
+  "title": "RuntimeConstraints",
+  "type": "object",
+  "properties": {
+    "must_cite": {
+      "type": "boolean"
+    },
+    "allow_handoff": {
+      "type": "boolean"
+    },
+    "max_tool_calls": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

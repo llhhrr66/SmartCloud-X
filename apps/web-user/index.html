@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmartCloud-X User Console</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/runtime-config.js"></script>
+    <script>
+      if (window.__SMARTCLOUD_RUNTIME_CONFIG__?.VITE_APP_TITLE) {
+        document.title = window.__SMARTCLOUD_RUNTIME_CONFIG__.VITE_APP_TITLE;
+      }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

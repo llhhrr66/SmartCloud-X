@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/auth/token-validation-response-data.schema.json",
+  "title": "InternalTokenValidationResponseData",
+  "type": "object",
+  "required": [
+    "subject_type",
+    "subject_id",
+    "roles",
+    "permissions",
+    "expired_at"
+  ],
+  "properties": {
+    "subject_type": {
+      "type": "string",
+      "enum": [
+        "user",
+        "admin",
+        "service",
+        "agent"
+      ]
+    },
+    "subject_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expired_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

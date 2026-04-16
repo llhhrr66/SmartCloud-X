@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/business-tools/business-tool-execute-response.schema.json",
+  "title": "BusinessToolExecuteResponse",
+  "type": "object",
+  "required": [
+    "success",
+    "code",
+    "message"
+  ],
+  "properties": {
+    "success": {
+      "type": "boolean"
+    },
+    "code": {
+      "type": "integer"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "$ref": "../tool-hub/tool-operation.schema.json"
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "audit_tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "cache_ttl_seconds": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "error_detail": {
+      "type": "object",
+      "properties": {
+        "missing_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "compensation": {
+      "oneOf": [
+        {
+          "$ref": "../tool-hub/tool-compensation-action.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "idempotency_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "session_context_patch": {
+      "$ref": "../orchestrator/session-context.schema.json"
+    },
+    "user_action_hint": {
+      "oneOf": [
+        {
+          "$ref": "../tool-hub/tool-user-action-hint.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

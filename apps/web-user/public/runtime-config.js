@@ -1,0 +1,1 @@
+window.__SMARTCLOUD_RUNTIME_CONFIG__ = window.__SMARTCLOUD_RUNTIME_CONFIG__ || {};

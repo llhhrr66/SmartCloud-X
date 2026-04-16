@@ -1,0 +1,731 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Shared OpenAPI Components
+  version: 0.10.0
+  description: Foundation-owned shared parameters, headers, responses, and schema references.
+x-owner-service: supervisor-foundation
+paths: {}
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    XRequestIdHeader:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Correlation identifier propagated across services.
+      schema:
+        type: string
+        minLength: 1
+    XTraceIdHeader:
+      name: X-Trace-Id
+      in: header
+      required: false
+      description: End-to-end trace identifier for observability.
+      schema:
+        type: string
+        minLength: 1
+    XConversationIdHeader:
+      name: X-Conversation-Id
+      in: header
+      required: false
+      description: Conversation identifier for chat-style flows.
+      schema:
+        type: string
+        minLength: 1
+    XCallerServiceHeader:
+      name: X-Caller-Service
+      in: header
+      required: false
+      description: Internal caller service identity.
+      schema:
+        type: string
+        minLength: 1
+    XTenantIdHeader:
+      name: X-Tenant-Id
+      in: header
+      required: false
+      description: Multi-tenant subject or request partition identifier.
+      schema:
+        type: string
+        minLength: 1
+    XToolCallIdHeader:
+      name: X-Tool-Call-Id
+      in: header
+      required: false
+      description: Stable tool-call identifier propagated across tool-hub and business-tools hops.
+      schema:
+        type: string
+        minLength: 1
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-supplied idempotency token for write actions.
+      schema:
+        type: string
+        minLength: 1
+    XOperatorReasonHeader:
+      name: X-Operator-Reason
+      in: header
+      required: false
+      description: Short operator-supplied reason recorded in the admin audit log baseline.
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 500
+    XOperatorReasonRequiredHeader:
+      name: X-Operator-Reason
+      in: header
+      required: true
+      description: Short operator-supplied reason recorded in the admin audit log baseline.
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 500
+    PageQuery:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number for offset pagination.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeQuery:
+      name: page_size
+      in: query
+      required: false
+      description: Number of items per page. Maximum 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    SortByQuery:
+      name: sort_by
+      in: query
+      required: false
+      description: Stable sort field for list retrieval.
+      schema:
+        type: string
+        minLength: 1
+    SortOrderQuery:
+      name: sort_order
+      in: query
+      required: false
+      description: Sort direction for list retrieval.
+      schema:
+        type: string
+        enum: [asc, desc]
+  headers:
+    XRequestId:
+      description: Correlation identifier assigned to the request.
+      schema:
+        type: string
+        minLength: 1
+    XTraceId:
+      description: Trace identifier emitted in the response.
+      schema:
+        type: string
+        minLength: 1
+    XAppName:
+      description: Service name that generated the response.
+      schema:
+        type: string
+        minLength: 1
+    XAppVersion:
+      description: Service version that generated the response.
+      schema:
+        type: string
+        minLength: 1
+    XResponseTime:
+      description: End-to-end response time emitted by the service middleware.
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    ApiEnvelope:
+      $ref: ../packages/common-schemas/src/schemas/api-envelope.schema.json
+    ErrorInfo:
+      $ref: ../packages/common-schemas/src/schemas/error-info.schema.json
+    HealthStatus:
+      $ref: ../packages/common-schemas/src/schemas/health-status.schema.json
+    PaginationMeta:
+      $ref: ../packages/common-schemas/src/schemas/pagination-meta.schema.json
+    ServiceCallerContext:
+      $ref: ../packages/common-schemas/src/schemas/service-caller-context.schema.json
+    TraceContext:
+      $ref: ../packages/common-schemas/src/schemas/trace-context.schema.json
+    CanonicalErrorDetail:
+      $ref: ../packages/common-schemas/src/schemas/external/canonical-error-detail.schema.json
+    CanonicalSuccessEnvelope:
+      $ref: ../packages/common-schemas/src/schemas/external/canonical-success-envelope.schema.json
+    CanonicalErrorEnvelope:
+      $ref: ../packages/common-schemas/src/schemas/external/canonical-error-envelope.schema.json
+    OffsetPagination:
+      $ref: ../packages/common-schemas/src/schemas/external/offset-pagination.schema.json
+    SseEventEnvelope:
+      $ref: ../packages/common-schemas/src/schemas/external/sse-event-envelope.schema.json
+    AuthUserProfile:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/auth-user-profile.schema.json
+    LoginRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/login-request.schema.json
+    LoginResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/login-response-data.schema.json
+    SendCodeRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/send-code-request.schema.json
+    SendCodeResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/send-code-response-data.schema.json
+    RefreshTokenRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/refresh-token-request.schema.json
+    RefreshTokenResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/refresh-token-response-data.schema.json
+    LogoutRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/logout-request.schema.json
+    UserProfileUpdateRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/user-profile-update-request.schema.json
+    ChangePasswordRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/change-password-request.schema.json
+    ForgotPasswordRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/forgot-password-request.schema.json
+    ForgotPasswordResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/forgot-password-response-data.schema.json
+    ResetPasswordRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/reset-password-request.schema.json
+    OperationStatusData:
+      $ref: ../packages/common-schemas/src/schemas/external/auth/operation-status-data.schema.json
+    AdminMenuItem:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-menu-item.schema.json
+    AdminSessionProfile:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-session-profile.schema.json
+    AdminLoginRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-login-request.schema.json
+    AdminLoginResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-login-response-data.schema.json
+    AdminActionConfirmationRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-request.schema.json
+    AdminActionConfirmationResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-action-confirmation-response-data.schema.json
+    AdminAuditRecord:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-audit-record.schema.json
+    AdminAuditListData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/admin-audit-list-data.schema.json
+    AdminDashboardSummaryData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/dashboard-summary-data.schema.json
+    AdminKnowledgeBase:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-base.schema.json
+    AdminKnowledgeBaseListData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-base-list-data.schema.json
+    AdminKnowledgeBaseUpdateRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-base-update-request.schema.json
+    AdminKnowledgeDocument:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-document.schema.json
+    AdminKnowledgeChunkStats:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-chunk-stats.schema.json
+    AdminKnowledgeDocumentDetailData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-document-detail-data.schema.json
+    AdminKnowledgeDocumentListData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-document-list-data.schema.json
+    AdminKnowledgeChunk:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-chunk.schema.json
+    AdminKnowledgeChunkListData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/knowledge-chunk-list-data.schema.json
+    AdminAsyncJob:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/async-job.schema.json
+    AdminRetrievalSearchSource:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/retrieval-search-source.schema.json
+    AdminRetrievalSearchPreviewData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/retrieval-search-preview-data.schema.json
+    AdminRetrievalDiagnosticsData:
+      $ref: ../packages/common-schemas/src/schemas/external/admin/retrieval-diagnostics-data.schema.json
+    KnowledgeRuntimeSnapshot:
+      $ref: ../packages/common-schemas/src/schemas/internal/knowledge/knowledge-runtime-snapshot.schema.json
+    MarketingCampaign:
+      $ref: ../packages/common-schemas/src/schemas/external/user/marketing-campaign.schema.json
+    MarketingCampaignListData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/marketing-campaign-list-data.schema.json
+    MarketingCopyRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/user/marketing-copy-request.schema.json
+    MarketingCopyListData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/marketing-copy-list-data.schema.json
+    MarketingCopyResult:
+      $ref: ../packages/common-schemas/src/schemas/external/user/marketing-copy-result.schema.json
+    PosterTask:
+      $ref: ../packages/common-schemas/src/schemas/external/user/poster-task.schema.json
+    PosterTaskCreateResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/poster-task-create-response-data.schema.json
+    PosterTaskListData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/poster-task-list-data.schema.json
+    PosterResultData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/poster-result-data.schema.json
+    PromotionLinkRequest:
+      $ref: ../packages/common-schemas/src/schemas/external/user/promotion-link-request.schema.json
+    PromotionLinkListData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/promotion-link-list-data.schema.json
+    PromotionLinkResult:
+      $ref: ../packages/common-schemas/src/schemas/external/user/promotion-link-result.schema.json
+    ResearchTask:
+      $ref: ../packages/common-schemas/src/schemas/external/user/research-task.schema.json
+    ResearchTaskCreateResponseData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/research-task-create-response-data.schema.json
+    ResearchTaskListData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/research-task-list-data.schema.json
+    ResearchTaskResultData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/research-task-result-data.schema.json
+    ResearchTaskStatusData:
+      $ref: ../packages/common-schemas/src/schemas/external/user/research-task-status-data.schema.json
+    InternalTokenValidationResponseData:
+      $ref: ../packages/common-schemas/src/schemas/internal/auth/token-validation-response-data.schema.json
+    PermissionCheckRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/auth/permission-check-request.schema.json
+    PermissionCheckResponseData:
+      $ref: ../packages/common-schemas/src/schemas/internal/auth/permission-check-response-data.schema.json
+    InvalidateSubjectCacheRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/auth/invalidate-subject-cache-request.schema.json
+    InvalidateSubjectCacheResponseData:
+      $ref: ../packages/common-schemas/src/schemas/internal/auth/invalidate-subject-cache-response-data.schema.json
+    AgentRouteRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/agent-route-record.schema.json
+    AgentDescriptor:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/agent-descriptor.schema.json
+    AgentExecutionRiskFlag:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/agent-execution-risk-flag.schema.json
+    ChatUsage:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/chat-usage.schema.json
+    ChatCompletionRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/chat-completion-request.schema.json
+    ChatCompletionResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/chat-completion-response.schema.json
+    ChatMessageRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/chat-message-record.schema.json
+    CompensationExecutionRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/compensation-execution-record.schema.json
+    ConversationRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/conversation-record.schema.json
+    ExecutionEvent:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/execution-event.schema.json
+    PendingUserAction:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/pending-user-action.schema.json
+    ResponseReviewIssue:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/response-review-issue.schema.json
+    ResponseReview:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/response-review.schema.json
+    InternalChatRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/internal-chat-request.schema.json
+    InternalChatResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/internal-chat-response.schema.json
+    OrchestratorResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/orchestrator-response.schema.json
+    RouteDecision:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/route-decision.schema.json
+    RouteRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/route-request.schema.json
+    SagaCompensationStep:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/saga-compensation-step.schema.json
+    SceneName:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/scene-name.schema.json
+    SessionCreateRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-create-request.schema.json
+    SessionCancelRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-cancel-request.schema.json
+    SessionCancelResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-cancel-response.schema.json
+    SessionContinueRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-continue-request.schema.json
+    SessionDeleteResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-delete-response.schema.json
+    SessionStateSnapshot:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-state-snapshot.schema.json
+    SessionListResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-list-response.schema.json
+    SessionMessagesPage:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-messages-page.schema.json
+    SessionRetryRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-retry-request.schema.json
+    SessionRollbackResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-rollback-response.schema.json
+    SessionUpdateRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/session-update-request.schema.json
+    OrchestratorStreamCitationEntry:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-citation-entry.schema.json
+    OrchestratorStreamCitationEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-citation-event-data.schema.json
+    OrchestratorStreamDeltaEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-delta-event-data.schema.json
+    OrchestratorStreamDoneEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-done-event-data.schema.json
+    OrchestratorStreamEvent:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-event.schema.json
+    OrchestratorStreamMetaEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-meta-event-data.schema.json
+    OrchestratorStreamReasoningEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-reasoning-event-data.schema.json
+    OrchestratorStreamRetrievalEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-retrieval-event-data.schema.json
+    OrchestratorStreamRetrievalSource:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-retrieval-source.schema.json
+    OrchestratorStreamToolCallEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-tool-call-event-data.schema.json
+    OrchestratorStreamToolResultEventData:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-tool-result-event-data.schema.json
+    OrchestratorStreamUsage:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/stream-usage.schema.json
+    CompensationCallRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/compensation-call-request.schema.json
+    CompensationCallResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/compensation-call-response.schema.json
+    ToolAuthRequirements:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-auth-requirements.schema.json
+    ToolCallAuditRecord:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-call-audit-record.schema.json
+    ToolCallRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-call-request.schema.json
+    ToolCallResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-call-response.schema.json
+    ToolCompensationAction:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-compensation-action.schema.json
+    ToolDefinition:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-definition.schema.json
+    ToolUserActionHint:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-user-action-hint.schema.json
+    ToolContextItem:
+      $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/tool-context-item.schema.json
+    ToolExecutionContext:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-execution-context.schema.json
+    ToolExecutionResult:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-execution-result.schema.json
+    ToolPreflightResult:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-preflight-result.schema.json
+    ToolPreflightResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-preflight-response.schema.json
+    ToolInvocationRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-invocation-request.schema.json
+    ToolInvokeRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-invoke-request.schema.json
+    ToolInvokeResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/tool-invoke-response.schema.json
+    McpToolsListResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/tool-hub/mcp-tools-list-response.schema.json
+    BusinessCompensationExecuteRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/business-compensation-execute-request.schema.json
+    BusinessCompensationExecuteResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/business-compensation-execute-response.schema.json
+    BusinessToolExecuteRequest:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/business-tool-execute-request.schema.json
+    BusinessToolExecuteResponse:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/business-tool-execute-response.schema.json
+    OperatorContext:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/operator-context.schema.json
+    SubjectContext:
+      $ref: ../packages/common-schemas/src/schemas/internal/business-tools/subject-context.schema.json
+  responses:
+    ValidationError:
+      description: Request headers or payload failed schema validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_invalid
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed.
+              retryable: false
+    Unauthorized:
+      description: Caller is missing a valid bearer token or shared auth context.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_auth
+            error:
+              code: AUTH_UNAUTHORIZED
+              message: Authentication is required for this operation.
+              retryable: false
+    Forbidden:
+      description: Caller is authenticated but missing required service or user context.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_forbidden
+            error:
+              code: ORCH_TOOL_AUTH_REQUIRED
+              message: Tool execution requires authenticated execution context.
+              retryable: false
+    CallerForbidden:
+      description: Internal caller is not allowed to use the published internal contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_internal_forbidden
+            error:
+              code: ORCH_CALLER_FORBIDDEN
+              message: Internal caller is not allowed to access orchestrator chat.
+              retryable: false
+    ToolHubCallerForbidden:
+      description: Internal caller is not allowed to use tool-hub internal aliases or routes.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_toolhub_forbidden
+            error:
+              code: TOOL_HUB_CALLER_FORBIDDEN
+              message: Internal caller is not allowed to access tool-hub internal routes.
+              retryable: false
+    BusinessToolsCallerForbidden:
+      description: Internal caller is not allowed to use business-tools internal routes.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_business_tools_forbidden
+            error:
+              code: BUSINESS_TOOLS_CALLER_FORBIDDEN
+              message: Internal caller is not allowed to access business-tools routes.
+              retryable: false
+    ChatConversationArchived:
+      description: Conversation is archived and cannot accept new chat completions until restored.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_archived
+            error:
+              code: CHAT_CONVERSATION_ARCHIVED
+              message: Conversation is archived and cannot accept new messages.
+              retryable: false
+    ChatConversationNotFound:
+      description: Requested chat conversation does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_missing
+            error:
+              code: CHAT_CONVERSATION_NOT_FOUND
+              message: Conversation was not found.
+              retryable: false
+    ChatConversationRestoreInvalid:
+      description: Restore was requested for a conversation that is not archived.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_restore_invalid
+            error:
+              code: CHAT_CONVERSATION_RESTORE_INVALID
+              message: Conversation is not archived.
+              retryable: false
+    ChatMessageNotFound:
+      description: Requested chat message or retry target does not exist in the conversation history.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_message_missing
+            error:
+              code: CHAT_MESSAGE_NOT_FOUND
+              message: Message was not found in conversation history.
+              retryable: false
+    ChatContinuationNotAvailable:
+      description: Conversation has no pending clarification or confirmation state to continue.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_continue_unavailable
+            error:
+              code: CHAT_CONTINUATION_NOT_AVAILABLE
+              message: Conversation has no pending continuation state.
+              retryable: false
+    ChatMessageNotRunning:
+      description: Requested message is not currently running and cannot be cancelled.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_cancel_not_running
+            error:
+              code: CHAT_MESSAGE_NOT_RUNNING
+              message: Message is not currently running in the target conversation.
+              retryable: false
+    ChatConversationRunning:
+      description: Conversation already has an active running message and cannot start a second turn yet.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_running
+            error:
+              code: CHAT_CONVERSATION_RUNNING
+              message: Conversation is already processing another message.
+              retryable: false
+    ChatMessageCancelled:
+      description: The running message was cooperatively cancelled before completion.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_chat_cancelled
+            error:
+              code: CHAT_MESSAGE_CANCELLED
+              message: Message was cancelled before completion.
+              retryable: false
+    SessionStateNotFound:
+      description: No persisted orchestration state snapshot exists for the requested conversation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_state_missing
+            error:
+              code: ORCH_SESSION_STATE_NOT_FOUND
+              message: No orchestration state found for conversation.
+              retryable: false
+    ToolCallAuditNotFound:
+      description: Requested tool-call audit record does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_tool_call_missing
+            error:
+              code: ORCH_TOOL_CALL_NOT_FOUND
+              message: Unknown tool call.
+              retryable: false
+    NotFound:
+      description: Requested resource or tool does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_missing
+            error:
+              code: ORCH_TOOL_NOT_FOUND
+              message: Requested resource was not found.
+              retryable: false
+    UnprocessableEntity:
+      description: Request is syntactically valid but rejected by the published business or tool contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_contract
+            error:
+              code: ORCH_TOOL_PAYLOAD_INVALID
+              message: Request payload violates the target tool contract.
+              retryable: false
+    ServiceUnavailable:
+      description: Target service is unavailable or degraded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiEnvelope'
+          example:
+            success: false
+            requestId: req_unavailable
+            error:
+              code: SERVICE_UNAVAILABLE
+              message: Target service is currently unavailable.
+              retryable: true
+    CanonicalValidationError:
+      description: Public request parameters or payload failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CanonicalErrorEnvelope'
+          example:
+            code: 4001001
+            message: invalid request params
+            error:
+              type: validation_error
+              field: page_size
+              reason: must be between 1 and 100
+            request_id: req_public_invalid
+            timestamp: 1770000000000
+    CanonicalUnauthorized:
+      description: Public caller is not authenticated or the token refresh flow failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CanonicalErrorEnvelope'
+          example:
+            code: 4010002
+            message: authentication required
+            request_id: req_public_auth
+            timestamp: 1770000000000
+    CanonicalForbidden:
+      description: Public caller is authenticated but lacks the required permission.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CanonicalErrorEnvelope'
+          example:
+            code: 4030001
+            message: permission denied
+            request_id: req_public_forbidden
+            timestamp: 1770000000000
+    CanonicalNotFound:
+      description: Public resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CanonicalErrorEnvelope'
+          example:
+            code: 4040001
+            message: resource not found
+            request_id: req_public_missing
+            timestamp: 1770000000000
+    CanonicalRateLimited:
+      description: Public caller exceeded the published rate limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CanonicalErrorEnvelope'
+          example:
+            code: 4290001
+            message: rate limit exceeded
+            request_id: req_public_ratelimit
+            timestamp: 1770000000000

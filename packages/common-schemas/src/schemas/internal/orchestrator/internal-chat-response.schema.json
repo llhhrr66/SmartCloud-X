@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/internal-chat-response.schema.json",
+  "title": "InternalChatResponse",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "message_id",
+    "status",
+    "agent_name",
+    "route",
+    "final_answer"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "handoff",
+        "need_user_input",
+        "failed"
+      ]
+    },
+    "agent_name": {
+      "$ref": "./agent-name.schema.json"
+    },
+    "route": {
+      "$ref": "./route-decision.schema.json"
+    },
+    "executions": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-execution-result.schema.json"
+      }
+    },
+    "final_answer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-invocation.schema.json"
+      }
+    },
+    "next_agent": {
+      "oneOf": [
+        {
+          "$ref": "./agent-name.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pending_user_actions": {
+      "type": "array",
+      "items": {
+        "$ref": "./pending-user-action.schema.json"
+      }
+    },
+    "state_snapshot": {
+      "oneOf": [
+        {
+          "$ref": "./session-state-snapshot.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "review": {
+      "description": "Lightweight orchestrator response-review result mirrored on the internal chat response baseline.",
+      "oneOf": [
+        {
+          "$ref": "./response-review.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

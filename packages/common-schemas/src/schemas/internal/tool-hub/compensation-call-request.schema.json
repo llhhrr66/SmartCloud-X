@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/compensation-call-request.schema.json",
+  "title": "CompensationCallRequest",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "conversation_id",
+    "compensation_id",
+    "action_name",
+    "operator"
+  ],
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compensation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operator": {
+      "$ref": "./tool-call-operator.schema.json"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "idempotency_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

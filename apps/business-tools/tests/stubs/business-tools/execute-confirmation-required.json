@@ -1,0 +1,33 @@
+{
+  "tool_name": "order.create_refund",
+  "operation": "execute",
+  "status": "confirmation-required",
+  "summary": "order.create_refund 属于高风险写操作，需先完成显式确认。",
+  "result": {
+    "confirmation_required": true,
+    "confirmation_hint": "set payload._confirmed=true after explicit user confirmation"
+  },
+  "citations": [],
+  "success": false,
+  "code": 4090002,
+  "message": "confirmation required",
+  "data": {
+    "confirmation_required": true,
+    "confirmation_hint": "set payload._confirmed=true after explicit user confirmation"
+  },
+  "audit_tags": [
+    "finance-order",
+    "execute",
+    "write",
+    "high-risk"
+  ],
+  "session_context_patch": {},
+  "retryable": false,
+  "cache_ttl_seconds": null,
+  "provider": "business-tools",
+  "error_detail": {
+    "reason": "confirmation_required"
+  },
+  "compensation": null,
+  "idempotency_key": "tool-biz-contract-confirm-1"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/scene-name.schema.json",
+  "title": "SceneName",
+  "type": "string",
+  "enum": [
+    "customer_service",
+    "billing",
+    "technical_support",
+    "icp",
+    "marketing",
+    "research"
+  ]
+}

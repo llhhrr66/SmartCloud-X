@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/api-envelope.schema.json",
+  "title": "ApiEnvelope",
+  "type": "object",
+  "required": ["success"],
+  "properties": {
+    "success": { "type": "boolean" },
+    "data": {
+      "oneOf": [
+        true,
+        { "type": "null" }
+      ]
+    },
+    "requestId": { "type": "string" },
+    "trace": {
+      "$ref": "./trace-context.schema.json"
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "./error-info.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "meta": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

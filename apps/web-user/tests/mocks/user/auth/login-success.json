@@ -1,0 +1,33 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "access_token": "mock_access_20260416",
+    "refresh_token": "mock_refresh_20260416",
+    "expires_in": 7200,
+    "user": {
+      "user_id": "u_10001",
+      "tenant_id": "default",
+      "name": "SmartCloud 用户",
+      "email": "demo@smartcloud.local",
+      "mobile": "13800000001",
+      "locale": "zh-CN",
+      "time_zone": "Asia/Shanghai",
+      "permissions": [
+        "user:chat.use",
+        "user:billing.read",
+        "user:order.read",
+        "user:ticket.read",
+        "user:ticket.write",
+        "user:icp.read",
+        "user:icp.write",
+        "user:marketing.read",
+        "user:marketing.write",
+        "user:research.read",
+        "user:research.write"
+      ]
+    }
+  },
+  "request_id": "req_auth_login_success",
+  "timestamp": "2026-04-16T07:20:00+08:00"
+}

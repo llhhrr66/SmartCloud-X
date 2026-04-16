@@ -1,0 +1,980 @@
+openapi: 3.1.0
+info:
+  title: SmartCloud-X Orchestrator Service API
+  version: 0.8.0
+  description: Foundation-owned baseline for the current orchestrator routes in this workspace.
+x-owner-service: orchestrator-service
+servers:
+  - url: /
+paths:
+  /healthz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: orchestrator_healthz
+      summary: Check orchestrator service liveness.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Healthy orchestrator service instance.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/HealthStatus
+              example:
+                status: ok
+                service: orchestrator-service
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/agents:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [orchestration]
+      operationId: orchestrator_listAgents
+      summary: List baseline agent descriptors exposed by the orchestrator.
+      description: Canonical route. Legacy compatibility alias remains `/api/orchestrator/v1/agents`. Agent descriptors now include additive metadata such as `version`, `owner`, `input_schema_version`, and `output_schema_version`.
+      x-owner-service: orchestrator-service
+      x-legacy-paths:
+        - /api/orchestrator/v1/agents
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Published orchestrator agent list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentListEnvelope'
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/route:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [orchestration]
+      operationId: orchestrator_routeRequest
+      summary: Produce a route decision for a user query.
+      description: Canonical route. Legacy compatibility alias remains `/api/orchestrator/v1/route`. The shared route/planning contract now includes additive dependency-aware metadata such as deferred payload fields, tool-call dependencies, session-context input/output keys, and per-tool readiness.
+      x-owner-service: orchestrator-service
+      x-legacy-paths:
+        - /api/orchestrator/v1/route
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_ROUTE_FAILED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/RouteRequest
+      responses:
+        '200':
+          description: Orchestrator route decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDecisionEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '500':
+          description: Routing failed.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              example:
+                success: false
+                requestId: req_route_1
+                error:
+                  code: ORCH_ROUTE_FAILED
+                  message: Orchestrator failed to determine a route.
+                  retryable: false
+  /api/v1/chat/sessions:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_createChatSession
+      summary: Create a new orchestrator chat session shell.
+      description: Current baseline route for creating an in-memory conversation record before or alongside `/api/v1/chat/completions`.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionCreateRequest
+      responses:
+        '200':
+          description: Created conversation record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationRecordEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+    get:
+      tags: [chat]
+      operationId: orchestrator_listChatSessions
+      summary: List orchestrator chat sessions.
+      description: Current baseline supports simple offset pagination plus optional scene, status, and keyword filters against the in-memory conversation store. Soft-deleted sessions are hidden from normal list results.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: []
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/PageQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - name: scene
+          in: query
+          required: false
+          schema:
+            $ref: ./components.openapi.yaml#/components/schemas/SceneName
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, running, archived, closed]
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Chat session list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionListResponseEnvelope'
+  /api/v1/chat/sessions/{conversation_id}:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [chat]
+      operationId: orchestrator_getChatSession
+      summary: Get a single orchestrator chat session.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Chat session detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationRecordEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+    patch:
+      tags: [chat]
+      operationId: orchestrator_updateChatSession
+      summary: Update mutable chat session metadata.
+      description: Current baseline only allows title updates.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionUpdateRequest
+      responses:
+        '200':
+          description: Updated chat session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationRecordEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+    delete:
+      tags: [chat]
+      operationId: orchestrator_deleteChatSession
+      summary: Soft-delete a chat session.
+      description: Soft-deletes the conversation by setting `status=deleted`. Deleted sessions are hidden from subsequent list/detail/message-history flows and later reads should surface `CHAT_CONVERSATION_NOT_FOUND`.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Deleted chat session marker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeleteResponseEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+  /api/v1/chat/sessions/{conversation_id}/messages:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [chat]
+      operationId: orchestrator_listChatSessionMessages
+      summary: List persisted chat messages for a conversation.
+      description: Retry appends a new user+assistant exchange while preserving prior message history; callers should use `next_cursor` for forward pagination.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/PageSizeQuery
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Chat message history page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionMessagesPageEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+  /api/v1/chat/sessions/{conversation_id}/agent-routes:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [chat]
+      operationId: orchestrator_listChatSessionAgentRoutes
+      summary: List the structured agent-route journal for a conversation.
+      description: Additive inspection route that returns the ordered per-step handoff/execution journal persisted in the current session-state snapshot. Each record carries step ordering, agent ownership, route status, handoff/action metadata, tool activity, dependencies, and context highlights.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_SESSION_STATE_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Ordered agent-route journal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRouteListEnvelope'
+              examples:
+                multiAgentHandoff:
+                  summary: Multi-agent route journal with handoff and context highlights
+                  value:
+                    success: true
+                    requestId: req-agent-routes
+                    data:
+                      - step_id: step-route-1
+                        order: 0
+                        agent: product_tech_agent
+                        objective: Diagnose the GPU deployment request and decide whether a marketing handoff is needed.
+                        status: handoff
+                        handoff_to: ops_marketing_agent
+                        handoff_reason: User asked about current GPU promotions after technical sizing.
+                        tool_names: [product.describe_gpu]
+                        tool_call_ids: [tc-gpu-1]
+                        tool_statuses: [completed]
+                        session_context_inputs: [deployment_region]
+                        session_context_outputs: [recommended_gpu_sku]
+                        context_highlights:
+                          resolved_session_context:
+                            recommended_gpu_sku: GPU-A100-80G
+                      - step_id: step-route-2
+                        order: 1
+                        agent: ops_marketing_agent
+                        objective: Summarize the current GPU campaign options for the user.
+                        status: success
+                        handoff_received_from: product_tech_agent
+                        tool_names: [marketing.campaign_lookup]
+                        tool_call_ids: [tc-campaign-1]
+                        tool_statuses: [completed]
+                        depends_on: [step-route-1]
+                        depends_on_tool_call_ids: [tc-gpu-1]
+                        session_context_inputs: [recommended_gpu_sku]
+                        context_highlights:
+                          resolved_session_context:
+                            recommended_gpu_sku: GPU-A100-80G
+                            campaign_id: campaign-gpu-q2
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/SessionStateNotFound
+  /api/v1/chat/sessions/{conversation_id}/archive:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_archiveChatSession
+      summary: Archive a chat session.
+      description: Archived conversations reject new `/api/v1/chat/completions` or retry execution until restored.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Archived chat session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationRecordEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+  /api/v1/chat/sessions/{conversation_id}/restore:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_restoreChatSession
+      summary: Restore an archived chat session.
+      description: Only archived conversations can be restored. Restoring a non-archived conversation returns `CHAT_CONVERSATION_RESTORE_INVALID`.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_CONVERSATION_RESTORE_INVALID]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Restored chat session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationRecordEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+        '409':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationRestoreInvalid
+  /api/v1/chat/sessions/{conversation_id}/retry:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_retryChatSessionMessage
+      summary: Retry a prior message within the same chat session.
+      description: Retry creates a new message exchange while preserving prior history. The `message_id` may point to either the original user message or its paired assistant response.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_MESSAGE_NOT_FOUND, CHAT_CONVERSATION_ARCHIVED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XConversationIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionRetryRequest
+      responses:
+        '200':
+          description: Retry completion response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponseEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Conversation or retry-target message is missing.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              examples:
+                conversation_missing:
+                  value:
+                    success: false
+                    requestId: req_chat_missing
+                    error:
+                      code: CHAT_CONVERSATION_NOT_FOUND
+                      message: Conversation was not found.
+                      retryable: false
+                message_missing:
+                  value:
+                    success: false
+                    requestId: req_chat_message_missing
+                    error:
+                      code: CHAT_MESSAGE_NOT_FOUND
+                      message: Message was not found in conversation history.
+                      retryable: false
+        '409':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationArchived
+  /api/v1/chat/sessions/{conversation_id}/continue:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_continueChatSession
+      summary: Continue a paused clarification or confirmation flow within the same chat session.
+      description: Current continuation baseline for resuming a conversation after tool preflight clarification or confirmation. Callers may submit `field_values`, explicit `confirm_tool_names`, and additive `session_context_patch` without reverse-engineering owner-local session keys. The preceding response/state payloads may also expose additive `pending_user_actions[]` advisory metadata copied from tool-level `user_action_hint` fields so continuation clients can render machine-readable next-step instructions.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_MESSAGE_NOT_FOUND, CHAT_CONTINUATION_NOT_AVAILABLE, CHAT_CONVERSATION_ARCHIVED, CHAT_CONVERSATION_RUNNING, CHAT_MESSAGE_CANCELLED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XConversationIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionContinueRequest
+      responses:
+        '200':
+          description: Continued chat completion response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponseEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          description: Conversation or source message is missing.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              examples:
+                conversation_missing:
+                  value:
+                    success: false
+                    requestId: req_chat_missing
+                    error:
+                      code: CHAT_CONVERSATION_NOT_FOUND
+                      message: Conversation was not found.
+                      retryable: false
+                message_missing:
+                  value:
+                    success: false
+                    requestId: req_chat_message_missing
+                    error:
+                      code: CHAT_MESSAGE_NOT_FOUND
+                      message: Message was not found in conversation history.
+                      retryable: false
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+              examples:
+                continuation_unavailable:
+                  value:
+                    success: false
+                    requestId: req_continue_unavailable
+                    error:
+                      code: CHAT_CONTINUATION_NOT_AVAILABLE
+                      message: Conversation has no pending continuation state.
+                      retryable: false
+                conversation_archived:
+                  value:
+                    success: false
+                    requestId: req_chat_archived
+                    error:
+                      code: CHAT_CONVERSATION_ARCHIVED
+                      message: Conversation is archived and cannot accept new messages.
+                      retryable: false
+                conversation_running:
+                  value:
+                    success: false
+                    requestId: req_chat_running
+                    error:
+                      code: CHAT_CONVERSATION_RUNNING
+                      message: Conversation is already processing another message.
+                      retryable: false
+                message_cancelled:
+                  value:
+                    success: false
+                    requestId: req_chat_cancelled
+                    error:
+                      code: CHAT_MESSAGE_CANCELLED
+                      message: Message was cancelled before completion.
+                      retryable: false
+  /api/v1/chat/sessions/{conversation_id}/cancel:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_cancelChatSessionMessage
+      summary: Cooperatively cancel a currently running chat-session message.
+      description: Current practical cancellation baseline. The route stops the local running turn if possible but does not promise forced interruption of already-started downstream writes.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_MESSAGE_NOT_RUNNING, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionCancelRequest
+      responses:
+        '200':
+          description: Cancel acknowledgement marker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCancelResponseEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+        '409':
+          $ref: ./components.openapi.yaml#/components/responses/ChatMessageNotRunning
+  /api/v1/chat/completions:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [chat]
+      operationId: orchestrator_chatCompletions
+      summary: Execute the service-level chat completion contract for a conversation.
+      description: Current spec-shaped chat alias backed by the same orchestrator runtime as `/api/v1/sessions/{conversation_id}/messages`. Additive compatibility request fields `context`, `options`, `context_control`, and `client_meta` are accepted for spec-alignment. When `stream=true`, the route upgrades the 200 response to `text/event-stream` and emits the same `meta`, `reasoning`, `retrieval`, `tool_call`, `tool_result`, `delta`, `citation`, `done` sequence as the dedicated stream route. When `stream=false`, the response may also expose top-level summary aliases `answer`, `citations`, `tool_calls`, `usage`, and `finish_reason` alongside the nested `response`. The response family may now also expose additive lightweight `review` metadata plus `pending_user_actions[]` advisory continuation data copied from tool-level `user_action_hint` fields.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [CHAT_CONVERSATION_NOT_FOUND, CHAT_CONVERSATION_ARCHIVED, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      x-current-event-sequence:
+        - meta
+        - reasoning
+        - retrieval
+        - tool_call
+        - tool_result
+        - delta
+        - citation
+        - done
+      parameters:
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XConversationIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/ChatCompletionRequest
+      responses:
+        '200':
+          description: Chat completion response or stream depending on the `stream` flag.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponseEnvelope'
+            text/event-stream:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/OrchestratorStreamEvent
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationNotFound
+        '409':
+          $ref: ./components.openapi.yaml#/components/responses/ChatConversationArchived
+  /api/v1/sessions/{conversation_id}/messages:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [orchestration]
+      operationId: orchestrator_orchestrateMessage
+      summary: Execute the current baseline orchestration flow for a conversation message.
+      description: Canonical route. Legacy compatibility alias remains `/api/orchestrator/v1/sessions/{conversation_id}/messages`. The returned `OrchestratorResponse` and nested `state_snapshot` may now include additive lightweight `review` metadata derived from the current response-review pass plus `pending_user_actions[]` continuation hints aggregated from tool-level `user_action_hint` metadata.
+      x-owner-service: orchestrator-service
+      x-legacy-paths:
+        - /api/orchestrator/v1/sessions/{conversation_id}/messages
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_ROUTE_FAILED, VALIDATION_ERROR, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XConversationIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/message-request.schema.json
+      responses:
+        '200':
+          description: Executed orchestration response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrchestratorResponseEnvelope'
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/sessions/{conversation_id}/messages/stream:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [orchestration]
+      operationId: orchestrator_streamMessage
+      summary: Stream the current orchestration response as server-sent events.
+      description: Canonical service-level SSE route used by the current orchestrator baseline. The live emitted event order is `meta`, `reasoning`, `retrieval`, `tool_call`, `tool_result`, `delta`, `citation`, `done`. Public gateway surfaces should normalize those events to the canonical public aliases documented in `docs/contracts/shared/api-conventions.md`.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_ROUTE_FAILED, VALIDATION_ERROR, SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      x-current-event-sequence:
+        - meta
+        - reasoning
+        - retrieval
+        - tool_call
+        - tool_result
+        - delta
+        - citation
+        - done
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XConversationIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../packages/common-schemas/src/schemas/internal/orchestrator/message-request.schema.json
+      responses:
+        '200':
+          description: Server-sent event stream. Each emitted frame serializes one `OrchestratorStreamEvent`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/OrchestratorStreamEvent
+              examples:
+                meta:
+                  summary: Stream start event
+                  value:
+                    event: meta
+                    data:
+                      conversation_id: conv-stream
+                      message_id: msg-stream-1
+                      trace_id: trace-stream-1
+                      agent: Orchestrator
+                done:
+                  summary: Stream completion event
+                  value:
+                    event: done
+                    data:
+                      finish_reason: stop
+                      usage:
+                        prompt_tokens: 0
+                        completion_tokens: 0
+                        total_tokens: 0
+                      next_action: respond-with-agent-summary
+                      pending_actions: []
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '503':
+          $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /api/v1/sessions/{conversation_id}/state:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [orchestration]
+      operationId: orchestrator_getSessionState
+      summary: Retrieve the persisted checkpoint/event/compensation snapshot for a conversation.
+      description: Canonical route for the current state polling baseline used after orchestration runs. The snapshot may now expose additive `version`, derived `session_context`, ordered `agent_routes`, compact `tool_context`, lightweight `review` fields, and advisory `pending_user_actions[]` metadata copied from tool-level `user_action_hint` blockers. The persisted execution journal may include the additive `review_result` event variant, and current checkpoint names may include the additive `review-answer` marker before optional escalation.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_SESSION_STATE_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+      responses:
+        '200':
+          description: Persisted session state snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/SessionStateNotFound
+  /api/v1/sessions/{conversation_id}/rollback:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    post:
+      tags: [orchestration]
+      operationId: orchestrator_rollbackSession
+      summary: Execute armed Saga compensation steps for a conversation.
+      description: Current rollback route for the in-memory orchestration-state baseline. Compensation steps execute in reverse order through the tool-hub compensation bridge and append `compensation_result` events into the persisted state snapshot.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_SESSION_STATE_NOT_FOUND]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: ./components.openapi.yaml#/components/parameters/XRequestIdHeader
+        - $ref: ./components.openapi.yaml#/components/parameters/XTraceIdHeader
+      responses:
+        '200':
+          description: Rollback execution result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionRollbackEnvelope'
+        '404':
+          $ref: ./components.openapi.yaml#/components/responses/SessionStateNotFound
+  /internal/v1/orchestrator/chat:
+    post:
+      tags: [internal-orchestration]
+      operationId: orchestrator_internalChat
+      summary: Execute the internal orchestrator chat contract for trusted callers.
+      description: Current internal route consumed by trusted entrypoint services such as the gateway.
+      x-owner-service: orchestrator-service
+      x-permission-code: service:internal.call
+      x-error-codes: [ORCH_CALLER_FORBIDDEN, VALIDATION_ERROR]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      parameters:
+        - name: X-Caller-Service
+          in: header
+          required: true
+          description: Trusted caller identity validated against the orchestrator allow-list.
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components.openapi.yaml#/components/schemas/InternalChatRequest
+      responses:
+        '200':
+          description: Internal chat orchestration result.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/InternalChatResponse
+        '400':
+          $ref: ./components.openapi.yaml#/components/responses/ValidationError
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/CallerForbidden
+components:
+  schemas:
+    AgentRouteListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: ./components.openapi.yaml#/components/schemas/AgentRouteRecord
+    AgentListEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: ./components.openapi.yaml#/components/schemas/AgentDescriptor
+    ChatCompletionResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ChatCompletionResponse
+    ConversationRecordEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/ConversationRecord
+    SessionDeleteResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionDeleteResponse
+    SessionCancelResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionCancelResponse
+    RouteDecisionEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/RouteDecision
+    SessionListResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionListResponse
+    SessionMessagesPageEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionMessagesPage
+    OrchestratorResponseEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/OrchestratorResponse
+    SessionStateEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionStateSnapshot
+    SessionRollbackEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/SessionRollbackResponse

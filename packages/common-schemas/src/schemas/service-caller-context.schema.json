@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/service-caller-context.schema.json",
+  "title": "ServiceCallerContext",
+  "type": "object",
+  "required": [
+    "callerService",
+    "requestId",
+    "traceId"
+  ],
+  "properties": {
+    "callerService": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "traceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenantId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "toolCallId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operatorReason": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 500
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/business-tools/business-compensation-execute-response.schema.json",
+  "title": "BusinessCompensationExecuteResponse",
+  "type": "object",
+  "required": [
+    "success",
+    "code",
+    "message",
+    "compensation_id",
+    "action_name",
+    "latency_ms"
+  ],
+  "properties": {
+    "success": {
+      "type": "boolean"
+    },
+    "code": {
+      "type": "integer"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "compensation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "error_detail": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "idempotency_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/auth/send-code-response-data.schema.json",
+  "title": "SendCodeResponseData",
+  "type": "object",
+  "required": [
+    "scene",
+    "masked_account",
+    "expire_in"
+  ],
+  "properties": {
+    "scene": {
+      "type": "string",
+      "enum": [
+        "login",
+        "reset_password"
+      ]
+    },
+    "masked_account": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expire_in": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

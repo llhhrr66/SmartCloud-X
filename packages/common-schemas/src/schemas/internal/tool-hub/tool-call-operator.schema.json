@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/tool-hub/tool-call-operator.schema.json",
+  "title": "ToolCallOperator",
+  "type": "object",
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "user",
+        "admin",
+        "system"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/external/auth/send-code-request.schema.json",
+  "title": "SendCodeRequest",
+  "type": "object",
+  "required": [
+    "scene",
+    "account",
+    "account_type"
+  ],
+  "properties": {
+    "scene": {
+      "type": "string",
+      "enum": [
+        "login",
+        "reset_password"
+      ]
+    },
+    "account": {
+      "type": "string",
+      "minLength": 1
+    },
+    "account_type": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "email"
+      ]
+    },
+    "captcha_token": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

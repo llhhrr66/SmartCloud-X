@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/business-tools/business-tool-execute-request.schema.json",
+  "title": "BusinessToolExecuteRequest",
+  "type": "object",
+  "required": [
+    "operator"
+  ],
+  "properties": {
+    "operator": {
+      "$ref": "./operator-context.schema.json"
+    },
+    "subject": {
+      "$ref": "./subject-context.schema.json"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "operation": {
+      "$ref": "../tool-hub/tool-operation.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

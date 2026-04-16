@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/intent-signal.schema.json",
+  "title": "IntentSignal",
+  "type": "object",
+  "required": ["label", "score"],
+  "properties": {
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "score": {
+      "type": "integer"
+    },
+    "matched_keywords": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

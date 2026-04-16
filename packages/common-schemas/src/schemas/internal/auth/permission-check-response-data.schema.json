@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/auth/permission-check-response-data.schema.json",
+  "title": "PermissionCheckResponseData",
+  "type": "object",
+  "required": [
+    "allowed",
+    "denied_permissions"
+  ],
+  "properties": {
+    "allowed": {
+      "type": "boolean"
+    },
+    "denied_permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

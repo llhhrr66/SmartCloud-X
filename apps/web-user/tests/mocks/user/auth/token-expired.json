@@ -1,0 +1,14 @@
+{
+  "code": 4010002,
+  "message": "访问令牌已过期",
+  "error": {
+    "name": "TOKEN_EXPIRED",
+    "details": {
+      "refresh_supported": true,
+      "next_action": "silent_refresh"
+    }
+  },
+  "data": null,
+  "request_id": "req_auth_token_expired",
+  "timestamp": "2026-04-16T07:20:00+08:00"
+}

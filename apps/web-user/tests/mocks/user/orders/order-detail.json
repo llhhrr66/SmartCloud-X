@@ -1,0 +1,29 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "order": {
+      "order_no": "ord_202604_001",
+      "product_type": "GPU 云服务器",
+      "status": "paid",
+      "amount": "599.00",
+      "created_at": "2026-04-13T06:00:00.000Z",
+      "eligible_for_refund": true
+    },
+    "instance_name": "gpu-train-01",
+    "region": "cn-shanghai-1",
+    "billing_mode": "包年包月",
+    "renew_type": "manual",
+    "service_period": "1 month",
+    "pay_time": "2026-04-13T06:03:00.000Z",
+    "configuration_summary": [
+      "GPU: 1 × 24GB",
+      "CPU: 16 vCPU",
+      "Memory: 64GB",
+      "System Disk: 200GB SSD"
+    ],
+    "refunds": []
+  },
+  "request_id": "req_order_detail_001",
+  "timestamp": 1770000001000
+}

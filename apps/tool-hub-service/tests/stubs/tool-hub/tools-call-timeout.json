@@ -1,0 +1,25 @@
+{
+  "status": "timeout",
+  "summary": "downstream timeout",
+  "result": {},
+  "citations": [],
+  "success": false,
+  "code": 5003002,
+  "message": "downstream timeout",
+  "data": {},
+  "audit_tags": [],
+  "session_context_patch": {},
+  "tool_call_id": "tc-contract-timeout-1",
+  "latency_ms": 5001,
+  "provider": "business-tools",
+  "error": {
+    "retryable": true,
+    "provider": "business-tools",
+    "details": {
+      "exception": "TimeoutException"
+    }
+  },
+  "compensation": null,
+  "idempotency_key": "tool-contract-timeout-1",
+  "attempts": 2
+}

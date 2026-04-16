@@ -1,0 +1,35 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "ticket": {
+      "ticket_no": "tic_202604_001",
+      "subject": "公网带宽峰值异常咨询",
+      "status": "processing",
+      "category": "billing",
+      "priority": "high",
+      "content": "峰值带宽波动较大，想确认计费与突发策略。",
+      "created_at": "2026-04-15T04:00:00Z",
+      "updated_at": "2026-04-15T23:28:00Z",
+      "sla_minutes": 30
+    },
+    "replies": [
+      {
+        "reply_no": "reply_202604_001",
+        "content": "已收到您的带宽峰值咨询，正在帮您核对计费策略与突发规则。",
+        "created_at": "2026-04-15T23:02:00Z",
+        "operator_type": "support",
+        "status": "processing"
+      },
+      {
+        "reply_no": "reply_202604_002",
+        "content": "初步确认计费按带宽峰值日粒度统计，建议补充波动时间段以便进一步核查。",
+        "created_at": "2026-04-15T23:34:00Z",
+        "operator_type": "support",
+        "status": "processing"
+      }
+    ]
+  },
+  "request_id": "req_ticket_detail_001",
+  "timestamp": "2026-04-16T00:12:00Z"
+}

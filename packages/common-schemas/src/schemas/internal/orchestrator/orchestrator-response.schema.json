@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/orchestrator-response.schema.json",
+  "title": "OrchestratorResponse",
+  "type": "object",
+  "required": ["conversation_id", "route"],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route": {
+      "$ref": "./route-decision.schema.json"
+    },
+    "executions": {
+      "type": "array",
+      "items": {
+        "$ref": "./agent-execution-result.schema.json"
+      }
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "final_response_summary": {
+      "type": ["string", "null"]
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pending_user_actions": {
+      "type": "array",
+      "items": {
+        "$ref": "./pending-user-action.schema.json"
+      }
+    },
+    "state_snapshot": {
+      "oneOf": [
+        {
+          "$ref": "./session-state-snapshot.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "review": {
+      "description": "Lightweight orchestrator response-review result derived after execution. Current owners use it to surface lightweight policy warnings or retry/escalation requirements.",
+      "oneOf": [
+        {
+          "$ref": "./response-review.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

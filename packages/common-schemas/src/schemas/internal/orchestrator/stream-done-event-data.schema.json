@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/stream-done-event-data.schema.json",
+  "title": "OrchestratorStreamDoneEventData",
+  "type": "object",
+  "required": [
+    "finish_reason",
+    "usage",
+    "next_action",
+    "pending_actions"
+  ],
+  "properties": {
+    "finish_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "usage": {
+      "$ref": "./stream-usage.schema.json"
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

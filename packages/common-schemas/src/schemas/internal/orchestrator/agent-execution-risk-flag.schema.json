@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/agent-execution-risk-flag.schema.json",
+  "title": "AgentExecutionRiskFlag",
+  "type": "string",
+  "enum": [
+    "missing_tool_input",
+    "missing_auth_context",
+    "confirmation_required",
+    "idempotency_conflict",
+    "tool_failure",
+    "human_handoff_requested"
+  ]
+}

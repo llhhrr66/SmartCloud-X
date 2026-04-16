@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/trace-context.schema.json",
+  "title": "TraceContext",
+  "type": "object",
+  "required": [
+    "traceId"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "traceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conversationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "userId": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "callerService": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "toolCallId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operatorReason": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 500
+    }
+  },
+  "additionalProperties": false
+}

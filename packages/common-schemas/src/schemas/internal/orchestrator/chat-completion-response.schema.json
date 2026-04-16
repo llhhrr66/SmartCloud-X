@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/chat-completion-response.schema.json",
+  "title": "ChatCompletionResponse",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "message_id",
+    "status",
+    "response"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "handoff",
+        "need_user_input",
+        "failed"
+      ]
+    },
+    "answer": {
+      "type": "string"
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "$ref": "./tool-invocation.schema.json"
+      }
+    },
+    "pending_user_actions": {
+      "type": "array",
+      "items": {
+        "$ref": "./pending-user-action.schema.json"
+      }
+    },
+    "usage": {
+      "$ref": "./chat-usage.schema.json"
+    },
+    "finish_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "response": {
+      "$ref": "./orchestrator-response.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

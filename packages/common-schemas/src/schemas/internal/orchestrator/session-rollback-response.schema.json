@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/orchestrator/session-rollback-response.schema.json",
+  "title": "SessionRollbackResponse",
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "status",
+    "compensated_steps",
+    "state_snapshot"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "partial",
+        "failed",
+        "noop"
+      ]
+    },
+    "compensated_steps": {
+      "type": "array",
+      "items": {
+        "$ref": "./compensation-execution-record.schema.json"
+      }
+    },
+    "state_snapshot": {
+      "$ref": "./session-state-snapshot.schema.json"
+    },
+    "trace": {
+      "oneOf": [
+        {
+          "$ref": "../../trace-context.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

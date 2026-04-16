@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/business-tools/operator-context.schema.json",
+  "title": "OperatorContext",
+  "type": "object",
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "user",
+        "admin",
+        "system"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

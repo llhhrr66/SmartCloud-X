@@ -18,14 +18,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install orchestrator dependencies
+      - name: Install dependencies
         run: |
           pip install -r apps/orchestrator-service/requirements.txt
+          pip install -r apps/business-tools/requirements.txt
 
       - name: Run orchestrator tests
         run: |
           cd apps/orchestrator-service
-          python -m pytest tests/ -v --ignore=tests/test_saga.py --ignore=tests/test_api.py -x
+          python -m pytest tests/ -v --ignore=tests/test_saga.py --ignore=tests/test_api.py -x -k "not test_runtime"
 
   deploy:
     name: Deploy

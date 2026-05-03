@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY apps/orchestrator-service/app ./app
 COPY apps/business-tools/src/business_tools ./business_tools
+COPY apps/business-tools/src/business_tools_service ./business_tools_service
 
 EXPOSE 8010
 

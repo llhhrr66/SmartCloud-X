@@ -21,8 +21,33 @@ ENV_ALIASES = {
     "MCP_GATEWAY_URL": ("MCP_GATEWAY_URL",),
     "ORCHESTRATOR_RUNTIME_DIR": ("ORCHESTRATOR_RUNTIME_DIR",),
     "SMARTCLOUD_MYSQL_DSN": ("SMARTCLOUD_MYSQL_DSN",),
+    "SMARTCLOUD_MONGODB_URI": ("SMARTCLOUD_MONGODB_URI", "MONGO_URI"),
+    "SMARTCLOUD_MONGODB_DATABASE": ("SMARTCLOUD_MONGODB_DATABASE",),
     "SMARTCLOUD_REDIS_URL": ("SMARTCLOUD_REDIS_URL",),
+    "CONVERSATION_DOCUMENT_STORE_REQUIRED": (
+        "CONVERSATION_DOCUMENT_STORE_REQUIRED",
+        "ORCHESTRATOR_CONVERSATION_DOCUMENT_STORE_REQUIRED",
+    ),
+    "RUN_CONTROL_STRICT": ("RUN_CONTROL_STRICT", "ORCHESTRATOR_RUN_CONTROL_STRICT"),
+    "SMARTCLOUD_LLM_API_KEY": ("SMARTCLOUD_LLM_API_KEY", "OPENAI_API_KEY"),
+    "SMARTCLOUD_LLM_BASE_URL": ("SMARTCLOUD_LLM_BASE_URL", "OPENAI_BASE_URL"),
+    "SMARTCLOUD_LLM_MODEL": ("SMARTCLOUD_LLM_MODEL", "OPENAI_MODEL"),
+    "SMARTCLOUD_RAG_SERVICE_BASE_URL": ("SMARTCLOUD_RAG_SERVICE_BASE_URL", "RAG_SERVICE_BASE_URL"),
+    "SMARTCLOUD_RAG_SERVICE_API_PREFIX": ("SMARTCLOUD_RAG_SERVICE_API_PREFIX", "RAG_SERVICE_API_PREFIX"),
+    "SMARTCLOUD_RAG_SERVICE_PORT": ("SMARTCLOUD_RAG_SERVICE_PORT", "RAG_SERVICE_PORT"),
+    "SMARTCLOUD_LLM_TIMEOUT_SECONDS": ("SMARTCLOUD_LLM_TIMEOUT_SECONDS",),
+    "TOOL_CALL_ENABLED": ("TOOL_CALL_ENABLED",),
+    "MAX_TOOL_CALL_ROUNDS": ("MAX_TOOL_CALL_ROUNDS",),
 }
+
+
+RELEASE_ENVS = {"staging", "prod"}
+LOCAL_FALLBACK_ENVS = {"local", "dev", "test"}
+
+
+class LlmConfigurationError(ValueError):
+    """Raised when the orchestrator LLM provider is only partially configured."""
+
 
 
 def _coerce_value(raw: str) -> Any:
@@ -87,6 +112,7 @@ class Settings(BaseModel):
     message_id_header: str = Field(default="X-Message-Id", alias="SMARTCLOUD_MESSAGE_ID_HEADER")
     tenant_id_header: str = Field(default="X-Tenant-Id", alias="SMARTCLOUD_TENANT_ID_HEADER")
     caller_service_header: str = Field(default="X-Caller-Service", alias="SMARTCLOUD_CALLER_SERVICE_HEADER")
+    tool_hub_caller_service_header: str = Field(default="X-Caller-Service", alias="SMARTCLOUD_TOOL_HUB_CALLER_SERVICE_HEADER")
     tool_call_id_header: str = Field(default="X-Tool-Call-Id", alias="SMARTCLOUD_TOOL_CALL_ID_HEADER")
     idempotency_key_header: str = Field(default="Idempotency-Key", alias="SMARTCLOUD_IDEMPOTENCY_KEY_HEADER")
     max_history_turns: int = Field(default=20, alias="MAX_HISTORY_TURNS")
@@ -109,8 +135,27 @@ class Settings(BaseModel):
     )
     runtime_data_dir: str | None = Field(default=None, alias="ORCHESTRATOR_RUNTIME_DIR")
     mysql_dsn: str | None = Field(default=None, alias="SMARTCLOUD_MYSQL_DSN")
+    mongodb_uri: str | None = Field(default=None, alias="SMARTCLOUD_MONGODB_URI")
+    mongodb_database: str = Field(default="smartcloud", alias="SMARTCLOUD_MONGODB_DATABASE")
     redis_url: str | None = Field(default=None, alias="SMARTCLOUD_REDIS_URL")
-    redis_namespace: str = Field(default="smartcloud:orchestrator", alias="ORCHESTRATOR_REDIS_NAMESPACE")
+    conversation_document_store_required: bool = Field(
+        default=False,
+        alias="CONVERSATION_DOCUMENT_STORE_REQUIRED",
+    )
+    run_control_strict: bool = Field(default=False, alias="RUN_CONTROL_STRICT")
+    langsmith_tracing: bool = Field(default=False, alias="LANGSMITH_TRACING")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com", alias="LANGSMITH_ENDPOINT")
+    langsmith_project: str = Field(default="smartcloud-x", alias="LANGSMITH_PROJECT")
+    langsmith_api_key: str | None = Field(default=None, alias="LANGSMITH_API_KEY")
+    llm_api_key: str | None = Field(default=None, alias="SMARTCLOUD_LLM_API_KEY")
+    llm_base_url: str | None = Field(default=None, alias="SMARTCLOUD_LLM_BASE_URL")
+    llm_model: str | None = Field(default=None, alias="SMARTCLOUD_LLM_MODEL")
+    llm_timeout_seconds: int = Field(default=20, alias="SMARTCLOUD_LLM_TIMEOUT_SECONDS")
+    tool_call_enabled: bool = Field(default=True, alias="TOOL_CALL_ENABLED")
+    max_tool_call_rounds: int = Field(default=5, alias="MAX_TOOL_CALL_ROUNDS")
+    rag_service_base_url: str | None = Field(default=None, alias="SMARTCLOUD_RAG_SERVICE_BASE_URL")
+    rag_service_api_prefix: str = Field(default="/api/rag/v1", alias="SMARTCLOUD_RAG_SERVICE_API_PREFIX")
+    rag_service_port: int = Field(default=8040, alias="SMARTCLOUD_RAG_SERVICE_PORT")
     conversation_store_path: str | None = Field(default=None, alias="CONVERSATION_STORE_PATH")
     state_store_path: str | None = Field(default=None, alias="STATE_STORE_PATH")
     sse_event_store_path: str | None = Field(default=None, alias="SSE_EVENT_STORE_PATH")
@@ -127,8 +172,11 @@ class Settings(BaseModel):
         default="smartcloud:business-tools",
         alias="BUSINESS_TOOLS_REDIS_NAMESPACE",
     )
+    runtime_mode: Literal["shared-backend", "mixed", "local-fallback"] = "local-fallback"
+    release_readiness_required_components: list[str] = Field(default_factory=list)
+    local_fallback_components: list[str] = Field(default_factory=list)
 
-    @field_validator("api_prefix", "legacy_api_prefix", "internal_api_prefix", "tool_hub_internal_api_prefix")
+    @field_validator("api_prefix", "legacy_api_prefix", "internal_api_prefix", "tool_hub_internal_api_prefix", "rag_service_api_prefix")
     @classmethod
     def _validate_prefix(cls, value: str) -> str:
         if not value.startswith("/"):
@@ -146,6 +194,8 @@ class Settings(BaseModel):
         "tool_query_cache_ttl_cap_seconds",
         "review_reasoning_summary_max_chars",
         "review_final_answer_max_chars",
+        "llm_timeout_seconds",
+        "max_tool_call_rounds",
     )
     @classmethod
     def _validate_positive(cls, value: int) -> int:
@@ -170,13 +220,18 @@ class Settings(BaseModel):
             raise ValueError("Header names must be non-empty HTTP token strings.")
         return normalized
 
-    @field_validator("tool_hub_base_url")
+    @field_validator("tool_hub_base_url", "rag_service_base_url")
     @classmethod
-    def _validate_tool_hub_url(cls, value: str) -> str:
-        parsed = urlparse(value)
+    def _validate_http_service_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        parsed = urlparse(normalized)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("MCP_GATEWAY_URL must be a valid http(s) URL.")
-        return value.rstrip("/")
+            raise ValueError("service base URL must be a valid http(s) URL.")
+        return normalized.rstrip("/")
 
     @field_validator("mysql_dsn")
     @classmethod
@@ -192,6 +247,19 @@ class Settings(BaseModel):
             raise ValueError("SMARTCLOUD_MYSQL_DSN must be a valid mysql DSN.")
         return normalized
 
+    @field_validator("llm_base_url")
+    @classmethod
+    def _validate_llm_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("SMARTCLOUD_LLM_BASE_URL must be a valid http(s) URL.")
+        return normalized.rstrip("/")
+
     @field_validator("allowed_internal_callers", mode="before")
     @classmethod
     def _validate_callers(cls, value: list[str] | str) -> list[str]:
@@ -203,21 +271,69 @@ class Settings(BaseModel):
         return callers
 
     @model_validator(mode="after")
-    def _validate_prod(self) -> "Settings":
+    def _validate_runtime(self) -> "Settings":
         if self.app_env == "prod" and self.log_level == "DEBUG":
             raise ValueError("DEBUG logging is not allowed in prod.")
-        if self.app_env in {"staging", "prod"}:
+        if self.app_env in RELEASE_ENVS:
             missing: list[str] = []
             if not self.mysql_dsn:
                 missing.append("SMARTCLOUD_MYSQL_DSN")
             if not self.redis_url:
                 missing.append("SMARTCLOUD_REDIS_URL")
+            if not self.mongodb_uri:
+                missing.append("SMARTCLOUD_MONGODB_URI")
             if missing:
                 joined = ", ".join(missing)
                 raise ValueError(f"{self.app_env} requires middleware-backed orchestrator runtime config: {joined}.")
             if self.tool_hub_transport != "http":
                 raise ValueError(f"{self.app_env} requires TOOL_HUB_TRANSPORT=http for service-to-service orchestration.")
+            self.run_control_strict = True
+            self.conversation_document_store_required = True
+            self.release_readiness_required_components = ["mysql", "redis", "mongodb", "tool_hub_http_transport"]
+            self.local_fallback_components = []
+            self.runtime_mode = "shared-backend"
+        else:
+            fallback_components: list[str] = []
+            if self.mysql_dsn and (
+                self.conversation_store_path or self.state_store_path or self.agent_config_store_path
+            ):
+                fallback_components.extend(["conversation_store", "state_store", "agent_config_store"])
+            if self.redis_url and (
+                self.sse_event_store_path
+                or self.business_tools_idempotency_store_path
+                or self.business_tools_query_cache_store_path
+            ):
+                fallback_components.extend(
+                    [
+                        "sse_event_store",
+                        "business_tools_idempotency_store",
+                        "business_tools_query_cache_store",
+                    ]
+                )
+            self.release_readiness_required_components = ["mysql", "redis", "mongodb", "tool_hub_http_transport"]
+            self.local_fallback_components = fallback_components
+            self.runtime_mode = "mixed" if fallback_components else "local-fallback"
+        llm_missing = self.llm_missing_config()
+        if self.app_env in RELEASE_ENVS and 0 < len(llm_missing) < 3:
+            joined = ", ".join(llm_missing)
+            raise LlmConfigurationError(
+                f"partial orchestrator LLM configuration is not allowed in {self.app_env}: missing {joined}"
+            )
         return self
+
+    def llm_missing_config(self) -> list[str]:
+        key_to_value = {
+            "SMARTCLOUD_LLM_API_KEY": self.llm_api_key,
+            "SMARTCLOUD_LLM_BASE_URL": self.llm_base_url,
+            "SMARTCLOUD_LLM_MODEL": self.llm_model,
+        }
+        configured_count = sum(1 for value in key_to_value.values() if value)
+        if configured_count == 0:
+            return list(key_to_value.keys())
+        return [key for key, value in key_to_value.items() if not value]
+
+    def llm_ready(self) -> bool:
+        return not self.llm_missing_config()
 
 
 def build_settings(
@@ -271,8 +387,21 @@ def build_settings(
         "REVIEW_REQUIRE_CITATIONS_WHEN_RETRIEVAL",
         "ORCHESTRATOR_RUNTIME_DIR",
         "SMARTCLOUD_MYSQL_DSN",
+        "SMARTCLOUD_MONGODB_URI",
+        "SMARTCLOUD_MONGODB_DATABASE",
         "SMARTCLOUD_REDIS_URL",
-        "ORCHESTRATOR_REDIS_NAMESPACE",
+        "CONVERSATION_DOCUMENT_STORE_REQUIRED",
+        "RUN_CONTROL_STRICT",
+        "LANGSMITH_TRACING",
+        "LANGSMITH_ENDPOINT",
+        "LANGSMITH_PROJECT",
+        "LANGSMITH_API_KEY",
+        "SMARTCLOUD_LLM_API_KEY",
+        "SMARTCLOUD_LLM_BASE_URL",
+        "SMARTCLOUD_LLM_MODEL",
+        "SMARTCLOUD_RAG_SERVICE_BASE_URL",
+        "SMARTCLOUD_RAG_SERVICE_API_PREFIX",
+        "SMARTCLOUD_RAG_SERVICE_PORT",
         "CONVERSATION_STORE_PATH",
         "STATE_STORE_PATH",
         "SSE_EVENT_STORE_PATH",
@@ -280,6 +409,8 @@ def build_settings(
         "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
         "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
         "BUSINESS_TOOLS_REDIS_NAMESPACE",
+        "TOOL_CALL_ENABLED",
+        "MAX_TOOL_CALL_ROUNDS",
     }
     for key in passthrough_keys:
         if key in env and env[key] not in {"", None}:
@@ -287,11 +418,11 @@ def build_settings(
 
     runtime_dir = Path(str(merged.get("ORCHESTRATOR_RUNTIME_DIR") or (root / ".tmp" / "orchestrator-service"))).expanduser()
     merged.setdefault("ORCHESTRATOR_RUNTIME_DIR", str(runtime_dir))
-    if merged.get("SMARTCLOUD_MYSQL_DSN") not in {None, ""}:
+    if app_env in LOCAL_FALLBACK_ENVS and merged.get("SMARTCLOUD_MYSQL_DSN") not in {None, ""}:
         merged.setdefault("CONVERSATION_STORE_PATH", str(runtime_dir / "degraded-conversation-store.json"))
         merged.setdefault("STATE_STORE_PATH", str(runtime_dir / "degraded-state-store.json"))
         merged.setdefault("AGENT_CONFIG_STORE_PATH", str(runtime_dir / "degraded-agent-config-store.json"))
-    if merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
+    if app_env in LOCAL_FALLBACK_ENVS and merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
         merged.setdefault("SSE_EVENT_STORE_PATH", str(runtime_dir / "degraded-sse-event-store.json"))
         merged.setdefault(
             "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",

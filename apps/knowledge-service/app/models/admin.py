@@ -144,6 +144,28 @@ class AdminKnowledgeDocumentCreateRequest(BaseModel):
     source_uri: str | None = None
 
 
+class AdminKnowledgeDocumentUploadInitRequest(BaseModel):
+    filename: str = Field(min_length=1)
+    content_type: str | None = None
+
+
+class AdminKnowledgeDocumentUploadRecord(BaseModel):
+    upload_id: str
+    status: str
+    filename: str
+    bucket: str
+    object_key: str
+    file_id: str
+    resolved_file_id: str | None = None
+    source_type: str
+    source_uri: str
+    content_type: str | None = None
+    size_bytes: int | None = None
+    checksum: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class AdminKnowledgeChunkRecord(BaseModel):
     chunk_id: str
     doc_id: str

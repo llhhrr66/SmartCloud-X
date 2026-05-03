@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -64,6 +64,7 @@ class RuntimeConstraints(BaseModel):
     must_cite: bool = False
     allow_handoff: bool = True
     max_tool_calls: int = 5
+    disable_tools: bool = False
 
 
 class IntentSignal(BaseModel):
@@ -288,12 +289,36 @@ class ToolContextItem(BaseModel):
     patch_keys: list[str] = Field(default_factory=list)
 
 
+class RetrievalSource(BaseModel):
+    source_id: str
+    source_type: str = "knowledge_base"
+    title: str
+    doc_id: str | None = None
+    chunk_id: str | None = None
+    score: float | None = None
+    uri: str | None = None
+    snippet: str | None = None
+    backend_used: str | None = None
+    domain: str | None = None
+
+
+class RetrievalResult(BaseModel):
+    query: str
+    rewritten_query: str
+    degraded: bool = False
+    degradation_note: str | None = None
+    backend_used: str
+    sources: list[RetrievalSource] = Field(default_factory=list)
+    raw_meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentExecutionResult(BaseModel):
     agent: AgentName
     status: Literal["success", "handoff", "need_user_input", "failed"] = "success"
     reasoning_summary: str
     tool_calls: list[ToolInvocation] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    retrieval_result: RetrievalResult | None = None
     confidence: float = 0.5
     final_answer: str | None = None
     handoff_received_from: AgentName | None = None
@@ -303,6 +328,15 @@ class AgentExecutionResult(BaseModel):
     trace_tags: list[str] = Field(default_factory=list)
     handoff_reason: str | None = None
     handoff_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class PendingAgentHandoff(BaseModel):
+    route: RouteDecision
+    request_snapshot: MessageRequest
+    source_user_message_id: str
+    next_task_index: int = Field(ge=0)
+    completed_executions: list[AgentExecutionResult] = Field(default_factory=list)
+    handoff_from: AgentName | None = None
 
 
 class AgentRouteRecord(BaseModel):
@@ -378,95 +412,88 @@ class SessionStateSnapshot(BaseModel):
     events: list[ExecutionEvent] = Field(default_factory=list)
     pending_actions: list[str] = Field(default_factory=list)
     pending_user_actions: list[PendingUserAction] = Field(default_factory=list)
+    pending_agent_handoff: PendingAgentHandoff | None = None
     final_response_summary: str | None = None
     review: ResponseReview | None = None
     trace: TraceContext | None = None
-
-
-class CompensationExecutionRecord(BaseModel):
-    step_id: str
-    tool_name: str
-    action_name: str
-    status: Literal["completed", "failed"] = "completed"
-    success: bool
-    message: str
-    data: dict[str, Any] = Field(default_factory=dict)
-    provider: str | None = None
-    code: int | None = None
-    retryable: bool = False
-    latency_ms: int | None = None
-    error_detail: dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: str | None = None
-
-
-class SessionRollbackResponse(BaseModel):
-    conversation_id: str
-    status: Literal["completed", "partial", "failed", "noop"]
-    compensated_steps: list[CompensationExecutionRecord] = Field(default_factory=list)
-    state_snapshot: SessionStateSnapshot
-    trace: TraceContext | None = None
-
-
-class OrchestratorResponse(BaseModel):
-    conversation_id: str
-    route: RouteDecision
-    executions: list[AgentExecutionResult] = Field(default_factory=list)
-    next_action: str = "respond"
-    final_response_summary: str | None = None
-    pending_actions: list[str] = Field(default_factory=list)
-    pending_user_actions: list[PendingUserAction] = Field(default_factory=list)
-    state_snapshot: SessionStateSnapshot | None = None
-    review: ResponseReview | None = None
-    trace: TraceContext | None = None
-
-
-class ConversationRecord(BaseModel):
-    conversation_id: str
-    scene: SceneName = "customer_service"
-    status: ConversationStatus = "active"
-    title: str | None = None
-    current_agent: AgentName | None = None
-    summary: str | None = None
-    pending_actions: list[str] = Field(default_factory=list)
-    created_at: str
-    updated_at: str
-    last_message_at: str | None = None
-    initial_context: SessionContext = Field(default_factory=SessionContext)
-    total_messages: int = 0
 
 
 class SessionCreateRequest(BaseModel):
     scene: SceneName = "customer_service"
-    title: str | None = Field(default=None, min_length=1, max_length=255)
+    title: str | None = None
     initial_context: SessionContext = Field(default_factory=SessionContext)
 
 
-class SessionUpdateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-
-
 class SessionListResponse(BaseModel):
-    items: list[ConversationRecord] = Field(default_factory=list)
+    items: list["ConversationRecord"] = Field(default_factory=list)
     total: int = 0
     page: int = 1
     page_size: int = 20
 
 
-class ChatMessageRecord(BaseModel):
-    message_id: str
+class SessionUpdateRequest(BaseModel):
+    title: str = Field(min_length=1)
+
+
+class SessionDeleteResponse(BaseModel):
     conversation_id: str
-    role: MessageRole
-    message_type: MessageType
-    status: MessageStatus
+    status: Literal["deleted"] = "deleted"
+
+
+class SessionRetryRequest(BaseModel):
+    message_id: str
+    override_input: str | None = None
+
+
+class SessionCancelRequest(BaseModel):
+    message_id: str | None = None
+
+
+class SessionCancelResponse(BaseModel):
+    conversation_id: str
+    message_id: str
+    status: Literal["cancelled"] = "cancelled"
+
+
+class SessionRollbackResponse(BaseModel):
+    conversation_id: str
+    status: Literal["completed", "failed", "partial"] = "completed"
+    restored: bool = True
+    summary: str | None = None
+    compensated_steps: list["CompensationExecutionRecord"] = Field(default_factory=list)
+    state_snapshot: Optional["SessionStateSnapshot"] = None
+
+
+class ConversationRecord(BaseModel):
+    conversation_id: str
+    scene: SceneName
+    status: ConversationStatus = "active"
+    title: str | None = None
+    current_agent: AgentName | None = None
+    summary: str | None = None
     created_at: str
     updated_at: str
-    parent_message_id: str | None = None
-    agent_name: str | None = None
-    content: str | None = None
+    last_message_at: str | None = None
+    initial_context: SessionContext = Field(default_factory=SessionContext)
+    pending_actions: list[str] = Field(default_factory=list)
+    total_messages: int = 0
+
+
+class ChatMessageRecord(BaseModel):
+    conversation_id: str
+    message_id: str
+    role: MessageRole
+    message_type: MessageType = "assistant_response"
+    status: MessageStatus = "completed"
+    content: str
+    agent_name: AgentName | None = None
     citations: list[str] = Field(default_factory=list)
-    tool_calls: list[ToolInvocation] = Field(default_factory=list)
     finish_reason: str | None = None
-    trace: TraceContext | None = None
+    created_at: str
+    updated_at: str
+    request_id: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionMessagesPage(BaseModel):
@@ -477,13 +504,22 @@ class SessionMessagesPage(BaseModel):
 
 class StreamEventRecord(BaseModel):
     event_id: str
+    message_id: str | None = None
     sequence: int
-    event: Literal["meta", "reasoning", "retrieval", "tool_call", "tool_result", "delta", "citation", "done"]
+    event: Literal[
+        "meta",
+        "reasoning",
+        "retrieval",
+        "tool_call",
+        "tool_result",
+        "delta",
+        "citation",
+        "done",
+        "message.error",
+    ]
     data: dict[str, Any] = Field(default_factory=dict)
     created_at: str
-
-
-class StreamEventPage(BaseModel):
+class MessageEventPage(BaseModel):
     conversation_id: str
     message_id: str
     items: list[StreamEventRecord] = Field(default_factory=list)
@@ -491,53 +527,7 @@ class StreamEventPage(BaseModel):
     has_more: bool = False
 
 
-class SessionRetryRequest(BaseModel):
-    message_id: str
-    override_input: str | None = None
-
-
-class SessionContinueRequest(BaseModel):
-    message_id: str | None = None
-    user_input: str | None = Field(default=None, min_length=1)
-    field_values: dict[str, Any] = Field(default_factory=dict)
-    confirm_tool_names: list[str] = Field(default_factory=list)
-    session_context_patch: dict[str, Any] = Field(default_factory=dict)
-    user_profile_patch: UserProfilePatch = Field(default_factory=UserProfilePatch)
-
-
-class SessionCancelRequest(BaseModel):
-    message_id: str = Field(min_length=1)
-
-
-class SessionCancelResponse(BaseModel):
-    conversation_id: str
-    message_id: str
-    status: Literal["cancelled"] = "cancelled"
-    cancelled: bool = True
-
-
-class ChatCompletionRequest(BaseModel):
-    conversation_id: str
-    message_id: str = Field(min_length=1)
-    user_input: str = Field(min_length=1)
-    stream: bool = False
-    scene: SceneName | None = None
-    user_profile: UserProfile = Field(default_factory=UserProfile)
-    session_context: SessionContext = Field(default_factory=SessionContext)
-    attachments: list[dict[str, Any]] = Field(default_factory=list)
-    tool_candidates: list[str] = Field(default_factory=list)
-    constraints: RuntimeConstraints = Field(default_factory=RuntimeConstraints)
-    context: dict[str, Any] = Field(default_factory=dict)
-    options: dict[str, Any] = Field(default_factory=dict)
-    context_control: dict[str, Any] = Field(default_factory=dict)
-    client_meta: dict[str, Any] = Field(default_factory=dict)
-    trace: TraceContext | None = None
-
-
-class SessionDeleteResponse(BaseModel):
-    conversation_id: str
-    status: Literal["deleted"] = "deleted"
-    deleted: bool = True
+StreamEventPage = MessageEventPage
 
 
 class ChatUsage(BaseModel):
@@ -546,41 +536,104 @@ class ChatUsage(BaseModel):
     total_tokens: int = 0
 
 
-class InternalChatUser(BaseModel):
-    user_id: str
-    roles: list[str] = Field(default_factory=list)
-    permissions: list[str] = Field(default_factory=list)
-    account_id: str | None = None
-    tenant_id: str = "default"
+class OrchestratorResponse(BaseModel):
+    conversation_id: str | None = None
+    route: RouteDecision
+    executions: list[AgentExecutionResult] = Field(default_factory=list)
+    final_response_summary: str | None = None
+    next_action: str = "respond-with-agent-summary"
+    pending_actions: list[str] = Field(default_factory=list)
+    pending_user_actions: list[PendingUserAction] = Field(default_factory=list)
+    state_snapshot: SessionStateSnapshot | None = None
+    review: ResponseReview | None = None
+    trace: TraceContext | None = None
 
 
-class InternalChatPayload(BaseModel):
-    conversation_id: str
-    message_id: str
+class ChatCompletionRequest(BaseModel):
+    conversation_id: str | None = None
+    message_id: str | None = None
     user_input: str = Field(min_length=1)
+    scene: SceneName | None = None
     stream: bool = False
-    scene: SceneName = "customer_service"
+    context: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
+    context_control: dict[str, Any] = Field(default_factory=dict)
+    user_profile: UserProfile = Field(default_factory=UserProfile)
     session_context: SessionContext = Field(default_factory=SessionContext)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     tool_candidates: list[str] = Field(default_factory=list)
+    confirmed_tool_names: list[str] = Field(default_factory=list)
+    auth_context: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    constraints: RuntimeConstraints = Field(default_factory=RuntimeConstraints)
+    client_meta: dict[str, Any] = Field(default_factory=dict)
+    trace: TraceContext | None = None
+
+
+class ChatCompletionResponse(BaseModel):
+    conversation_id: str
+    message_id: str
+    status: str
+    answer: str
+    citations: list[str] = Field(default_factory=list)
+    tool_calls: list[ToolInvocation] = Field(default_factory=list)
+    pending_actions: list[str] = Field(default_factory=list)
+    pending_user_actions: list[PendingUserAction] = Field(default_factory=list)
+    usage: ChatUsage = Field(default_factory=ChatUsage)
+    finish_reason: str | None = None
+    response: dict[str, Any] | None = None
+    review: ResponseReview | None = None
+    next_action: str = "respond-with-agent-summary"
+    final_response_summary: str | None = None
+    executions: list[AgentExecutionResult] = Field(default_factory=list)
+    state_snapshot: SessionStateSnapshot | None = None
+    route: Optional[RouteDecision] = None
+
+
+class InternalChatUser(BaseModel):
+    user_id: str | None = None
+    tenant_id: str = "default"
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    account_id: str | None = None
+
+
+class InternalChatRequestPayload(BaseModel):
+    conversation_id: str
+    message_id: str | None = None
+    user_input: str = Field(min_length=1)
+    scene: SceneName = "customer_service"
+    stream: bool = False
+    session_context: SessionContext = Field(default_factory=SessionContext)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    tool_candidates: list[str] = Field(default_factory=list)
+    retrieval_required: bool | None = None
 
 
 class InternalChatRequest(BaseModel):
     request_id: str
     trace_id: str
-    tenant_id: str = "default"
     user: InternalChatUser
-    chat_request: InternalChatPayload
+    chat_request: InternalChatRequestPayload
+
+
+class SessionContinueRequest(BaseModel):
+    message_id: str | None = None
+    user_input: str | None = None
+    field_values: dict[str, object] = Field(default_factory=dict)
+    session_context_patch: dict[str, Any] = Field(default_factory=dict)
+    user_profile_patch: UserProfilePatch = Field(default_factory=UserProfilePatch)
+    confirm_tool_names: list[str] = Field(default_factory=list)
 
 
 class InternalChatResponse(BaseModel):
     conversation_id: str
     message_id: str
-    status: Literal["success", "handoff", "need_user_input", "failed"]
+    status: str
     agent_name: AgentName
     route: RouteDecision
     executions: list[AgentExecutionResult] = Field(default_factory=list)
-    final_answer: str
+    final_answer: str | None = None
     citations: list[str] = Field(default_factory=list)
     tool_calls: list[ToolInvocation] = Field(default_factory=list)
     next_agent: AgentName | None = None
@@ -589,16 +642,21 @@ class InternalChatResponse(BaseModel):
     state_snapshot: SessionStateSnapshot | None = None
     review: ResponseReview | None = None
     trace: TraceContext | None = None
+    next_action: str = "respond-with-agent-summary"
+    final_response_summary: str | None = None
 
 
-class ChatCompletionResponse(BaseModel):
-    conversation_id: str
-    message_id: str
-    status: Literal["success", "handoff", "need_user_input", "failed"]
-    answer: str
-    citations: list[str] = Field(default_factory=list)
-    tool_calls: list[ToolInvocation] = Field(default_factory=list)
-    pending_user_actions: list[PendingUserAction] = Field(default_factory=list)
-    usage: ChatUsage = Field(default_factory=ChatUsage)
-    finish_reason: str = "stop"
-    response: OrchestratorResponse
+class CompensationExecutionRecord(BaseModel):
+    step_id: str
+    tool_name: str
+    action_name: str
+    status: Literal["completed", "failed"] = "completed"
+    success: bool = True
+    message: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    provider: str | None = None
+    code: int | None = None
+    retryable: bool = False
+    latency_ms: int | None = None
+    error_detail: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = None

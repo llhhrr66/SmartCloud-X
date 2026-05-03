@@ -10,6 +10,7 @@ FastAPI-based starter for SmartCloud-X multi-agent orchestration.
 - service-level `/api/v1/chat/completions` alias for spec-shaped chat execution, including compatibility with `context`, `options`, `context_control`, and enriched non-stream response fields
 - session state snapshot endpoint at `/api/v1/sessions/{conversation_id}/state`
 - HTTP-first tool-hub integration with config-driven degraded local fallback on downstream connect failures
+- A2A-compatible protocol surface with Agent Card discovery plus JSON-RPC `SendMessage` / `GetTask` routes
 - HTTP tool-hub mode can now hydrate route/tool metadata from the running tool-hub registry, so planning stays aligned with provider-backed tool contracts instead of only local starter definitions
 - MySQL/Redis-backed checkpoint/event/runtime baseline with degraded local fallback spools per conversation
 - session-context continuity baseline that reuses prior tool outputs (for example `statement_no` and `open_ticket_id`) on follow-up turns
@@ -38,6 +39,7 @@ FastAPI-based starter for SmartCloud-X multi-agent orchestration.
 
 ## Endpoints
 - `GET /healthz`
+- `GET /.well-known/agent-card.json`
 - `GET /api/v1/agents` (`/api/orchestrator/v1/agents` compatibility alias)
 - `GET /api/v1/admin/agents`
 - `PATCH /api/v1/admin/agents/{agent_code}`
@@ -55,6 +57,7 @@ FastAPI-based starter for SmartCloud-X multi-agent orchestration.
 - `POST /api/v1/chat/sessions/{conversation_id}/continue`
 - `POST /api/v1/chat/sessions/{conversation_id}/cancel`
 - `POST /api/v1/chat/completions`
+- `POST /api/v1/a2a/jsonrpc`
 - `POST /api/v1/sessions/{conversation_id}/messages`
 - `GET /api/v1/sessions/{conversation_id}/state`
 - `POST /api/v1/sessions/{conversation_id}/rollback`

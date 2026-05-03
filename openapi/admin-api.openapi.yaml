@@ -90,7 +90,7 @@ paths:
       tags: [admin-kb]
       operationId: admin_createKnowledgeBase
       summary: Create a knowledge base.
-      description: Baseline admin write route owned by knowledge-service.
+      description: Baseline admin write route owned by knowledge-service. Admin write routes marked with `x-operator-reason-required=true` require the `X-Operator-Reason` request header so the caller-supplied reason can be enforced or recorded by the audit path.
       x-owner-service: knowledge-service
       x-permission-code: admin:kb.write
       x-error-codes: [4001001, 4010002, 4030001, 4290001]
@@ -151,7 +151,7 @@ paths:
       tags: [admin-kb]
       operationId: admin_updateKnowledgeBase
       summary: Update mutable knowledge-base metadata.
-      description: Current placeholder baseline for renaming a KB, updating the description or retrieval mode, and toggling `status` between `ready` and `disabled`.
+      description: Current placeholder baseline for renaming a KB, updating the description or retrieval mode, and toggling `status` between `ready` and `disabled`. This is an audited admin write and requires `X-Operator-Reason`.
       x-owner-service: knowledge-service
       x-permission-code: admin:kb.write
       x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]
@@ -244,7 +244,7 @@ paths:
       tags: [admin-kb]
       operationId: admin_createKnowledgeDocument
       summary: Create a knowledge document under a knowledge base.
-      description: Baseline document-ingest contract. The current placeholder returns an accepted/processing document record.
+      description: Baseline document-ingest contract. The current placeholder returns an accepted/processing document record. This is an audited admin write and requires `X-Operator-Reason`.
       x-owner-service: knowledge-service
       x-permission-code: admin:kb.write
       x-error-codes: [4001001, 4010002, 4030001, 4040001, 4290001]

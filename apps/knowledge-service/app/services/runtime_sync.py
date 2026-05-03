@@ -24,6 +24,8 @@ from app.models.runtime import (
     RawObjectMirrorRecord,
     RuntimeConnectorStatus,
 )
+from app.services.dify_dataset_sync import get_dify_dataset_sync_service
+from app.services.dify_external import get_dify_external_knowledge_service
 from app.services.store import KnowledgeStoreRepository
 from app.services.store_provider import get_repository
 
@@ -190,6 +192,8 @@ class KnowledgeRuntimeSyncService:
         cache_backend = "redis-configured" if self.settings.redis_url else "local-memory-fallback"
         queue_backend = "redis-list-primary" if self.settings.redis_url else "jsonl-outbox"
         event_counters = self.event_counters()
+        dify_external_status = get_dify_external_knowledge_service().build_status()
+        dify_dataset_status = get_dify_dataset_sync_service().build_status()
         return KnowledgeRuntimeIntegrations(
             rawStorage=RuntimeConnectorStatus(
                 backend=raw_storage_backend,
@@ -227,6 +231,8 @@ class KnowledgeRuntimeSyncService:
                     "lexical chunk documents are indexed asynchronously and used as the preferred BM25 backend when available",
                 ],
             ),
+            difyExternalKnowledge=RuntimeConnectorStatus.model_validate(dify_external_status),
+            difyDatasetSync=RuntimeConnectorStatus.model_validate(dify_dataset_status),
             cache=RuntimeConnectorStatus(
                 backend=cache_backend,
                 configured=bool(self.settings.redis_url),

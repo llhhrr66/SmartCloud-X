@@ -1,0 +1,2 @@
+{"case_id":"retrieval_smoke_001","scene":"technical_support","input":"GPU 部署前需要检查什么","expected_keywords":["GPU","部署","驱动"],"expected_tools":[],"must_cite":true,"judge_type":"rule","risk_level":"high","expected_route":"knowledge_rag","tags":["smoke","citation_required"]}
+{"case_id":"retrieval_smoke_002","scene":"billing","input":"账单和发票在哪里查看","expected_keywords":["账单","发票"],"expected_tools":[],"must_cite":false,"judge_type":"rule","risk_level":"medium","expected_route":"knowledge_rag","tags":["smoke"]}

@@ -12,7 +12,7 @@ test('creates marketing outputs and a research task in the browser', async ({ pa
 
   await page.getByRole('button', { name: '创建海报任务' }).click();
   await expect(page.getByText('工业级上云活动')).toBeVisible();
-  await expect(page.getByText('queued')).toBeVisible();
+  await expect(page.getByText('排队中')).toBeVisible();
 
   await page.evaluate(() => window.localStorage.removeItem('smartcloud-x:web-user:task-registry'));
   await page.reload();

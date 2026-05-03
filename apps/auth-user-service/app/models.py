@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any, Generic, Literal, TypeVar
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -90,11 +93,12 @@ class AuthUserProfile(BaseModel):
     tenant_id: str
     name: str
     email: str
-    mobile: str
+    mobile: str | None = None
     avatar_url: str | None = None
     locale: str
     time_zone: str
     permissions: list[str] = Field(default_factory=list)
+    account_id: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -152,10 +156,20 @@ class LogoutRequest(BaseModel):
 
 
 class UserProfileUpdateRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1)
-    avatar_url: str | None = Field(default=None, min_length=1)
-    locale: str | None = Field(default=None, min_length=1)
-    time_zone: str | None = Field(default=None, min_length=1)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    avatar_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    locale: str | None = Field(default=None, min_length=2, max_length=32)
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_text_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        for field_name in ("name", "locale", "time_zone"):
+            if field_name in value and value[field_name] is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return value
 
     @model_validator(mode="after")
     def validate_non_empty(self) -> "UserProfileUpdateRequest":
@@ -163,6 +177,29 @@ class UserProfileUpdateRequest(BaseModel):
         has_avatar_update = "avatar_url" in self.model_fields_set
         if not has_text_update and not has_avatar_update:
             raise ValueError("at least one mutable profile field is required")
+        return self
+
+    @model_validator(mode="after")
+    def validate_trimmed_text_values(self) -> "UserProfileUpdateRequest":
+        normalized_locale = _normalize_locale(self.locale) if self.locale is not None else None
+        normalized_time_zone = self.time_zone.strip() if self.time_zone is not None else None
+        normalized_avatar_url = self.avatar_url.strip() if self.avatar_url is not None else None
+
+        for field_name in ("name", "avatar_url", "locale", "time_zone"):
+            if field_name not in self.model_fields_set:
+                continue
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if not value.strip():
+                raise ValueError(f"{field_name} cannot be blank")
+
+        if normalized_avatar_url is not None:
+            _validate_avatar_url(normalized_avatar_url)
+        if normalized_locale is not None:
+            _validate_locale(normalized_locale)
+        if normalized_time_zone is not None:
+            _validate_time_zone(normalized_time_zone)
         return self
 
 
@@ -226,7 +263,13 @@ class AdminSessionProfile(BaseModel):
 class AdminLoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
-    captcha_token: str = Field(min_length=1)
+    captcha_token: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_captcha_token(self) -> "AdminLoginRequest":
+        if self.captcha_token is not None and not self.captcha_token.strip():
+            raise ValueError("captcha_token cannot be blank")
+        return self
 
 
 class AdminLoginResponseData(BaseModel):
@@ -263,6 +306,17 @@ class PermissionCheckRequest(BaseModel):
     subject_id: str = Field(min_length=1)
     permissions: list[str] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_permissions(self) -> "PermissionCheckRequest":
+        normalized_permissions = []
+        for permission in self.permissions:
+            permission_text = permission.strip()
+            if not permission_text:
+                raise ValueError("permissions entries cannot be blank")
+            normalized_permissions.append(permission_text)
+        self.permissions = normalized_permissions
+        return self
+
 
 class PermissionCheckResponseData(BaseModel):
     allowed: bool
@@ -296,7 +350,7 @@ class StoredUser(BaseModel):
     tenant_id: str
     name: str
     email: str
-    mobile: str
+    mobile: str | None = None
     password_hash: str
     avatar_url: str | None = None
     locale: str
@@ -304,6 +358,7 @@ class StoredUser(BaseModel):
     roles: list[str] = Field(default_factory=lambda: ["user"])
     permissions: list[str] = Field(default_factory=list)
     token_version: int = 1
+    account_id: str | None = None
 
     def to_public_profile(self) -> AuthUserProfile:
         return AuthUserProfile(
@@ -316,6 +371,7 @@ class StoredUser(BaseModel):
             locale=self.locale,
             time_zone=self.time_zone,
             permissions=self.permissions,
+            account_id=self.account_id,
         )
 
 
@@ -410,6 +466,28 @@ def now_iso() -> str:
 
 def now_timestamp_ms() -> int:
     return int(utc_now().timestamp() * 1000)
+
+
+def _normalize_locale(value: str) -> str:
+    return value.strip().replace("_", "-")
+
+
+def _validate_locale(value: str) -> None:
+    if not re.fullmatch(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*", value):
+        raise ValueError("locale must use BCP 47 style tags")
+
+
+def _validate_time_zone(value: str) -> None:
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("time_zone must be a valid IANA time zone") from exc
+
+
+def _validate_avatar_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("avatar_url must be an absolute http(s) URL")
 
 
 AdminMenuItem.model_rebuild()

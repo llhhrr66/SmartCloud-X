@@ -61,6 +61,15 @@ function buildExpiresAt(expiresIn: number): string {
   return new Date(Date.now() + expiresIn * 1000).toISOString();
 }
 
+function buildClientGeneratedId(prefix: string): string {
+  const generated =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  return `${prefix}-${generated}`;
+}
+
 function normalizeMessageType(value: unknown): ChatMessage['messageType'] {
   switch (value) {
     case 'user_input':
@@ -91,6 +100,31 @@ function normalizeMessageStatus(value: unknown): ChatMessage['status'] {
     default:
       return 'completed';
   }
+}
+
+function normalizeAssistantContent(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const text = value.trim();
+  if (!text) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    for (const key of ['final_answer', 'answer', 'finalAnswer']) {
+      const content = parsed[key];
+      if (typeof content === 'string' && content.trim()) {
+        return content.trim();
+      }
+    }
+  } catch {
+    return value;
+  }
+
+  return value;
 }
 
 function normalizeToolStatus(value: unknown): ToolCallRecord['status'] {
@@ -559,13 +593,18 @@ export function mapConversationSummary(value: unknown): ConversationSummary {
 
 export function mapChatMessage(value: unknown, conversationIdFallback?: string): ChatMessage {
   const record = asRecord(value as ChatMessageRecord | Record<string, unknown>);
+  const messageId = getString(record, ['message_id', 'messageId', 'id']);
+  const fallbackId = messageId || buildClientGeneratedId('msg');
+  const role = (record.role as ChatMessage['role']) ?? 'assistant';
+  const rawContent = getString(record, ['content']);
+
   return {
-    id: getString(record, ['id', 'message_id', 'messageId'], crypto.randomUUID()),
-    messageId: getString(record, ['message_id', 'messageId', 'id'], crypto.randomUUID()),
+    id: getString(record, ['id', 'message_id', 'messageId'], fallbackId),
+    messageId: getString(record, ['message_id', 'messageId', 'id'], fallbackId),
     conversationId: getString(record, ['conversation_id', 'conversationId'], conversationIdFallback ?? ''),
-    role: (record.role as ChatMessage['role']) ?? 'assistant',
+    role,
     messageType: normalizeMessageType(record.message_type ?? record.messageType),
-    content: getString(record, ['content']),
+    content: role === 'assistant' ? normalizeAssistantContent(rawContent) : rawContent,
     createdAt: getString(record, ['created_at', 'createdAt'], nowIso()),
     parentMessageId: getOptionalString(record, ['parent_message_id', 'parentMessageId']),
     agentName: getOptionalString(record, ['agent_name', 'agentName']),

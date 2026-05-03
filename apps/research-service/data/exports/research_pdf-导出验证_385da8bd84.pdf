@@ -1,0 +1,30 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 7 0 R >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 84 >> stream
+BT /F1 12 Tf 50 780 Td (Research export fallback - see EmbeddedJSON metadata) Tj ET
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+6 0 obj << /Type /EmbeddedFile /Subtype /application#2Fjson /Length 500 >> stream
+{"topic":"PDF 导出验证","output_format":"pdf","markdown":"# PDF 导出验证\n\n## 摘要\nPDF 导出测试摘要\n\n## 研究范围\n验证最小真实 PDF 导出闭环\n\n## 任务配置\n- 深度: standard\n- 输出格式: pdf\n- 引用数量: 1\n\n## 输入参考链接\n- https://example.com/pdf-proof\n\n## 结论\n已生成最小真实 PDF 二进制产物。\n\n## 引用\n1. [PDF 证据](https://example.com/pdf-proof)\n   - 摘要: 导出验证\n\n## 元数据\n- provider: unit-test\n"}
+endstream
+endobj
+7 0 obj << /Names [(research-export.json) 8 0 R] >> endobj
+8 0 obj << /Type /Filespec /F (research-export.json) /EF << /F 6 0 R >> /Desc (EmbeddedJSON markdown export) >> endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000092 00000 n 
+0000000149 00000 n 
+0000000275 00000 n 
+0000000408 00000 n 
+0000000478 00000 n 
+0000001078 00000 n 
+0000001137 00000 n 
+trailer << /Size 9 /Root 1 0 R >>
+startxref
+1256
+%%EOF

@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import RLock
 
 from app.models.tools import ToolCallAuditRecord, ToolCallRequest, ToolCallResponse
+from app.core.observability import mark_audit_record_written
 from app.services import runtime_mysql
 
 RECOVERY_RETRY_SECONDS = 5.0
@@ -51,7 +52,7 @@ class _MySQLAuditStoreBackend:
             tenant_id=request.user_context.tenant_id,
             operator=request.operator,
             user_context=request.user_context,
-            idempotency_key=response.idempotency_key or request.idempotency_key,
+            idempotency_key=request.idempotency_key or response.idempotency_key,
             audit_tags=list(response.audit_tags),
             citations=list(response.citations),
             data_preview=ToolCallAuditStore._preview(response.data),
@@ -358,6 +359,7 @@ class ToolCallAuditStore:
                 with self._lock:
                     self._records[record.tool_call_id] = record.model_copy(deep=True)
                     self._persist_unlocked()
+                mark_audit_record_written()
                 return record
             except Exception as exc:
                 self._degrade_backend(exc)
@@ -383,7 +385,7 @@ class ToolCallAuditStore:
                 tenant_id=request.user_context.tenant_id,
                 operator=request.operator,
                 user_context=request.user_context,
-                idempotency_key=response.idempotency_key or request.idempotency_key,
+                idempotency_key=request.idempotency_key or response.idempotency_key,
                 audit_tags=list(response.audit_tags),
                 citations=list(response.citations),
                 data_preview=self._preview(response.data),
@@ -395,6 +397,7 @@ class ToolCallAuditStore:
             )
             self._records[request.tool_call_id] = record
             self._persist_unlocked()
+            mark_audit_record_written()
             return record
 
     def get(self, tool_call_id: str) -> ToolCallAuditRecord | None:

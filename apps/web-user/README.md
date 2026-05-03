@@ -1,13 +1,20 @@
 # SmartCloud-X Web User
 
-用户端 Web 基线应用，采用 **React + Vite + TypeScript** 实现，覆盖登录、会话列表、流式聊天、账单、工单、ICP、营销与研究任务等用户面功能骨架。
+用户端 Web 前台应用，采用 **React + Vite + TypeScript** 实现，覆盖登录、会话列表、流式聊天、账单、工单、ICP、营销与研究任务等真实用户面能力。
+
+本轮已把 `apps/web-user` 从“功能基线页集合”直接重构为 **live-first 的真实业务用户前台 + 可测试工作台**：
+- 顶部全局壳明确展示当前模式、网关连通性、运行时配置来源与当前用户身份
+- 首页改成主工作区入口，不再只是指标拼盘
+- mock 仅保留为显式测试开关，live 模式下不再允许静默退回 mock
+- 诊断信息保留在次级说明层，不再压过聊天、订单、服务台等主流程
 
 ## 当前能力
 - 登录页与本地会话鉴权上下文
+- 登录页现在会明确显示 live/mock、当前网关连通性与“不会自动退回 mock”的运行语义
 - 登录页补齐验证码发送、找回密码 challenge、重置密码流程
 - 验证码登录在前端先校验账号类型与登录通道是否匹配，避免短信/邮箱模式误配
 - live 模式静默刷新与启动时会话恢复
-- 用户工作台总览，支持部分失败降级展示
+- 用户工作台总览已重构为中文化主入口工作台，支持部分失败降级展示与能力边界说明
 - 会话列表与聊天页
 - 会话归档 / 恢复 / 删除等生命周期操作
 - 会话详情页支持“重试上一轮”，对齐 `POST /api/v1/chat/sessions/{id}/retry`
@@ -16,8 +23,9 @@
 - 聊天流在非正常断开时会自动重连，最多 3 次，并在页面上明确显示当前重连状态
 - 聊天页新增 starter prompt 模板，帮助用户直接进入账单、技术、ICP、营销等高频场景
 - app-local `conversationStore / messageStore / sseStore` 分离聊天状态，减少首屏重复请求并降低路由重渲染对流式体验的影响
-- app-local telemetry 基线，覆盖 `page_view`、`login_submit`、`api_error`、`permission_denied`、`chat_stream_*`，并在侧栏保留最近 40 条事件
+- app-local telemetry 基线，覆盖 `page_view`、`login_submit`、`api_error`、`permission_denied`、`chat_stream_*`，并在壳层诊断区保留最近 40 条事件
 - 账单、研究、营销页面骨架
+- 顶部全局壳新增 live runtime 健康探测，通过 `/api/v1/auth/me` 区分“网关可达 / 待登录 / 契约缺口 / 服务端异常 / 不可达”
 - 订单中心 `/orders`，支持订单详情抽屉、退款申请与退款详情时间线
 - 工单中心 `/tickets` 与 ICP 页面 `/icp`，支持与综合服务台共享数据/表单状态
 - 工单中心补齐详情面板与补充回复区，对齐 `GET /api/v1/tickets/{ticket_no}` 与 `POST /api/v1/tickets/{ticket_no}/replies`
@@ -60,6 +68,8 @@ npm run test:e2e
 PLAYWRIGHT_REUSE_SERVER=1 npm run test:e2e
 ```
 
+默认 runner 现在会为当前这轮 Playwright 运行共享一组临时端口，并等待 mock API / Vite 真正输出 ready 日志后再开始测试；即使历史默认端口 `38090` 已被别的本地进程占用，`npm run test:e2e` 也不会直接误撞旧端口。
+
 当前已真实浏览器验证的主链路：
 - 登录并进入用户工作台总览
 - 找回密码 challenge + 重置密码，并使用新密码重新登录
@@ -76,7 +86,7 @@ PLAYWRIGHT_REUSE_SERVER=1 npm run test:e2e
 - `/sessions` 重命名 / 归档 / 恢复 / 删除
 - 工单创建
 - `/service-desk` 综合工作台的附件分流、工单创建、ICP 预检与提交联动
-- ICP 上传登记、材料预检查、提交备案申请
+- ICP 上传登记、材料预检查、提交备案申请，以及 canonical list endpoint 缺失时的“浏览器跟踪回填”来源提示
 
 当前仍属 baseline-only、尚未进入 Playwright 覆盖的 owned 能力：
 - Docker / Nginx entrypoint 生成 `runtime-config.js` 的容器内注入路径
@@ -173,6 +183,7 @@ tests/
 
 ## 联调说明
 - 默认关闭 `VITE_USE_MOCK_API`，服务层会按主规范请求 `/api/v1/**` 接口。
+- 验收模式必须保持 `VITE_USE_MOCK_API=false`，并让 `VITE_API_BASE_URL` 指向真实 gateway（compose 基线为 `http://localhost:8000`）。
 - 需要纯前端演示或本地离线调试时，再显式设置 `VITE_USE_MOCK_API=true`。
 - 登录页现在覆盖 `POST /api/v1/auth/send-code`、`POST /api/v1/auth/password/forgot`、`POST /api/v1/auth/password/reset` 的完整找回密码链路。
 - 短信验证码登录仅接受手机号，邮箱验证码登录仅接受邮箱，前端会在调用 auth API 前先做约束校验。
@@ -186,7 +197,7 @@ tests/
 - live 模式下，研究任务与海报任务列表优先读取 `/api/v1/research/tasks` 与 `/api/v1/marketing/posters`；若列表暂不可用或未及时返回最新任务，前端才回补当前浏览器最近跟踪的详情。
 - live 模式下，账单工作区改为部分失败降级：若明细/发票/订单/工单中的某一分区暂不可用，页面仍会保留其余已成功分区并明确提示缺失域。
 - live 模式下，营销海报任务会自动轮询 3 秒/次，最长 10 分钟；超过窗口后停止后台轮询并引导手动刷新，贴近 spec `20.15.1`。
-- live 模式下，服务台中的 ICP 申请历史会优先展示当前浏览器已提交并跟踪过的 `application_no`，因为主规范当前只冻结了详情接口。
+- live 模式下，服务台中的 ICP 申请历史会优先展示当前浏览器已提交并跟踪过的 `application_no`，因为主规范当前只冻结了详情接口；页面会显式展示“浏览器跟踪回填”状态，并说明这不是 canonical list endpoint。
 - `/orders` 页面优先读取 `GET /api/v1/orders/{order_no}` 与 `GET /api/v1/refunds/{refund_no}`；若 live 接口尚未完成，前端会回退到已加载的列表级数据，且不会丢失筛选状态。
 - 营销中心支持 `POST /api/v1/marketing/copy/generate` 的文案生成占位，研究中心支持根据 `report_file_id` 拉取文件详情。
 - 服务台支持 `POST /api/v1/files/upload-policy` 的附件凭据申请占位；上传区现区分通用附件（`chat_attachment`）与 ICP 材料（`icp_material`），mock 模式下可模拟 `files/complete`，并支持在提交前移除已暂存文件。

@@ -33,8 +33,12 @@ class OrchestrationCancelled(Exception):
         self.message_id = message_id
 
 
+class RunControlBackendUnavailableError(RuntimeError):
+    pass
+
+
 class OrchestrationRunControl:
-    """Redis-backed run coordination with degraded in-memory fallback."""
+    """Redis-backed run coordination with optional strict fail-closed mode."""
 
     def __init__(
         self,
@@ -42,6 +46,7 @@ class OrchestrationRunControl:
         redis_url: str | None = None,
         redis_namespace: str = "smartcloud:orchestrator:run-control",
         lease_seconds: int = 300,
+        strict_backend: bool = False,
     ) -> None:
         self._lock = RLock()
         self._runs: dict[str, ActiveRun] = {}
@@ -51,9 +56,11 @@ class OrchestrationRunControl:
         self._redis_client = build_redis_client(redis_url)
         self._backend_error: str | None = "Redis connection unavailable." if redis_url and self._redis_client is None else None
         self._next_recovery_attempt_at = 0.0
+        self._strict_backend = bool(strict_backend and redis_url)
 
     def start(self, conversation_id: str, message_id: str) -> ActiveRun:
         self._maybe_restore_backend()
+        self._require_backend()
         with self._lock:
             existing = self._runs.get(conversation_id)
             if existing is not None:
@@ -67,6 +74,7 @@ class OrchestrationRunControl:
                 started_at=self._now(),
             )
             self._claim_remote_run(run)
+            self._require_backend()
             self._runs[conversation_id] = run
             return run
 
@@ -111,12 +119,14 @@ class OrchestrationRunControl:
 
     def ensure_not_cancelled(self, conversation_id: str, message_id: str) -> None:
         self._maybe_restore_backend()
+        self._require_backend()
         if self.is_cancelled(conversation_id, message_id):
             raise OrchestrationCancelled(
                 conversation_id=conversation_id,
                 message_id=message_id,
             )
         self._refresh_remote_run(conversation_id, message_id)
+        self._require_backend()
 
     def clear(self) -> None:
         self._maybe_restore_backend()
@@ -141,6 +151,7 @@ class OrchestrationRunControl:
                 "leaseSeconds": self._lease_seconds,
                 "fallbackBackend": "memory",
                 "activeRuns": len(self._runs),
+                "strictBackend": self._strict_backend,
             }
         return {
             "backend": "memory",
@@ -150,7 +161,12 @@ class OrchestrationRunControl:
             "activeRuns": len(self._runs),
             "degradedFrom": "redis-lock" if self._backend_error else None,
             "backendError": self._backend_error,
+            "strictBackend": self._strict_backend,
         }
+
+    def _require_backend(self) -> None:
+        if self._strict_backend and self._redis_url and self._redis_client is None:
+            raise RunControlBackendUnavailableError(self._backend_error or "Redis connection unavailable.")
 
     def _maybe_restore_backend(self) -> None:
         if self._redis_client is not None or not self._redis_url:

@@ -25,6 +25,6 @@ test('shows order detail and keeps a newly created refund visible in the refresh
   await refundFormSection.getByRole('button', { name: '提交退款申请' }).click();
 
   await expect(page.getByText(/退款申请 ref_e2e_/)).toBeVisible();
-  await expect(refundHistorySection.getByText(/ref_e2e_/)).toBeVisible();
+  await expect(refundHistorySection.getByRole('button', { name: /ref_e2e_/ })).toBeVisible();
   await expect(refundHistorySection.getByText(refundReason)).toBeVisible();
 });

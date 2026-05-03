@@ -10,6 +10,7 @@ from app.api.routes.tools import internal_router as internal_tools_router
 from app.api.routes.tools import mcp_router, router as tools_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.observability import setup_observability
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -19,6 +20,7 @@ app = FastAPI(
     version=settings.app_version,
     description="Baseline MCP-style tool registry, internal tool-call contract, and business-tool dispatch for SmartCloud-X.",
 )
+setup_observability(app)
 app.include_router(health_router)
 app.include_router(tools_router, prefix=settings.api_prefix)
 app.include_router(tools_router, prefix=settings.legacy_api_prefix, include_in_schema=False)

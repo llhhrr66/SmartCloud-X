@@ -3,7 +3,7 @@
 ## Scope
 - owner: `supervisor-web-user`
 - app: `apps/web-user`
-- purpose: document current user-web integration baselines, mock/live behavior, and pending contracts
+- purpose: document the current live-first user frontend, mock/live behavior, runtime shell semantics, and pending contracts
 
 ## Implemented frontend service modules
 - `src/api/services/auth.ts`
@@ -63,11 +63,16 @@
 - `src/config/env.ts`
   - merges build-time Vite env with optional `/runtime-config.js` overrides
   - exposes whether runtime overrides are active so the shell can surface deployment mode
+- `src/lib/runtime-health.ts`
+  - lightweight live gateway probe against `GET /api/v1/auth/me`
+  - distinguishes `reachable / auth_required / contract_gap / server_error / unreachable`
+  - keeps login page and authenticated shell honest about whether the app is really connected to a live gateway
 
 ## Auth/session behavior
 - live mode enables silent refresh on `401` / `4010002`
 - auth session changes are synchronized through `src/auth/session-manager.ts`
 - protected routes wait for initial session bootstrap before redirecting to `/login`
+- the authenticated shell now exposes runtime mode, runtime-config source, API base URL, and live probe status in a product-facing top shell instead of burying these details in a dev sidebar
 - API client auto-populates `X-Client-Platform`, `X-Client-Version`, `X-Tenant-Id`, and `X-User-Id` from the local frontend/auth context to better match spec `20.5.3`
 - runtime config can now be switched at container start via `/runtime-config.js`, so API gateway/base URL, title, version, mock mode, and timeout knobs no longer require rebuilding the image
 - API client + live write services now also use stable `X-Request-Id` and deterministic `Idempotency-Key` values so double-click retries keep the spec `20.13.1/20.13.7` idempotency intent instead of generating a fresh random key every submit
@@ -142,7 +147,7 @@ The owned Playwright suite now validates the following flows against the local m
 15. `/profile` profile update + password rotation + forced re-login
 16. focused `/tickets` creation flow
 17. composite `/service-desk` upload separation + ticket + ICP flow
-18. focused `/icp` upload-policy -> complete -> precheck -> submit flow
+18. focused `/icp` upload-policy -> complete -> precheck -> submit flow, including the explicit browser-tracked fallback indicator when ICP list stays detail-only
 19. `/sessions` rename / archive / restore / delete lifecycle actions
 
 ## Baseline-only but not yet browser-covered
@@ -152,6 +157,7 @@ These owned surfaces remain implemented but are not yet directly covered by Play
 
 ## Playwright runner notes
 - `apps/web-user/playwright.config.ts` now starts fresh mock/API dev servers by default so local reruns cannot silently reuse stale processes after frontend or mock-server edits
+- the Playwright runner now shares one per-run port allocation across the main process and workers, and waits for actual backend/frontend ready logs before starting browser flows
 - set `PLAYWRIGHT_REUSE_SERVER=1` only when you intentionally want to reuse already-running local Playwright servers
 
 ## Known contract gaps
@@ -172,6 +178,10 @@ These owned surfaces remain implemented but are not yet directly covered by Play
 - citations: `/api/v1/citations/{citation_id}`
 
 ## Frontend route mapping notes
+- the app shell is now organized as:
+  - top shell: brand, current user, live/mock mode, live probe, runtime-config source, global navigation
+  - primary workspace: page content and business workflow
+  - secondary inspector: permission boundary summary and recent local telemetry
 - `/service-desk` is the comprehensive workspace for refunds, tickets, ICP, and upload-policy staging
 - `/orders` is the focused order/refund route for spec-aligned detail-drawer and refund-submit flows
 - `/tickets` is a focused wrapper around the shared service-desk state for spec-aligned ticket operations
@@ -180,6 +190,7 @@ These owned surfaces remain implemented but are not yet directly covered by Play
 - `/icp` is a focused wrapper around the shared service-desk state for spec-aligned ICP operations
 - shared upload staging now separates generic attachments from ICP materials and allows staged-file removal before submit, so ticket/refund evidence no longer gets mislabeled as ICP material by default
 - dashboard and billing now degrade gracefully when only part of the live data contract is available
+- the dashboard is now a live-first product entry surface that summarizes what the current user can do, where to start, and which domains still have fallback or authorization boundaries
 
 ## Frontend fallbacks for partial live contracts
 - research page:
@@ -198,6 +209,7 @@ These owned surfaces remain implemented but are not yet directly covered by Play
   - `/orders` prefers `GET /api/v1/orders/{order_no}` and `GET /api/v1/refunds/{refund_no}` for detail panels, but falls back to list data if those detail routes are not yet available
   - ticket detail/reply uses `GET /api/v1/tickets/{ticket_no}` + `POST /api/v1/tickets/{ticket_no}/replies`; mock mode seeds a reply timeline for local validation
   - ICP history fallback uses stored application IDs + `GET /api/v1/icp/applications/{application_no}`
+  - when this path is active, the ICP page shows an explicit `浏览器跟踪回填` badge plus a warning banner explaining that the backend still lacks a canonical list endpoint
   - attachment staging starts from `POST /api/v1/files/upload-policy`; the UI maps generic files to `chat_attachment` and ICP files to `icp_material`, and mock mode can simulate `POST /api/v1/files/complete` before attaching or removing staged files
 - chat page:
   - citation drill-down uses `GET /api/v1/citations/{citation_id}`

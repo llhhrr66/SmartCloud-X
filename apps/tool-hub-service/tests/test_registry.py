@@ -189,3 +189,54 @@ def test_registry_strict_remote_discovery_raises_when_business_tools_is_unavaila
 
     with pytest.raises(BusinessToolsDiscoveryUnavailableError):
         registry.describe_tool("billing.query_statement", strict_remote=True)
+
+
+def test_registry_defaults_to_strict_remote_discovery_in_prod() -> None:
+    class StubBusinessToolsClient:
+        def discover_tools(self, **filters):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+        def discover_tool(self, tool_name: str):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+    registry = ToolRegistry(
+        settings=Settings.model_validate(
+            {
+                "APP_ENV": "prod",
+                "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+            }
+        ),
+        business_tools_client=StubBusinessToolsClient(),
+    )
+
+    with pytest.raises(BusinessToolsDiscoveryUnavailableError):
+        registry.list_tools()
+
+    with pytest.raises(BusinessToolsDiscoveryUnavailableError):
+        registry.describe_tool("billing.query_statement")
+
+
+def test_registry_strict_remote_discovery_does_not_fallback_when_remote_tool_is_missing() -> None:
+    class StubBusinessToolsClient:
+        def discover_tools(self, **filters):
+            return []
+
+        def discover_tool(self, tool_name: str):
+            return None
+
+    registry = ToolRegistry(
+        settings=Settings.model_validate(
+            {
+                "APP_ENV": "prod",
+                "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+            }
+        ),
+        business_tools_client=StubBusinessToolsClient(),
+    )
+
+    assert registry.list_tools() == []
+    assert registry.describe_tool("billing.query_statement") is None

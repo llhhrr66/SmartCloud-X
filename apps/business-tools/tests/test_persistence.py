@@ -250,7 +250,95 @@ def test_idempotency_store_uses_redis_when_configured(monkeypatch) -> None:
     assert "idempotent-replay" in replay.audit_tags
     assert fake_redis.values
     assert fake_redis.expiry
+    redis_key = next(iter(fake_redis.values))
+    assert "tenant-a" not in redis_key
+    assert "user-1" not in redis_key
+    assert "acct-1" not in redis_key
     assert store.describe_backend()["backend"] == "redis"
+
+
+def test_idempotency_store_scopes_same_key_by_subject_context() -> None:
+    configure_idempotency_store(persistence_path=None)
+    store = get_idempotency_store()
+    tenant_a = ToolExecutionContext(
+        tenant_id="tenant-a",
+        user_id="user-1",
+        account_id="acct-1",
+        idempotency_key="tool-idem-scope-1",
+    )
+    tenant_b = ToolExecutionContext(
+        tenant_id="tenant-b",
+        user_id="user-2",
+        account_id="acct-2",
+        idempotency_key="tool-idem-scope-1",
+    )
+    payload = {"statement_nos": ["stmt_001"], "_confirmed": True}
+    result_a = ToolExecutionResult(
+        tool_name="billing.create_invoice",
+        operation="execute",
+        status="completed",
+        summary="tenant-a done",
+        result={"invoice_no": "inv_tenant_a"},
+        success=True,
+        idempotency_key="tool-idem-scope-1",
+    )
+    result_b = ToolExecutionResult(
+        tool_name="billing.create_invoice",
+        operation="execute",
+        status="completed",
+        summary="tenant-b done",
+        result={"invoice_no": "inv_tenant_b"},
+        success=True,
+        idempotency_key="tool-idem-scope-1",
+    )
+
+    store.save(
+        "billing.create_invoice",
+        "tool-idem-scope-1",
+        payload,
+        tenant_a,
+        86400,
+        result_a,
+    )
+
+    replay_b_before_save, conflict_b_before_save = store.get(
+        "billing.create_invoice",
+        "tool-idem-scope-1",
+        payload,
+        tenant_b,
+    )
+
+    assert replay_b_before_save is None
+    assert conflict_b_before_save is False
+
+    store.save(
+        "billing.create_invoice",
+        "tool-idem-scope-1",
+        payload,
+        tenant_b,
+        86400,
+        result_b,
+    )
+
+    replay_a, conflict_a = store.get(
+        "billing.create_invoice",
+        "tool-idem-scope-1",
+        payload,
+        tenant_a,
+    )
+    replay_b, conflict_b = store.get(
+        "billing.create_invoice",
+        "tool-idem-scope-1",
+        payload,
+        tenant_b,
+    )
+
+    assert conflict_a is False
+    assert replay_a is not None
+    assert replay_a.result["invoice_no"] == "inv_tenant_a"
+    assert conflict_b is False
+    assert replay_b is not None
+    assert replay_b.result["invoice_no"] == "inv_tenant_b"
 
 
 def test_idempotency_store_keeps_degraded_json_mirror_after_redis_read_failure(tmp_path: Path, monkeypatch) -> None:
@@ -513,6 +601,11 @@ def test_query_cache_store_uses_redis_when_configured(monkeypatch) -> None:
     assert "cache-hit" in replay.audit_tags
     assert fake_redis.values
     assert fake_redis.expiry
+    redis_key = next(iter(fake_redis.values))
+    assert "tenant-a" not in redis_key
+    assert "user-1" not in redis_key
+    assert "acct-1" not in redis_key
+    assert "this_month" not in redis_key
     assert store.describe_backend()["backend"] == "redis-ttl"
 
 

@@ -12,6 +12,7 @@ from app.models.admin import (
     AdminKnowledgeBaseCreateRequest,
     AdminKnowledgeBaseUpdateRequest,
     AdminKnowledgeDocumentCreateRequest,
+    AdminKnowledgeDocumentUploadInitRequest,
     AdminKnowledgeReindexRequest,
     AdminRetrievalSearchPreviewRequest,
 )
@@ -20,6 +21,12 @@ from app.services.admin import (
     AdminNotFoundError,
     AdminValidationError,
     get_admin_service,
+)
+from app.services.admin_audit import get_admin_audit_service
+from app.services.dify_dataset_sync import (
+    DifyDatasetSyncError,
+    DifyDatasetSyncNotConfiguredError,
+    get_dify_dataset_sync_service,
 )
 
 router = APIRouter()
@@ -263,6 +270,111 @@ def create_document(
     return _success(request, record.model_dump(mode="json"), status_code=202, message="accepted")
 
 
+@router.post("/files/uploads")
+def init_document_upload(
+    payload: AdminKnowledgeDocumentUploadInitRequest,
+    request: Request,
+) -> JSONResponse:
+    service = get_admin_service()
+    try:
+        record = service.init_document_upload(
+            payload,
+            operator_id=_operator_id(request),
+            operator_ip=_operator_ip(request),
+            reason=_operator_reason(request),
+        )
+    except AdminValidationError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+            field="filename",
+        )
+    return _success(request, record.model_dump(mode="json"), status_code=201, message="created")
+
+
+@router.put("/files/uploads/{upload_id}/content")
+async def upload_document_content(upload_id: str, request: Request) -> JSONResponse:
+    service = get_admin_service()
+    try:
+        record = service.upload_document_content(
+            upload_id,
+            await request.body(),
+            content_type=request.headers.get("Content-Type"),
+            operator_id=_operator_id(request),
+            operator_ip=_operator_ip(request),
+            reason=_operator_reason(request),
+        )
+    except AdminNotFoundError as exc:
+        return _error(
+            request,
+            status_code=404,
+            code=NOT_FOUND_CODE,
+            message=str(exc),
+            error_type="not_found",
+            field="upload_id",
+        )
+    except AdminValidationError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+        )
+    except ValueError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+            field="content",
+        )
+    return _success(request, record.model_dump(mode="json"))
+
+
+@router.post("/files/uploads/{upload_id}:complete")
+def complete_document_upload(upload_id: str, request: Request) -> JSONResponse:
+    service = get_admin_service()
+    try:
+        record = service.complete_document_upload(
+            upload_id,
+            operator_id=_operator_id(request),
+            operator_ip=_operator_ip(request),
+            reason=_operator_reason(request),
+        )
+    except AdminNotFoundError as exc:
+        return _error(
+            request,
+            status_code=404,
+            code=NOT_FOUND_CODE,
+            message=str(exc),
+            error_type="not_found",
+            field="upload_id",
+        )
+    except AdminValidationError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+        )
+    except ValueError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+            field="upload_id",
+        )
+    return _success(request, record.model_dump(mode="json"))
+
+
 @router.get("/knowledge-documents/{doc_id}/chunks")
 def list_document_chunks(
     doc_id: str,
@@ -353,3 +465,48 @@ def search_preview(payload: AdminRetrievalSearchPreviewRequest, request: Request
             field="kb_id",
         )
     return _success(request, data.model_dump(mode="json"))
+
+
+@router.post("/dify/datasets/sync/{kb_id}")
+def sync_dify_dataset(kb_id: str, request: Request, force: bool = Query(default=False)) -> JSONResponse:
+    try:
+        operator_id = _operator_id(request)
+        operator_ip = _operator_ip(request)
+        reason = _operator_reason(request)
+        data = get_dify_dataset_sync_service().sync_knowledge_base(kb_id, force=force)
+        get_admin_audit_service().record(
+            operator_id=operator_id,
+            resource_type="knowledge_base",
+            resource_id=kb_id,
+            action="dify_dataset_sync",
+            reason=reason,
+            before_json=None,
+            after_json=data,
+            operator_ip=operator_ip,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        return _success(request, data, message="success")
+    except AdminValidationError as exc:
+        return _error(
+            request,
+            status_code=400,
+            code=VALIDATION_CODE,
+            message=str(exc),
+            error_type="validation_error",
+        )
+    except DifyDatasetSyncNotConfiguredError as exc:
+        return _error(
+            request,
+            status_code=503,
+            code=5030001,
+            message=str(exc),
+            error_type="dify_not_configured",
+        )
+    except DifyDatasetSyncError as exc:
+        return _error(
+            request,
+            status_code=502,
+            code=5020001,
+            message=str(exc),
+            error_type="dify_sync_failed",
+        )

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import time
+from urllib.parse import urlparse
 
 import httpx
+from langsmith import traceable
 
 from app.core.business_tools_sdk import (
     CompensationExecutionRequest,
@@ -39,6 +41,21 @@ class ToolHubClient:
         self.settings = get_settings()
         self._catalog = build_catalog()
 
+    def _http_client(self, *, timeout: float) -> httpx.Client:
+        kwargs: dict[str, object] = {
+            "base_url": self.settings.tool_hub_base_url,
+            "timeout": timeout,
+        }
+        if self._is_loopback_base_url(self.settings.tool_hub_base_url):
+            kwargs["trust_env"] = False
+        return httpx.Client(**kwargs)
+
+    @staticmethod
+    def _is_loopback_base_url(base_url: str) -> bool:
+        hostname = (urlparse(base_url).hostname or "").lower()
+        return hostname in {"127.0.0.1", "localhost", "::1"}
+
+    @traceable(name="orchestrator.tool_hub.invoke_plan", tags=["smartcloud-x", "tool-hub"])
     def invoke_plan(
         self,
         tool_plan: Iterable[ToolPlanItem],
@@ -51,6 +68,7 @@ class ToolHubClient:
             return list(self._invoke_via_http(tool_plan, user_profile, trace, operator_id, message_id))
         return list(self._invoke_locally(tool_plan, user_profile, trace, operator_id, message_id))
 
+    @traceable(name="orchestrator.tool_hub.preflight", tags=["smartcloud-x", "tool-hub", "preflight"])
     def preflight(
         self,
         item: ToolPlanItem,
@@ -72,6 +90,8 @@ class ToolHubClient:
                     ready=False,
                     available=False,
                 )
+            if self._allow_local_degraded_fallback() and self._should_fallback_on_gateway_status(exc):
+                return self._preflight_locally(item, user_profile, trace, operator_id, message_id)
             return self._unavailable_preflight(item)
         except (httpx.HTTPError, ValueError):
             return self._unavailable_preflight(item)
@@ -81,14 +101,11 @@ class ToolHubClient:
         if self.settings.tool_hub_transport != "http":
             return local_definitions
         try:
-            with httpx.Client(
-                base_url=self.settings.tool_hub_base_url,
-                timeout=self.settings.request_timeout_ms / 1000,
-            ) as client:
+            with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
                 response = client.get(
                     f"{self.settings.tool_hub_internal_api_prefix}/tools",
                     headers={
-                        self.settings.caller_service_header: self.settings.app_name,
+                        self.settings.tool_hub_caller_service_header: self.settings.app_name,
                     },
                 )
                 response.raise_for_status()
@@ -125,13 +142,10 @@ class ToolHubClient:
                 "notReadyComponents": [],
             }
         try:
-            with httpx.Client(
-                base_url=self.settings.tool_hub_base_url,
-                timeout=self._dependency_probe_timeout_seconds(),
-            ) as client:
+            with self._http_client(timeout=self._dependency_probe_timeout_seconds()) as client:
                 response = client.get(
                     "/readyz",
-                    headers={self.settings.caller_service_header: self.settings.app_name},
+                    headers={self.settings.tool_hub_caller_service_header: self.settings.app_name},
                 )
         except httpx.HTTPError as exc:
             return {
@@ -150,7 +164,7 @@ class ToolHubClient:
             if isinstance(raw_components, list)
             else []
         )
-        return {
+        readiness = {
             "ready": response.status_code < 400 and status == "ready",
             "status": status,
             "mode": "http",
@@ -158,6 +172,10 @@ class ToolHubClient:
             "httpStatus": response.status_code,
             "notReadyComponents": not_ready_components,
         }
+        strict_remote_discovery_enabled = self._dependency_probe_strict_remote_discovery(payload)
+        if strict_remote_discovery_enabled is not None:
+            readiness["strictRemoteDiscoveryEnabled"] = strict_remote_discovery_enabled
+        return readiness
 
     def _invoke_locally(
         self,
@@ -186,7 +204,7 @@ class ToolHubClient:
                     code=4040001,
                 )
                 continue
-            idempotency_key = self._build_idempotency_key(item, trace)
+            idempotency_key = self._build_idempotency_key(item, trace, message_id=message_id)
             local_context = self._build_context(item, user_profile, trace, operator_id, idempotency_key, message_id)
             result = tool.invoke(
                 ToolInvocationRequest(
@@ -225,10 +243,10 @@ class ToolHubClient:
         operator_id: str = "orchestrator",
         message_id: str | None = None,
     ) -> Iterable[ToolInvocation]:
-        with httpx.Client(base_url=self.settings.tool_hub_base_url, timeout=self.settings.request_timeout_ms / 1000) as client:
+        with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
             for item in tool_plan:
                 started = time.perf_counter()
-                idempotency_key = self._build_idempotency_key(item, trace)
+                idempotency_key = self._build_idempotency_key(item, trace, message_id=message_id)
                 try:
                     response = self._request_tool_call(
                         client=client,
@@ -276,6 +294,16 @@ class ToolHubClient:
                     )
                     continue
                 except httpx.HTTPStatusError as exc:
+                    if self._allow_local_degraded_fallback() and self._should_fallback_on_gateway_status(exc):
+                        yield self._invoke_locally_with_fallback_tag(
+                            item,
+                            user_profile,
+                            trace,
+                            operator_id,
+                            message_id,
+                            fallback_tag="degraded-http-connect-fallback",
+                        )
+                        continue
                     detail = self._http_error_detail(exc.response)
                     yield self._http_error_invocation(
                         item=item,
@@ -351,7 +379,7 @@ class ToolHubClient:
                 ready=False,
                 available=False,
             )
-        idempotency_key = self._build_idempotency_key(item, trace)
+        idempotency_key = self._build_idempotency_key(item, trace, message_id=message_id)
         context = self._build_context(item, user_profile, trace, operator_id, idempotency_key, message_id)
         return preflight_tool_invocation(
             tool.definition,
@@ -372,8 +400,8 @@ class ToolHubClient:
         message_id: str | None = None,
     ) -> ToolPreflightResult:
         try:
-            with httpx.Client(base_url=self.settings.tool_hub_base_url, timeout=self.settings.request_timeout_ms / 1000) as client:
-                idempotency_key = self._build_idempotency_key(item, trace)
+            with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
+                idempotency_key = self._build_idempotency_key(item, trace, message_id=message_id)
                 response = self._request_tool_preflight(
                     client=client,
                     item=item,
@@ -443,13 +471,21 @@ class ToolHubClient:
         )
 
     @staticmethod
-    def _build_idempotency_key(item: ToolPlanItem, trace: TraceContext | None = None) -> str:
+    def _build_idempotency_key(
+        item: ToolPlanItem,
+        trace: TraceContext | None = None,
+        *,
+        message_id: str | None = None,
+    ) -> str:
         conversation_id = (
             trace.conversation_id
             if trace and trace.conversation_id
             else str(item.payload.get("conversation_id", "unknown"))
         )
-        return f"tool-{conversation_id}-{item.tool_call_id}"
+        scoped_message_id = (message_id or "").strip()
+        if not scoped_message_id:
+            return f"tool-{conversation_id}-{item.tool_call_id}"
+        return f"tool-{conversation_id}-{scoped_message_id}-{item.tool_call_id}"
 
     def _request_tool_call(
         self,
@@ -526,7 +562,7 @@ class ToolHubClient:
             self.settings.conversation_id_header: trace.conversation_id if trace and trace.conversation_id else "unknown",
             self.settings.message_id_header: message_id or item.tool_call_id,
             self.settings.tenant_id_header: user_profile.tenant_id,
-            self.settings.caller_service_header: self.settings.app_name,
+            self.settings.tool_hub_caller_service_header: self.settings.app_name,
             self.settings.tool_call_id_header: item.tool_call_id,
             self.settings.idempotency_key_header: idempotency_key,
         }
@@ -661,7 +697,7 @@ class ToolHubClient:
         trace: TraceContext | None = None,
         operator_id: str = "orchestrator-service",
     ) -> Iterable[CompensationExecutionRecord]:
-        with httpx.Client(base_url=self.settings.tool_hub_base_url, timeout=self.settings.request_timeout_ms / 1000) as client:
+        with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
             for step in compensation_steps:
                 started = time.perf_counter()
                 idempotency_key = self._compensation_idempotency_key(step, trace)
@@ -681,7 +717,7 @@ class ToolHubClient:
                             self.settings.request_id_header: trace.request_id if trace and trace.request_id else step.step_id,
                             self.settings.trace_id_header: trace.trace_id if trace and trace.trace_id else step.step_id,
                             self.settings.conversation_id_header: trace.conversation_id if trace and trace.conversation_id else step.saga_id.replace("saga-", "", 1),
-                            self.settings.caller_service_header: self.settings.app_name,
+                            self.settings.tool_hub_caller_service_header: self.settings.app_name,
                             self.settings.idempotency_key_header: idempotency_key,
                         },
                     )
@@ -729,6 +765,15 @@ class ToolHubClient:
                     )
                     continue
                 except httpx.HTTPStatusError as exc:
+                    if self._allow_local_degraded_fallback() and self._should_fallback_on_gateway_status(exc):
+                        yield next(
+                            self._execute_compensations_locally(
+                                [step],
+                                trace,
+                                operator_id,
+                            )
+                        )
+                        continue
                     detail = self._http_error_detail(exc.response)
                     yield CompensationExecutionRecord(
                         step_id=step.step_id,
@@ -861,8 +906,23 @@ class ToolHubClient:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    @staticmethod
+    def _dependency_probe_strict_remote_discovery(payload: dict[str, object]) -> bool | None:
+        runtime = payload.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        transport = runtime.get("businessToolsTransport")
+        if not isinstance(transport, dict):
+            return None
+        value = transport.get("strictRemoteDiscoveryEnabled")
+        return value if isinstance(value, bool) else None
+
     def _allow_local_degraded_fallback(self) -> bool:
         return self.settings.app_env in {"local", "dev", "test"}
+
+    @staticmethod
+    def _should_fallback_on_gateway_status(exc: httpx.HTTPStatusError) -> bool:
+        return exc.response is not None and exc.response.status_code in {502, 503, 504}
 
     def _local_runtime_activation_mode(self) -> Literal["transport-local", "degraded-fallback"]:
         return "transport-local" if self.settings.tool_hub_transport != "http" else "degraded-fallback"

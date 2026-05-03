@@ -70,12 +70,19 @@ def build_report() -> dict[str, object]:
             service="auth-user-service",
             name="auth-store-has-database-runtime-surface",
             detail=(
-                "auth-user-service uses a SQLAlchemy-backed store with a configurable database runtime and JSON bootstrap fallback"
+                "auth-user-service uses a SQLAlchemy-backed store and now publishes canonical runtime_mode/backends health evidence for mysql/sqlite/redis selection"
             ),
             file_markers={
                 "apps/auth-user-service/app/core/config.py": (
                     "AUTH_USER_SERVICE_DATABASE_URL",
                     "SMARTCLOUD_MYSQL_DSN",
+                ),
+                "apps/auth-user-service/app/services/runtime_health.py": (
+                    '"runtime_mode"',
+                    '"backends"',
+                    '"redis": _backend_record(',
+                    '"sqlite": _backend_record(',
+                    '"mysql": _backend_record(',
                 ),
                 "apps/auth-user-service/app/store.py": (
                     "create_engine",
@@ -222,19 +229,34 @@ def build_report() -> dict[str, object]:
             service="marketing-service",
             name="marketing-runtime-surface-is-db-backed-with-optional-minio-artifacts",
             detail=(
-                "marketing-service uses a SQLAlchemy-backed task store plus an optional MinIO poster artifact writer; Redis currently appears only as a declared config key, not an active runtime persistence path"
+                "marketing-service uses a SQLAlchemy-backed task store plus Mongo-backed asset documents, an optional MinIO poster artifact writer, and Celery/Redis queue evidence when configured"
             ),
             file_markers={
                 "apps/marketing-service/app/core/config.py": (
                     "MARKETING_SERVICE_DATABASE_URL",
                     "SMARTCLOUD_MYSQL_DSN",
+                    "MARKETING_SERVICE_CELERY_BROKER_URL",
+                    "MARKETING_SERVICE_CELERY_RESULT_BACKEND",
                     "SMARTCLOUD_REDIS_URL",
+                    "SMARTCLOUD_MONGODB_URI",
                     "SMARTCLOUD_MINIO_ENDPOINT",
+                ),
+                "apps/marketing-service/app/routes.py": (
+                    '"runtime_mode"',
+                    '"backends"',
+                    '"minio": _backend_record(',
+                    '"redis": _backend_record(',
+                    '"celery": _backend_record(',
+                    '"mongodb": _backend_record(',
+                    '"sqlite": _backend_record(',
+                    '"mysql": _backend_record(',
                 ),
                 "apps/marketing-service/app/store.py": (
                     "create_engine",
                     "PosterArtifactStorage",
                     "put_object",
+                    "process_poster_task",
+                    "delete_poster_task",
                 ),
             },
         ),
@@ -288,18 +310,28 @@ def build_report() -> dict[str, object]:
             service="research-service",
             name="research-runtime-surface-is-db-backed-with-config-only-redis-key",
             detail=(
-                "research-service uses a SQLAlchemy-backed task store; Redis currently appears only as a declared config key and is not part of the active runtime persistence path"
+                "research-service uses a SQLAlchemy-backed task store plus Mongo-backed report documents and now publishes canonical runtime_mode/backends health evidence for mysql/sqlite/redis/mongodb selection"
             ),
             file_markers={
                 "apps/research-service/app/core/config.py": (
                     "RESEARCH_SERVICE_DATABASE_URL",
                     "SMARTCLOUD_MYSQL_DSN",
+                    "SMARTCLOUD_MONGODB_URI",
                     "SMARTCLOUD_REDIS_URL",
+                ),
+                "apps/research-service/app/routes.py": (
+                    '"runtime_mode"',
+                    '"backends"',
+                    '"redis": _backend_record(',
+                    '"mongodb": _backend_record(',
+                    '"sqlite": _backend_record(',
+                    '"mysql": _backend_record(',
                 ),
                 "apps/research-service/app/store.py": (
                     "create_engine",
                     "sessionmaker",
                     "ResearchTaskRow",
+                    "delete_task",
                 ),
             },
         ),
@@ -352,13 +384,20 @@ def build_report() -> dict[str, object]:
             service="orchestrator-service",
             name="orchestrator-runtime-surface-is-mysql-redis-capable",
             detail=(
-                "orchestrator-service now exposes MySQL and Redis runtime settings for conversations, state, agent config, and SSE replay"
+                "orchestrator-service now exposes MySQL, Redis, and Mongo document-store runtime settings for conversations, state, agent config, and SSE replay"
             ),
             file_markers={
                 "apps/orchestrator-service/app/core/config.py": (
                     "SMARTCLOUD_MYSQL_DSN",
+                    "SMARTCLOUD_MONGODB_URI",
                     "SMARTCLOUD_REDIS_URL",
                     "ORCHESTRATOR_REDIS_NAMESPACE",
+                ),
+                "apps/orchestrator-service/app/services/mongo_runtime.py": (
+                    "conversation_messages",
+                    "agent_reasoning_logs",
+                    "raw_tool_payloads",
+                    "session_snapshots",
                 ),
                 "apps/orchestrator-service/app/services/runtime_mysql.py": (
                     "normalize_mysql_dsn",
@@ -591,7 +630,7 @@ def build_report() -> dict[str, object]:
         },
         "marketing-service": {
             "mode": "database-backed-tasks-plus-optional-minio-artifacts",
-            "desiredBackends": ["mysql", "minio-optional", "redis-config-only"],
+            "desiredBackends": ["mysql", "mongodb", "minio-optional", "redis-celery-optional"],
             "qaEntrypoints": [
                 "tests/integration/test_service_smoke.py",
                 "scripts/qa/project_smoke.py",
@@ -599,8 +638,8 @@ def build_report() -> dict[str, object]:
             ],
         },
         "research-service": {
-            "mode": "database-backed-tasks-with-config-only-redis-key",
-            "desiredBackends": ["mysql", "redis-config-only"],
+            "mode": "database-backed-tasks-with-mongodb-report-documents",
+            "desiredBackends": ["mysql", "mongodb", "redis-config-only"],
             "qaEntrypoints": [
                 "tests/integration/test_service_smoke.py",
                 "scripts/qa/project_smoke.py",
@@ -608,8 +647,8 @@ def build_report() -> dict[str, object]:
             ],
         },
         "orchestrator-service": {
-            "mode": "mysql-plus-redis-capable",
-            "desiredBackends": ["mysql", "redis"],
+            "mode": "mysql-plus-mongodb-plus-redis-capable",
+            "desiredBackends": ["mysql", "mongodb", "redis"],
             "qaEntrypoints": [
                 "tests/integration/test_service_smoke.py",
                 "scripts/qa/project_smoke.py",

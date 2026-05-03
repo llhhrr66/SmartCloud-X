@@ -84,13 +84,45 @@ def test_build_settings_derives_degraded_runtime_paths_for_redis_backends(tmp_pa
     assert settings.query_cache_store_path == str(runtime_dir / "degraded-query-cache-store.json")
 
 
-def test_build_settings_requires_redis_in_prod(tmp_path: Path) -> None:
+def test_build_settings_marks_local_runtime_mode_when_no_redis_backend(tmp_path: Path) -> None:
     config_dir = tmp_path / "config" / "settings"
     config_dir.mkdir(parents=True)
-    (config_dir / "prod.yaml").write_text("", encoding="utf-8")
+    (config_dir / "dev.yaml").write_text("", encoding="utf-8")
+
+    settings = build_settings(
+        service_root=tmp_path,
+        environ={"APP_ENV": "dev"},
+    )
+
+    assert settings.runtime_mode == "local-fallback"
+    assert settings.release_readiness_required_components == ["redis"]
+    assert settings.local_fallback_components == []
+
+
+def test_build_settings_marks_mixed_runtime_mode_when_dev_uses_degraded_redis_storage(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "dev.yaml").write_text("", encoding="utf-8")
+
+    settings = build_settings(
+        service_root=tmp_path,
+        environ={
+            "APP_ENV": "dev",
+            "SMARTCLOUD_REDIS_URL": "redis://redis.test:6379/0",
+        },
+    )
+
+    assert settings.runtime_mode == "mixed"
+    assert settings.local_fallback_components == ["idempotency_store", "query_cache_store"]
+
+
+def test_build_settings_requires_redis_in_staging(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "staging.yaml").write_text("", encoding="utf-8")
 
     with pytest.raises(ValueError, match="SMARTCLOUD_REDIS_URL"):
         build_settings(
             service_root=tmp_path,
-            environ={"APP_ENV": "prod"},
+            environ={"APP_ENV": "staging"},
         )

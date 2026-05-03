@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
 from app.models.admin import AdminAsyncJob, KnowledgeBaseProfile, KnowledgeDocumentProfile
+from app.models.knowledge import IngestionJob, KnowledgeChunk, KnowledgeDocument, KnowledgeSource
 
 try:
     import pymysql
@@ -17,6 +18,14 @@ class KnowledgeMetadataState:
     knowledge_base_profiles: list[KnowledgeBaseProfile]
     document_profiles: list[KnowledgeDocumentProfile]
     admin_jobs: list[AdminAsyncJob]
+
+
+@dataclass(frozen=True)
+class KnowledgeRuntimeState:
+    sources: list[KnowledgeSource]
+    documents: list[KnowledgeDocument]
+    chunks: list[KnowledgeChunk]
+    ingestions: list[IngestionJob]
 
 
 class MySQLKnowledgeMetadataBackend:
@@ -368,4 +377,375 @@ class MySQLKnowledgeMetadataBackend:
             error_code=row.get("error_code"),
             error_message=row.get("error_message"),
             finished_at=row.get("finished_at"),
+        )
+
+
+class MySQLKnowledgeRuntimeBackend(MySQLKnowledgeMetadataBackend):
+    SOURCE_TABLE = "knowledge_runtime_sources"
+    RUNTIME_DOCUMENT_TABLE = "knowledge_runtime_documents"
+    CHUNK_TABLE = "knowledge_runtime_chunks"
+    INGESTION_TABLE = "knowledge_runtime_ingestions"
+
+    def _ensure_schema(self, cursor) -> None:
+        super()._ensure_schema(cursor)
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{self.SOURCE_TABLE}` (
+              source_id VARCHAR(64) PRIMARY KEY,
+              name VARCHAR(255) NOT NULL,
+              kind VARCHAR(64) NOT NULL,
+              uri LONGTEXT NULL,
+              tags_json LONGTEXT NOT NULL,
+              document_count INT NOT NULL,
+              chunk_count INT NOT NULL,
+              created_at VARCHAR(64) NOT NULL,
+              updated_at VARCHAR(64) NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{self.RUNTIME_DOCUMENT_TABLE}` (
+              doc_id VARCHAR(64) PRIMARY KEY,
+              source_id VARCHAR(64) NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              content LONGTEXT NOT NULL,
+              tags_json LONGTEXT NOT NULL,
+              language VARCHAR(64) NOT NULL,
+              checksum VARCHAR(64) NOT NULL,
+              chunk_ids_json LONGTEXT NOT NULL,
+              created_at VARCHAR(64) NOT NULL,
+              updated_at VARCHAR(64) NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{self.CHUNK_TABLE}` (
+              chunk_id VARCHAR(64) PRIMARY KEY,
+              source_id VARCHAR(64) NOT NULL,
+              document_id VARCHAR(64) NOT NULL,
+              document_title VARCHAR(255) NOT NULL,
+              ordinal INT NOT NULL,
+              content LONGTEXT NOT NULL,
+              token_estimate INT NOT NULL,
+              keywords_json LONGTEXT NOT NULL,
+              tags_json LONGTEXT NOT NULL,
+              created_at VARCHAR(64) NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{self.INGESTION_TABLE}` (
+              ingestion_id VARCHAR(64) PRIMARY KEY,
+              source_id VARCHAR(64) NOT NULL,
+              document_id VARCHAR(64) NOT NULL,
+              status VARCHAR(64) NOT NULL,
+              documents_received INT NOT NULL,
+              chunks_created INT NOT NULL,
+              warnings_json LONGTEXT NOT NULL,
+              created_at VARCHAR(64) NOT NULL,
+              completed_at VARCHAR(64) NOT NULL
+            )
+            """
+        )
+
+    def sync_runtime_from_local(
+        self,
+        *,
+        sources: list[KnowledgeSource],
+        documents: list[KnowledgeDocument],
+        chunks: list[KnowledgeChunk],
+        ingestions: list[IngestionJob],
+    ) -> None:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                for source in sources:
+                    self._upsert_source(cursor, source)
+                for document in documents:
+                    self._upsert_runtime_document(cursor, document)
+                if documents:
+                    document_ids = [document.id for document in documents]
+                    cursor.execute(
+                        f"DELETE FROM `{self.CHUNK_TABLE}` WHERE document_id IN ({', '.join(['%s'] * len(document_ids))})",
+                        tuple(document_ids),
+                    )
+                for chunk in chunks:
+                    self._upsert_chunk(cursor, chunk)
+                for ingestion in ingestions:
+                    self._upsert_ingestion_job(cursor, ingestion)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def load_runtime_state(self) -> KnowledgeRuntimeState:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                cursor.execute(
+                    f"""
+                    SELECT source_id, name, kind, uri, tags_json, document_count, chunk_count, created_at, updated_at
+                    FROM `{self.SOURCE_TABLE}`
+                    """
+                )
+                source_rows = cursor.fetchall() or []
+                cursor.execute(
+                    f"""
+                    SELECT doc_id, source_id, title, content, tags_json, language, checksum, chunk_ids_json, created_at, updated_at
+                    FROM `{self.RUNTIME_DOCUMENT_TABLE}`
+                    """
+                )
+                document_rows = cursor.fetchall() or []
+                cursor.execute(
+                    f"""
+                    SELECT chunk_id, source_id, document_id, document_title, ordinal, content, token_estimate,
+                           keywords_json, tags_json, created_at
+                    FROM `{self.CHUNK_TABLE}`
+                    ORDER BY document_id, ordinal, chunk_id
+                    """
+                )
+                chunk_rows = cursor.fetchall() or []
+                cursor.execute(
+                    f"""
+                    SELECT ingestion_id, source_id, document_id, status, documents_received, chunks_created,
+                           warnings_json, created_at, completed_at
+                    FROM `{self.INGESTION_TABLE}`
+                    """
+                )
+                ingestion_rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+
+        return KnowledgeRuntimeState(
+            sources=[self._build_source(row) for row in source_rows],
+            documents=[self._build_runtime_document(row) for row in document_rows],
+            chunks=[self._build_chunk(row) for row in chunk_rows],
+            ingestions=[self._build_ingestion_job(row) for row in ingestion_rows],
+        )
+
+    def upsert_source(self, source: KnowledgeSource) -> None:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                self._upsert_source(cursor, source)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def upsert_document(self, document: KnowledgeDocument) -> None:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                self._upsert_runtime_document(cursor, document)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def replace_document_chunks(self, document_id: str, chunks: list[KnowledgeChunk]) -> None:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                cursor.execute(
+                    f"DELETE FROM `{self.CHUNK_TABLE}` WHERE document_id = %s",
+                    (document_id,),
+                )
+                for chunk in chunks:
+                    self._upsert_chunk(cursor, chunk)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def upsert_ingestion_job(self, job: IngestionJob) -> None:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                self._ensure_schema(cursor)
+                self._upsert_ingestion_job(cursor, job)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _upsert_source(self, cursor, source: KnowledgeSource) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO `{self.SOURCE_TABLE}` (
+              source_id, name, kind, uri, tags_json, document_count, chunk_count, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              name = VALUES(name),
+              kind = VALUES(kind),
+              uri = VALUES(uri),
+              tags_json = VALUES(tags_json),
+              document_count = VALUES(document_count),
+              chunk_count = VALUES(chunk_count),
+              created_at = VALUES(created_at),
+              updated_at = VALUES(updated_at)
+            """,
+            (
+                source.id,
+                source.name,
+                source.kind,
+                source.uri,
+                json.dumps(source.tags, ensure_ascii=False),
+                source.document_count,
+                source.chunk_count,
+                source.created_at,
+                source.updated_at,
+            ),
+        )
+
+    @staticmethod
+    def _build_source(row: dict[str, object]) -> KnowledgeSource:
+        return KnowledgeSource(
+            id=str(row["source_id"]),
+            name=str(row["name"]),
+            kind=str(row["kind"]),
+            uri=row.get("uri"),
+            tags=json.loads(row["tags_json"]) if row.get("tags_json") else [],
+            document_count=int(row["document_count"]),
+            chunk_count=int(row["chunk_count"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def _upsert_runtime_document(self, cursor, document: KnowledgeDocument) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO `{self.RUNTIME_DOCUMENT_TABLE}` (
+              doc_id, source_id, title, content, tags_json, language, checksum, chunk_ids_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              source_id = VALUES(source_id),
+              title = VALUES(title),
+              content = VALUES(content),
+              tags_json = VALUES(tags_json),
+              language = VALUES(language),
+              checksum = VALUES(checksum),
+              chunk_ids_json = VALUES(chunk_ids_json),
+              created_at = VALUES(created_at),
+              updated_at = VALUES(updated_at)
+            """,
+            (
+                document.id,
+                document.source_id,
+                document.title,
+                document.content,
+                json.dumps(document.tags, ensure_ascii=False),
+                document.language,
+                document.checksum,
+                json.dumps(document.chunk_ids, ensure_ascii=False),
+                document.created_at,
+                document.updated_at,
+            ),
+        )
+
+    @staticmethod
+    def _build_runtime_document(row: dict[str, object]) -> KnowledgeDocument:
+        return KnowledgeDocument(
+            id=str(row["doc_id"]),
+            source_id=str(row["source_id"]),
+            title=str(row["title"]),
+            content=str(row["content"]),
+            tags=json.loads(row["tags_json"]) if row.get("tags_json") else [],
+            language=str(row["language"]),
+            checksum=str(row["checksum"]),
+            chunk_ids=json.loads(row["chunk_ids_json"]) if row.get("chunk_ids_json") else [],
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def _upsert_chunk(self, cursor, chunk: KnowledgeChunk) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO `{self.CHUNK_TABLE}` (
+              chunk_id, source_id, document_id, document_title, ordinal, content, token_estimate, keywords_json, tags_json, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              source_id = VALUES(source_id),
+              document_id = VALUES(document_id),
+              document_title = VALUES(document_title),
+              ordinal = VALUES(ordinal),
+              content = VALUES(content),
+              token_estimate = VALUES(token_estimate),
+              keywords_json = VALUES(keywords_json),
+              tags_json = VALUES(tags_json),
+              created_at = VALUES(created_at)
+            """,
+            (
+                chunk.id,
+                chunk.source_id,
+                chunk.document_id,
+                chunk.document_title,
+                chunk.ordinal,
+                chunk.content,
+                chunk.token_estimate,
+                json.dumps(chunk.keywords, ensure_ascii=False),
+                json.dumps(chunk.tags, ensure_ascii=False),
+                chunk.created_at,
+            ),
+        )
+
+    @staticmethod
+    def _build_chunk(row: dict[str, object]) -> KnowledgeChunk:
+        return KnowledgeChunk(
+            id=str(row["chunk_id"]),
+            source_id=str(row["source_id"]),
+            document_id=str(row["document_id"]),
+            document_title=str(row["document_title"]),
+            ordinal=int(row["ordinal"]),
+            content=str(row["content"]),
+            token_estimate=int(row["token_estimate"]),
+            keywords=json.loads(row["keywords_json"]) if row.get("keywords_json") else [],
+            tags=json.loads(row["tags_json"]) if row.get("tags_json") else [],
+            created_at=str(row["created_at"]),
+        )
+
+    def _upsert_ingestion_job(self, cursor, job: IngestionJob) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO `{self.INGESTION_TABLE}` (
+              ingestion_id, source_id, document_id, status, documents_received, chunks_created, warnings_json, created_at, completed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              source_id = VALUES(source_id),
+              document_id = VALUES(document_id),
+              status = VALUES(status),
+              documents_received = VALUES(documents_received),
+              chunks_created = VALUES(chunks_created),
+              warnings_json = VALUES(warnings_json),
+              created_at = VALUES(created_at),
+              completed_at = VALUES(completed_at)
+            """,
+            (
+                job.id,
+                job.source_id,
+                job.document_id,
+                job.status,
+                job.documents_received,
+                job.chunks_created,
+                json.dumps(job.warnings, ensure_ascii=False),
+                job.created_at,
+                job.completed_at,
+            ),
+        )
+
+    @staticmethod
+    def _build_ingestion_job(row: dict[str, object]) -> IngestionJob:
+        return IngestionJob(
+            id=str(row["ingestion_id"]),
+            source_id=str(row["source_id"]),
+            document_id=str(row["document_id"]),
+            status=str(row["status"]),
+            documents_received=int(row["documents_received"]),
+            chunks_created=int(row["chunks_created"]),
+            warnings=json.loads(row["warnings_json"]) if row.get("warnings_json") else [],
+            created_at=str(row["created_at"]),
+            completed_at=str(row["completed_at"]),
         )

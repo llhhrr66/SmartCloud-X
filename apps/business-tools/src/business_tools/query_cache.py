@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import time
@@ -180,8 +181,9 @@ class ToolQueryCacheStore:
             "backendError": self._backend_error,
         }
 
-    def _key(self, tool_name: str, fingerprint: str) -> str:
-        return f"{self._redis_namespace}:{tool_name}:{fingerprint}"
+    def _key(self, tool_name: str, fingerprint: str, *, legacy: bool = False) -> str:
+        fingerprint_fragment = fingerprint if legacy else hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+        return f"{self._redis_namespace}:{tool_name}:{fingerprint_fragment}"
 
     def _get_from_redis(
         self,
@@ -191,24 +193,26 @@ class ToolQueryCacheStore:
         client = self._redis_client
         if client is None or not self._enabled:
             return None
-        key = self._key(tool_name, fingerprint)
-        try:
-            payload = client.get(key)
-        except Exception as exc:
-            self._degrade_backend(exc)
-            return None
-        if not isinstance(payload, str) or not payload.strip():
-            return None
-        try:
-            result = ToolExecutionResult.model_validate(json.loads(payload))
-        except Exception:
+        for legacy in (False, True):
+            key = self._key(tool_name, fingerprint, legacy=legacy)
             try:
-                client.delete(key)
+                payload = client.get(key)
+            except Exception as exc:
+                self._degrade_backend(exc)
+                return None
+            if not isinstance(payload, str) or not payload.strip():
+                continue
+            try:
+                result = ToolExecutionResult.model_validate(json.loads(payload))
             except Exception:
-                pass
-            return None
-        ttl_seconds = self._ttl_from_redis(client, key)
-        return result, ttl_seconds
+                try:
+                    client.delete(key)
+                except Exception:
+                    pass
+                return None
+            ttl_seconds = self._ttl_from_redis(client, key)
+            return result, ttl_seconds
+        return None
 
     def _ttl_from_redis(self, client, key: str) -> int | None:
         ttl_reader = getattr(client, "ttl", None)

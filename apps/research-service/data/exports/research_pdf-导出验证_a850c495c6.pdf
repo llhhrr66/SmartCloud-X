@@ -1,0 +1,30 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 7 0 R >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 84 >> stream
+BT /F1 12 Tf 50 780 Td (Research export fallback - see EmbeddedJSON metadata) Tj ET
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+6 0 obj << /Type /EmbeddedFile /Subtype /application#2Fjson /Length 1255 >> stream
+{"topic":"PDF 导出验证","output_format":"pdf","markdown":"# PDF 导出验证\n\n## 摘要\n围绕“PDF 导出验证”完成了 standard 深度研究草稿，重点覆盖 PDF, 导出验证, 确认，并结合 1 份参考输入整理出结论、风险和下一步动作。\n\n## 研究范围\n确认 pdf 导出包含可恢复 markdown 内容\n\n## 任务配置\n- 深度: standard\n- 输出格式: pdf\n- 引用数量: 1\n\n## 输入参考链接\n- https://example.com/pdf-proof\n\n## 研究范围\n确认 pdf 导出包含可恢复 markdown 内容\n\n## 关键发现\n该主题当前最值得关注的维度包括：PDF, 导出验证, 确认, pdf。 参考来源主要来自 example.com。\n\n## 建议动作\n建议先按 pdf 交付形式沉淀可复用结论，再补充针对“PDF 导出验证”的验证数据和成本评估。\n\n## 引用\n1. [输入参考 1](https://example.com/pdf-proof)\n   - 摘要: 与“PDF 导出验证”相关的输入参考，重点用于支持 PDF 维度。\n\n## 元数据\n- provider: placeholder\n- depth: standard\n- output_format: pdf\n- reference_url_count: 1\n- topic_keywords: ['PDF', '导出验证', '确认', 'pdf', '导出包含可恢复', 'markdown', '内容']\n- reference_domains: ['example.com']\n"}
+endstream
+endobj
+7 0 obj << /Names [(research-export.json) 8 0 R] >> endobj
+8 0 obj << /Type /Filespec /F (research-export.json) /EF << /F 6 0 R >> /Desc (EmbeddedJSON markdown export) >> endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000092 00000 n 
+0000000149 00000 n 
+0000000275 00000 n 
+0000000408 00000 n 
+0000000478 00000 n 
+0000001834 00000 n 
+0000001893 00000 n 
+trailer << /Size 9 /Root 1 0 R >>
+startxref
+2012
+%%EOF

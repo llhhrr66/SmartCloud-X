@@ -36,7 +36,10 @@ class KnowledgeServiceClient:
             smartcloud_search_tag_filter_count=len(request.filters.tags),
         ) as span:
             outbound_headers = inject_current_context(dict(headers or {}))
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_ms / 1000) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_ms / 1000,
+                trust_env=False,
+            ) as client:
                 response = await client.post(
                     f"{self.settings.knowledge_service_base_url.rstrip('/')}"
                     f"{self.settings.knowledge_service_api_prefix}/search",

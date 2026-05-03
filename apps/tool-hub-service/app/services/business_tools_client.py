@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlparse
 
 import httpx
+from opentelemetry import trace
 
 from app.core.business_tools_sdk import (
     BusinessTool,
@@ -28,6 +30,7 @@ from app.models.tools import (
     ToolCallRequest,
     ToolCallResponse,
 )
+from app.core.observability import annotate_current_span, mark_upstream_error, span_or_noop
 
 
 class _DefinitionOnlyTool:
@@ -35,16 +38,90 @@ class _DefinitionOnlyTool:
         self.definition = definition
 
 
+class BusinessToolsInvokeHttpError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        message: str,
+        provider: str,
+        retryable: bool,
+        attempts: int,
+        details: dict[str, object] | None = None,
+        status: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.provider = provider
+        self.retryable = retryable
+        self.attempts = attempts
+        self.details = details or {}
+        self.status = status
+
+
 class BusinessToolsClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._catalog = build_catalog()
 
-    def invoke_call(self, tool: BusinessTool, request: ToolCallRequest) -> ToolCallResponse:
-        try:
-            definition = self.describe_tool(request.tool_name) or tool.definition
-        except (httpx.HTTPError, ValueError, BusinessToolsDiscoveryUnavailableError):
-            definition = tool.definition
+    def _http_client(self, *, timeout: float) -> httpx.Client:
+        kwargs: dict[str, object] = {
+            "base_url": self.settings.business_tools_base_url,
+            "timeout": timeout,
+        }
+        if self._is_loopback_base_url(self.settings.business_tools_base_url):
+            kwargs["trust_env"] = False
+        return httpx.Client(**kwargs)
+
+    @staticmethod
+    def _is_loopback_base_url(base_url: str) -> bool:
+        hostname = (urlparse(base_url).hostname or "").lower()
+        return hostname in {"127.0.0.1", "localhost", "::1"}
+
+    def invoke_call(
+        self,
+        tool: BusinessTool | None,
+        request: ToolCallRequest,
+        *,
+        definition: ToolDefinition | None = None,
+    ) -> ToolCallResponse:
+        effective_definition = definition
+        if effective_definition is None:
+            try:
+                resolved_definition = self.describe_tool(request.tool_name)
+                if resolved_definition is None:
+                    effective_definition = None if self._strict_remote_discovery_enabled() else (tool.definition if tool is not None else None)
+                else:
+                    effective_definition = resolved_definition
+            except BusinessToolsDiscoveryUnavailableError:
+                if self._strict_remote_discovery_enabled():
+                    raise
+                effective_definition = tool.definition if tool is not None else None
+            except (httpx.HTTPError, ValueError):
+                effective_definition = tool.definition if tool is not None else None
+        if effective_definition is None:
+            provider = "business-tools-service" if self.settings.business_tools_transport == "http" else "business-tools"
+            return ToolCallResponse(
+                success=False,
+                code=4040001,
+                message=f"Unknown tool: {request.tool_name}",
+                status="missing-tool",
+                summary=f"Unknown tool: {request.tool_name}",
+                result={},
+                data={},
+                citations=[],
+                audit_tags=[],
+                tool_call_id=request.tool_call_id,
+                latency_ms=0,
+                provider=provider,
+                error=ToolCallError(
+                    retryable=False,
+                    provider=provider,
+                    details={"tool_name": request.tool_name},
+                ),
+                idempotency_key=request.idempotency_key,
+                attempts=0,
+            )
+        definition = effective_definition
         effective_tool = _DefinitionOnlyTool(definition)
         attempts = 0
         max_attempts = 1 + (self.settings.tool_retry_attempts if definition.idempotent else 0)
@@ -54,13 +131,23 @@ class BusinessToolsClient:
             attempts += 1
             attempt_started = time.perf_counter()
             try:
-                response = (
-                    self._invoke_via_http(effective_tool, request)
-                    if self.settings.business_tools_transport == "http"
-                    else self._invoke_locally(tool, request)
-                )
+                with span_or_noop(
+                    "tool_hub.business_tools.execute",
+                    attributes={
+                        "tool_name": request.tool_name,
+                        "operation": request.operation,
+                        "provider": definition.provider,
+                        "idempotency_key": request.idempotency_key,
+                    },
+                ):
+                    if self.settings.business_tools_transport == "http":
+                        response = self._invoke_via_http(effective_tool, request)
+                    else:
+                        if tool is None:
+                            raise ValueError(f"Unknown local tool: {request.tool_name}")
+                        response = self._invoke_locally(tool, request)
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                if self._allow_local_degraded_fallback():
+                if self._allow_local_degraded_fallback() and tool is not None:
                     response = self._mark_local_fallback(
                         self._invoke_locally(tool, request),
                         fallback_tag="degraded-http-connect-fallback",
@@ -109,6 +196,38 @@ class BusinessToolsClient:
                     idempotency_key=request.idempotency_key,
                     attempts=attempts,
                 )
+            except httpx.HTTPStatusError as exc:
+                if self._allow_local_degraded_fallback() and tool is not None and self._should_fallback_on_gateway_status(exc):
+                    response = self._mark_local_fallback(
+                        self._invoke_locally(tool, request),
+                        fallback_tag="degraded-http-connect-fallback",
+                    )
+                else:
+                    retryable = self._retryable_http_status(exc.response.status_code if exc.response is not None else None)
+                    response = ToolCallResponse(
+                        success=False,
+                        code=5003001,
+                        message="downstream http error",
+                        status="failed",
+                        summary="downstream http error",
+                        result={},
+                        data={},
+                        citations=[],
+                        audit_tags=[],
+                        tool_call_id=request.tool_call_id,
+                        latency_ms=int((time.perf_counter() - attempt_started) * 1000),
+                        provider=definition.provider,
+                        error=ToolCallError(
+                            retryable=retryable,
+                            provider=definition.provider,
+                            details={
+                                "exception": exc.__class__.__name__,
+                                "status_code": exc.response.status_code if exc.response is not None else None,
+                            },
+                        ),
+                        idempotency_key=request.idempotency_key,
+                        attempts=attempts,
+                    )
             except httpx.HTTPError as exc:
                 response = ToolCallResponse(
                     success=False,
@@ -132,6 +251,9 @@ class BusinessToolsClient:
                     attempts=attempts,
                 )
             response.attempts = attempts
+            if not response.success and response.error is not None:
+                mark_upstream_error(response.provider, response.error.details.get("exception", response.status or "failed"))
+            annotate_current_span(status=response.status, provider=response.provider, latency_ms=response.latency_ms)
             last_response = response
             if response.success:
                 return response
@@ -166,22 +288,73 @@ class BusinessToolsClient:
             tool = self._catalog.get(definition.name)
             if tool is None:
                 raise ValueError(f"Unknown tool: {definition.name}")
-            return tool.invoke(request)
-        try:
-            return self._invoke_tool_via_http(definition, request)
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            if not self._allow_local_degraded_fallback():
-                raise
-            tool = self._catalog.get(definition.name)
-            if tool is None:
-                raise
-            result = tool.invoke(request)
-            return result.model_copy(
-                deep=True,
-                update={
-                    "audit_tags": list(dict.fromkeys([*result.audit_tags, "degraded-http-connect-fallback"])),
-                },
-            )
+            return tool.invoke(request).model_copy(deep=True, update={"attempts": 1})
+
+        local_tool = self._catalog.get(definition.name)
+        attempts = 0
+        max_attempts = 1 + (self.settings.tool_retry_attempts if definition.idempotent else 0)
+
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                result = self._invoke_tool_via_http(definition, request).model_copy(
+                    deep=True,
+                    update={"attempts": attempts},
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if self._allow_local_degraded_fallback() and local_tool is not None:
+                    return self._mark_local_invoke_fallback(
+                        local_tool.invoke(request),
+                        fallback_tag="degraded-http-connect-fallback",
+                        attempts=attempts,
+                    )
+                if attempts < max_attempts:
+                    continue
+                raise self._invoke_http_error(
+                    definition,
+                    attempts=attempts,
+                    retryable=True,
+                    details={"exception": exc.__class__.__name__},
+                ) from exc
+            except httpx.TimeoutException as exc:
+                if attempts < max_attempts:
+                    continue
+                raise self._invoke_http_error(
+                    definition,
+                    attempts=attempts,
+                    retryable=True,
+                    details={"exception": exc.__class__.__name__},
+                    status="timeout",
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                if self._allow_local_degraded_fallback() and local_tool is not None and self._should_fallback_on_gateway_status(exc):
+                    return self._mark_local_invoke_fallback(
+                        local_tool.invoke(request),
+                        fallback_tag="degraded-http-connect-fallback",
+                        attempts=attempts,
+                    )
+                retryable = self._retryable_http_status(exc.response.status_code if exc.response is not None else None)
+                if retryable and attempts < max_attempts:
+                    continue
+                raise self._invoke_http_error(
+                    definition,
+                    attempts=attempts,
+                    retryable=retryable,
+                    details={
+                        "exception": exc.__class__.__name__,
+                        "status_code": exc.response.status_code if exc.response is not None else None,
+                    },
+                ) from exc
+
+            if result.success or not result.retryable or attempts >= max_attempts:
+                return result
+
+        raise self._invoke_http_error(
+            definition,
+            attempts=max_attempts,
+            retryable=False,
+            details={},
+        )
 
     def list_tools(
         self,
@@ -206,6 +379,8 @@ class BusinessToolsClient:
                 query=query,
             )
         except BusinessToolsDiscoveryUnavailableError:
+            if self._strict_remote_discovery_enabled():
+                raise
             return self._local_tool_definitions(
                 capability=capability,
                 mode=mode,
@@ -220,6 +395,8 @@ class BusinessToolsClient:
         try:
             return self._discover_tool(tool_name)
         except BusinessToolsDiscoveryUnavailableError:
+            if self._strict_remote_discovery_enabled():
+                raise
             tool = self._catalog.get(tool_name)
             return tool.definition.model_copy(deep=True) if tool else None
 
@@ -233,10 +410,7 @@ class BusinessToolsClient:
                 "notReadyComponents": [],
             }
         try:
-            with httpx.Client(
-                base_url=self.settings.business_tools_base_url,
-                timeout=self._dependency_probe_timeout_seconds(),
-            ) as client:
+            with self._http_client(timeout=self._dependency_probe_timeout_seconds()) as client:
                 response = client.get(
                     "/readyz",
                     headers={self.settings.caller_service_header: self.settings.app_name},
@@ -267,19 +441,25 @@ class BusinessToolsClient:
             "notReadyComponents": not_ready_components,
         }
 
-    def preflight_call(self, tool_name: str, request: ToolCallRequest) -> ToolPreflightResult:
+    def preflight_call(
+        self,
+        tool_name: str,
+        request: ToolCallRequest,
+        *,
+        definition: ToolDefinition | None = None,
+    ) -> ToolPreflightResult:
         local_tool = self._catalog.get(tool_name)
         local_definition = local_tool.definition.model_copy(deep=True) if local_tool is not None else None
         try:
-            definition = self.describe_tool(tool_name)
+            effective_definition = definition or self.describe_tool(tool_name)
         except (httpx.ConnectError, httpx.ConnectTimeout):
             if self._allow_local_degraded_fallback() and local_definition is not None:
-                definition = local_definition
+                effective_definition = local_definition
             else:
                 return self._unavailable_preflight(tool_name, request.operation, local_definition)
         except (httpx.TimeoutException, httpx.HTTPError, ValueError):
             return self._unavailable_preflight(tool_name, request.operation, local_definition)
-        if definition is None:
+        if effective_definition is None:
             return ToolPreflightResult(
                 tool_name=tool_name,
                 operation=request.operation,
@@ -312,12 +492,9 @@ class BusinessToolsClient:
                 activation_mode=self._local_runtime_activation_mode(),
                 settings=self.settings,
             )
-            return preflight_tool_invocation(definition, invocation)
+            return preflight_tool_invocation(effective_definition, invocation)
         try:
-            with httpx.Client(
-                base_url=self.settings.business_tools_base_url,
-                timeout=self.settings.request_timeout_ms / 1000,
-            ) as client:
+            with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
                 response = client.post(
                     f"{self.settings.business_tools_internal_api_prefix}/preflight/{tool_name}",
                     json={
@@ -333,10 +510,14 @@ class BusinessToolsClient:
             return ToolPreflightResult.model_validate(payload)
         except (httpx.ConnectError, httpx.ConnectTimeout):
             if self._allow_local_degraded_fallback():
-                return preflight_tool_invocation(definition, invocation)
-            return self._unavailable_preflight(tool_name, request.operation, definition)
+                return preflight_tool_invocation(effective_definition, invocation)
+            return self._unavailable_preflight(tool_name, request.operation, effective_definition)
+        except httpx.HTTPStatusError as exc:
+            if self._allow_local_degraded_fallback() and self._should_fallback_on_gateway_status(exc):
+                return preflight_tool_invocation(effective_definition, invocation)
+            return self._unavailable_preflight(tool_name, request.operation, effective_definition)
         except (httpx.TimeoutException, httpx.HTTPError, ValueError):
-            return self._unavailable_preflight(tool_name, request.operation, definition)
+            return self._unavailable_preflight(tool_name, request.operation, effective_definition)
 
     def _invoke_locally(self, tool: BusinessTool, request: ToolCallRequest) -> ToolCallResponse:
         ensure_local_runtime(
@@ -396,10 +577,7 @@ class BusinessToolsClient:
 
     def _invoke_via_http(self, tool: BusinessTool, request: ToolCallRequest) -> ToolCallResponse:
         started = time.perf_counter()
-        with httpx.Client(
-            base_url=self.settings.business_tools_base_url,
-            timeout=tool.definition.timeout_ms / 1000,
-        ) as client:
+        with self._http_client(timeout=tool.definition.timeout_ms / 1000) as client:
             response = client.post(
                 f"{self.settings.business_tools_internal_api_prefix}/execute/{request.tool_name}",
                 json={
@@ -446,10 +624,7 @@ class BusinessToolsClient:
         definition: ToolDefinition,
         request: ToolInvocationRequest,
     ) -> ToolExecutionResult:
-        with httpx.Client(
-            base_url=self.settings.business_tools_base_url,
-            timeout=definition.timeout_ms / 1000,
-        ) as client:
+        with self._http_client(timeout=definition.timeout_ms / 1000) as client:
             response = client.post(
                 f"{self.settings.business_tools_internal_api_prefix}/execute/{definition.name}",
                 json={
@@ -490,6 +665,7 @@ class BusinessToolsClient:
             error_detail=payload.get("error_detail", {}),
             compensation=payload.get("compensation"),
             idempotency_key=payload.get("idempotency_key"),
+            attempts=payload.get("attempts", 1),
             user_action_hint=self._tool_user_action_hint(payload),
         )
 
@@ -540,6 +716,27 @@ class BusinessToolsClient:
                 idempotency_key=request.idempotency_key,
                 attempts=1,
             )
+        except httpx.HTTPStatusError as exc:
+            if self._allow_local_degraded_fallback() and self._should_fallback_on_gateway_status(exc):
+                response = self._invoke_compensation_locally(request)
+            else:
+                response = CompensationCallResponse(
+                    success=False,
+                    code=5003001,
+                    message="downstream http error",
+                    data={},
+                    compensation_id=request.compensation_id,
+                    action_name=request.action_name,
+                    latency_ms=int((time.perf_counter() - attempt_started) * 1000),
+                    provider="business-tools",
+                    error=ToolCallError(
+                        retryable=False,
+                        provider="business-tools",
+                        details={"exception": exc.__class__.__name__},
+                    ),
+                    idempotency_key=request.idempotency_key,
+                    attempts=1,
+                )
         except httpx.HTTPError as exc:
             response = CompensationCallResponse(
                 success=False,
@@ -604,10 +801,7 @@ class BusinessToolsClient:
 
     def _invoke_compensation_via_http(self, request: CompensationCallRequest) -> CompensationCallResponse:
         started = time.perf_counter()
-        with httpx.Client(
-            base_url=self.settings.business_tools_base_url,
-            timeout=self.settings.request_timeout_ms / 1000,
-        ) as client:
+        with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
             response = client.post(
                 f"{self.settings.business_tools_internal_api_prefix}/compensations/execute",
                 json={
@@ -643,7 +837,7 @@ class BusinessToolsClient:
         )
 
     def _tool_execution_headers(self, request: ToolCallRequest) -> dict[str, str]:
-        return {
+        headers = {
             self.settings.request_id_header: request.tool_call_id,
             self.settings.trace_id_header: request.trace_id,
             self.settings.conversation_id_header: request.conversation_id,
@@ -653,13 +847,18 @@ class BusinessToolsClient:
             self.settings.tool_call_id_header: request.tool_call_id,
             self.settings.idempotency_key_header: request.idempotency_key or f"tool-{request.tool_call_id}",
         }
+        traceparent = trace.get_current_span().get_span_context()
+        if traceparent.is_valid:
+            headers["traceparent"] = f"00-{traceparent.trace_id:032x}-{traceparent.span_id:016x}-01"
+        headers["X-Trace-Id"] = request.trace_id
+        return headers
 
     def _tool_invoke_headers(self, request: ToolInvocationRequest) -> dict[str, str]:
         request_id = request.context.request_id or f"invoke-{request.tool_name}"
         trace_id = request.context.trace_id or request_id
         conversation_id = request.context.conversation_id or "unknown"
         message_id = request.context.message_id or request_id
-        return {
+        headers = {
             self.settings.request_id_header: request_id,
             self.settings.trace_id_header: trace_id,
             self.settings.conversation_id_header: conversation_id,
@@ -669,6 +868,11 @@ class BusinessToolsClient:
             self.settings.tool_call_id_header: request_id,
             self.settings.idempotency_key_header: request.context.idempotency_key or f"tool-{request_id}",
         }
+        traceparent = trace.get_current_span().get_span_context()
+        if traceparent.is_valid:
+            headers["traceparent"] = f"00-{traceparent.trace_id:032x}-{traceparent.span_id:016x}-01"
+        headers["X-Trace-Id"] = trace_id
+        return headers
 
     def _discovery_headers(self) -> dict[str, str]:
         return {
@@ -686,6 +890,34 @@ class BusinessToolsClient:
 
     def _allow_local_degraded_fallback(self) -> bool:
         return self.settings.app_env in {"local", "dev", "test"}
+
+    def _strict_remote_discovery_enabled(self) -> bool:
+        return self.settings.business_tools_transport == "http" and self.settings.business_tools_discovery_strict
+
+    def _should_fallback_on_gateway_status(self, exc: httpx.HTTPStatusError) -> bool:
+        return exc.response is not None and exc.response.status_code in {502, 503, 504}
+
+    @staticmethod
+    def _retryable_http_status(status_code: int | None) -> bool:
+        return status_code in {502, 503, 504}
+
+    def _invoke_http_error(
+        self,
+        definition: ToolDefinition,
+        *,
+        attempts: int,
+        retryable: bool,
+        details: dict[str, object],
+        status: str | None = None,
+    ) -> BusinessToolsInvokeHttpError:
+        return BusinessToolsInvokeHttpError(
+            message=f"Tool provider unavailable for '{definition.name}'.",
+            provider=definition.provider,
+            retryable=retryable,
+            attempts=attempts,
+            details=details,
+            status=status,
+        )
 
     def discover_tools(
         self,
@@ -724,10 +956,7 @@ class BusinessToolsClient:
         query: str | None = None,
     ) -> list[ToolDefinition]:
         try:
-            with httpx.Client(
-                base_url=self.settings.business_tools_base_url,
-                timeout=self.settings.request_timeout_ms / 1000,
-            ) as client:
+            with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
                 params = {
                     key: value
                     for key, value in {
@@ -762,10 +991,7 @@ class BusinessToolsClient:
 
     def _discover_tool(self, tool_name: str) -> ToolDefinition | None:
         try:
-            with httpx.Client(
-                base_url=self.settings.business_tools_base_url,
-                timeout=self.settings.request_timeout_ms / 1000,
-            ) as client:
+            with self._http_client(timeout=self.settings.request_timeout_ms / 1000) as client:
                 response = client.get(
                     f"{self.settings.business_tools_internal_api_prefix}/tools/{tool_name}",
                     headers=self._discovery_headers(),
@@ -857,6 +1083,21 @@ class BusinessToolsClient:
             deep=True,
             update={
                 "audit_tags": list(dict.fromkeys([*response.audit_tags, fallback_tag])),
+            },
+        )
+
+    @staticmethod
+    def _mark_local_invoke_fallback(
+        result: ToolExecutionResult,
+        *,
+        fallback_tag: str,
+        attempts: int,
+    ) -> ToolExecutionResult:
+        return result.model_copy(
+            deep=True,
+            update={
+                "audit_tags": list(dict.fromkeys([*result.audit_tags, fallback_tag])),
+                "attempts": attempts,
             },
         )
 

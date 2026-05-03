@@ -7,23 +7,30 @@ import app.services.runtime_redis as runtime_redis_module
 import pytest
 from app.models.common import TraceContext
 from app.models.orchestration import (
+    AgentExecutionResult,
     AgentRouteRecord,
+    ChatMessageRecord,
+    ConversationRecord,
     ExecutionCheckpoint,
     IntentSummary,
     MessageRequest,
     OrchestratorResponse,
+    PendingAgentHandoff,
     PendingUserAction,
     RouteDecision,
     SessionCreateRequest,
+    SessionContext,
     SessionStateSnapshot,
     StreamEventRecord,
 )
-from app.services.conversation_store import ConversationStore
+from app.services.conversation_store import ConversationStore, ConversationStoreError
+from app.services.mongo_runtime import ConversationMongoRuntimeError
 from app.services.agent_config_store import AgentConfigStore
 from app.services.run_control import (
     ActiveRunConflictError,
     OrchestrationCancelled,
     OrchestrationRunControl,
+    RunControlBackendUnavailableError,
 )
 from app.services.sse_event_store import SseEventStore
 from app.services.state_store import OrchestrationStateStore
@@ -155,6 +162,176 @@ class PingFailingRedisClient(FakeRedisClient):
         raise RuntimeError("redis unavailable")
 
 
+class FakeConversationMongoRuntime:
+    enabled = True
+
+    def __init__(self) -> None:
+        self.messages: dict[str, list[ChatMessageRecord]] = {}
+        self.request_snapshots: dict[tuple[str, str], MessageRequest] = {}
+        self.persist_calls = 0
+        self.clear_calls = 0
+
+    def persist_exchange(
+        self,
+        *,
+        record: ConversationRecord,
+        user_message: ChatMessageRecord,
+        assistant_message: ChatMessageRecord,
+        sequence_numbers: dict[str, int],
+        message_request: MessageRequest,
+        response: OrchestratorResponse | None,
+        session_context: SessionContext,
+        trace: TraceContext | None,
+    ) -> dict[str, object]:
+        self.persist_calls += 1
+        ordered = sorted(
+            [user_message, assistant_message],
+            key=lambda item: sequence_numbers[item.message_id],
+        )
+        self.messages[record.conversation_id] = [item.model_copy(deep=True) for item in ordered]
+        self.request_snapshots[(record.conversation_id, user_message.message_id)] = message_request.model_copy(deep=True)
+        self.request_snapshots[(record.conversation_id, assistant_message.message_id)] = message_request.model_copy(deep=True)
+        return {"previous_session_snapshot": None}
+
+    def persist_assistant_message(
+        self,
+        *,
+        record: ConversationRecord,
+        source_user_message_id: str,
+        assistant_message: ChatMessageRecord,
+        message_request: MessageRequest,
+        response: OrchestratorResponse | None,
+        session_context: SessionContext,
+        trace: TraceContext | None,
+    ) -> dict[str, object]:
+        self.persist_calls += 1
+        messages = [
+            item.model_copy(deep=True)
+            for item in self.messages.get(record.conversation_id, [])
+            if item.message_id != assistant_message.message_id
+        ]
+        messages.append(assistant_message.model_copy(deep=True))
+        self.messages[record.conversation_id] = messages
+        self.request_snapshots[(record.conversation_id, source_user_message_id)] = message_request.model_copy(deep=True)
+        self.request_snapshots[(record.conversation_id, assistant_message.message_id)] = message_request.model_copy(deep=True)
+        return {"previous_session_snapshot": None}
+
+    def delete_exchange(
+        self,
+        *,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        cleanup_state: dict[str, object] | None,
+    ) -> None:
+        self.messages.pop(conversation_id, None)
+        self.request_snapshots.pop((conversation_id, user_message_id), None)
+        self.request_snapshots.pop((conversation_id, assistant_message_id), None)
+
+    def delete_assistant_continuation(
+        self,
+        *,
+        conversation_id: str,
+        assistant_message_id: str,
+        cleanup_state: dict[str, object] | None,
+    ) -> None:
+        messages = [
+            item.model_copy(deep=True)
+            for item in self.messages.get(conversation_id, [])
+            if item.message_id != assistant_message_id
+        ]
+        if messages:
+            self.messages[conversation_id] = messages
+        else:
+            self.messages.pop(conversation_id, None)
+        self.request_snapshots.pop((conversation_id, assistant_message_id), None)
+
+    def fetch_messages(self, conversation_id: str) -> list[ChatMessageRecord] | None:
+        return [item.model_copy(deep=True) for item in self.messages.get(conversation_id, [])]
+
+    def get_request_snapshot(self, conversation_id: str, *, message_id: str) -> MessageRequest | None:
+        payload = self.request_snapshots.get((conversation_id, message_id))
+        return payload.model_copy(deep=True) if payload is not None else None
+
+    def describe_backend(self) -> dict[str, object]:
+        return {"backend": "mongodb", "configured": True, "ready": True}
+
+    def clear(self) -> None:
+        self.clear_calls += 1
+        self.messages.clear()
+        self.request_snapshots.clear()
+
+
+class FailingConversationMongoRuntime(FakeConversationMongoRuntime):
+    def persist_exchange(self, **kwargs) -> dict[str, object]:
+        raise ConversationMongoRuntimeError("MongoDB conversation document store unavailable: mongo unavailable")
+
+
+class FailingContinuationMongoRuntime(FakeConversationMongoRuntime):
+    def persist_assistant_message(self, **kwargs) -> dict[str, object]:
+        raise ConversationMongoRuntimeError("MongoDB conversation document store unavailable: mongo unavailable")
+
+
+class FailingHistoryReadMongoRuntime(FakeConversationMongoRuntime):
+    def fetch_messages(self, conversation_id: str) -> list[ChatMessageRecord] | None:
+        raise ConversationMongoRuntimeError("MongoDB conversation history read failed: mongo unavailable")
+
+
+class FailingSnapshotReadMongoRuntime(FakeConversationMongoRuntime):
+    def get_request_snapshot(self, conversation_id: str, *, message_id: str) -> MessageRequest | None:
+        raise ConversationMongoRuntimeError("MongoDB conversation snapshot read failed: mongo unavailable")
+
+
+class RollbackRecordingMongoRuntime(FakeConversationMongoRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_calls: list[dict[str, object | None]] = []
+        self.continuation_delete_calls: list[dict[str, object | None]] = []
+
+    def delete_exchange(
+        self,
+        *,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        cleanup_state: dict[str, object] | None,
+    ) -> None:
+        self.delete_calls.append(
+            {
+                "conversation_id": conversation_id,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
+                "cleanup_state": cleanup_state,
+            }
+        )
+        super().delete_exchange(
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id,
+            cleanup_state=cleanup_state,
+        )
+
+    def delete_assistant_continuation(
+        self,
+        *,
+        conversation_id: str,
+        assistant_message_id: str,
+        cleanup_state: dict[str, object] | None,
+    ) -> None:
+        self.continuation_delete_calls.append(
+            {
+                "conversation_id": conversation_id,
+                "assistant_message_id": assistant_message_id,
+                "cleanup_state": cleanup_state,
+            }
+        )
+        super().delete_assistant_continuation(
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_message_id,
+            cleanup_state=cleanup_state,
+        )
+
+
 def _route_decision() -> RouteDecision:
     return RouteDecision(
         primary_agent="finance_order_agent",
@@ -211,17 +388,18 @@ def test_state_store_reloads_persisted_snapshots(tmp_path: Path) -> None:
     snapshot = SessionStateSnapshot(
         conversation_id="conv-state-1",
         primary_agent="finance_order_agent",
-        current_agent="finance_order_agent",
+        current_agent="ops_marketing_agent",
         agent_routes=[
             AgentRouteRecord(
                 step_id="step-1-finance-order-agent",
                 order=1,
                 agent="finance_order_agent",
                 objective="主处理账单问题。",
-                status="success",
+                status="handoff",
                 tool_names=["billing.query_statement"],
                 tool_call_ids=["tc-1"],
                 tool_statuses=["completed"],
+                handoff_to="ops_marketing_agent",
             )
         ],
         checkpoints=[
@@ -231,6 +409,7 @@ def test_state_store_reloads_persisted_snapshots(tmp_path: Path) -> None:
                 status="completed",
             )
         ],
+        pending_actions=["continue-agent-handoff"],
         pending_user_actions=[
             PendingUserAction(
                 tool_name="billing.query_statement",
@@ -241,6 +420,34 @@ def test_state_store_reloads_persisted_snapshots(tmp_path: Path) -> None:
                 missing_fields=["range"],
             )
         ],
+        pending_agent_handoff=PendingAgentHandoff(
+            route=RouteDecision(
+                primary_agent="finance_order_agent",
+                supporting_agents=["ops_marketing_agent"],
+                intent=IntentSummary(
+                    domain="finance_order",
+                    matched_domains=["finance_order_agent"],
+                    urgency="low",
+                    needs_human_handoff=False,
+                    scene="billing",
+                ),
+                summary="finance_order_agent handed off to ops_marketing_agent.",
+            ),
+            request_snapshot=MessageRequest(user_query="帮我查账单", scene="billing"),
+            source_user_message_id="msg-state-source-1",
+            next_task_index=1,
+            completed_executions=[
+                AgentExecutionResult(
+                    agent="finance_order_agent",
+                    status="handoff",
+                    reasoning_summary="finance_order_agent completed the first leg.",
+                    final_answer="已完成账单查询，准备交接营销活动推荐。",
+                    next_agent="ops_marketing_agent",
+                    handoff_reason="需要切换到 ops_marketing_agent 继续处理。",
+                )
+            ],
+            handoff_from="finance_order_agent",
+        ),
         final_response_summary="已持久化。",
         trace=TraceContext(requestId="req-state-1", conversationId="conv-state-1", traceId="trace-state-1"),
     )
@@ -252,9 +459,17 @@ def test_state_store_reloads_persisted_snapshots(tmp_path: Path) -> None:
 
     assert persisted is not None
     assert persisted.version == 1
+    assert persisted.current_agent == "ops_marketing_agent"
     assert persisted.agent_routes[0].tool_call_ids == ["tc-1"]
     assert persisted.checkpoints[0].name == "intent-classified"
+    assert persisted.pending_actions == ["continue-agent-handoff"]
     assert persisted.pending_user_actions[0].action == "clarify-tool-input"
+    assert persisted.pending_agent_handoff is not None
+    assert persisted.pending_agent_handoff.request_snapshot.user_query == "帮我查账单"
+    assert persisted.pending_agent_handoff.source_user_message_id == "msg-state-source-1"
+    assert persisted.pending_agent_handoff.next_task_index == 1
+    assert persisted.pending_agent_handoff.handoff_from == "finance_order_agent"
+    assert persisted.pending_agent_handoff.completed_executions[0].next_agent == "ops_marketing_agent"
     assert persisted.trace.trace_id == "trace-state-1"
 
 
@@ -343,6 +558,752 @@ def test_conversation_store_uses_mysql_when_configured(tmp_path: Path, monkeypat
     assert description["backend"] == "mysql"
     assert description["fallbackPath"] == str(fallback_path)
     assert description["runtimeCache"]["backend"] == "memory"
+
+
+def test_conversation_store_prefers_mongo_documents_for_message_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    fake_mongo = FakeConversationMongoRuntime()
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-mongo.json",
+        mysql_dsn="mysql+pymysql://smartcloud:secret@mysql.test:3306/smartcloud",
+        mongo_runtime=fake_mongo,
+    )
+    conversation = store.create(SessionCreateRequest(scene="billing", title="Mongo 会话"))
+    request = MessageRequest(user_query="请同步消息到 Mongo", scene="billing")
+    response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="Mongo 消息主链已写入。",
+        pending_actions=[],
+        trace=TraceContext(requestId="req-mongo-1", conversationId=conversation.conversation_id, traceId="trace-mongo-1"),
+    )
+
+    store.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-mongo-1",
+        assistant_message_id="asst-mongo-1",
+        message_request=request,
+        response=response,
+        status="completed",
+        trace=TraceContext(requestId="req-mongo-1", conversationId=conversation.conversation_id, traceId="trace-mongo-1"),
+    )
+
+    page = store.list_messages(conversation.conversation_id)
+    retry_request = store.build_retry_request(conversation.conversation_id, message_id="asst-mongo-1")
+
+    assert fake_mongo.persist_calls == 1
+    assert page.items[0].content == "请同步消息到 Mongo"
+    assert page.items[1].content == "Mongo 消息主链已写入。"
+    assert retry_request.user_query == "请同步消息到 Mongo"
+    assert store.describe_backend()["documentStore"]["backend"] == "mongodb"
+
+
+def test_list_messages_returns_local_history_even_when_record_is_missing(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / "legacy-conversations.json")
+    conversation_id = "conv-legacy-only-messages"
+    timestamp = ConversationStore._now()
+    store._messages[conversation_id] = [
+        ChatMessageRecord(
+            conversation_id=conversation_id,
+            message_id="msg-legacy-1",
+            role="user",
+            content="你好",
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+        ChatMessageRecord(
+            conversation_id=conversation_id,
+            message_id="asst-legacy-1",
+            role="assistant",
+            content="历史消息仍可读取。",
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+    ]
+
+    page = store.list_messages(conversation_id)
+
+    assert [item.message_id for item in page.items] == [
+        "msg-legacy-1",
+        "asst-legacy-1",
+    ]
+
+
+def test_conversation_store_persists_assistant_continuation_to_mongo_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo-continuation.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    fake_mongo = FakeConversationMongoRuntime()
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-mongo-continuation.json",
+        mysql_dsn="mysql+pymysql://smartcloud:password@mysql.test:3306/smartcloud",
+        mongo_runtime=fake_mongo,
+    )
+    conversation = store.create(SessionCreateRequest(scene="technical_support", title="Mongo continuation"))
+    request = MessageRequest(user_query="请同步续接消息到 Mongo", scene="technical_support")
+    first_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="continue-agent-handoff",
+        final_response_summary="第一段回复已写入。",
+        pending_actions=["continue-agent-handoff"],
+        trace=TraceContext(
+            requestId="req-mongo-continuation-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-1",
+        ),
+    )
+    store.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-mongo-continuation-1",
+        assistant_message_id="asst-mongo-continuation-1",
+        message_request=request,
+        response=first_response,
+        status="handoff",
+        trace=TraceContext(
+            requestId="req-mongo-continuation-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-1",
+        ),
+    )
+
+    continued_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="续接回复已写入。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-mongo-continuation-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-2",
+        ),
+    )
+    store.store_assistant_continuation(
+        conversation_id=conversation.conversation_id,
+        source_user_message_id="msg-mongo-continuation-1",
+        assistant_message_id="asst-mongo-continuation-2",
+        message_request=request,
+        response=continued_response,
+        status="completed",
+        trace=TraceContext(
+            requestId="req-mongo-continuation-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-2",
+        ),
+    )
+
+    page = store.list_messages(conversation.conversation_id)
+    retry_request = store.build_retry_request(conversation.conversation_id, message_id="asst-mongo-continuation-2")
+
+    assert [item.role for item in page.items] == ["user", "assistant", "assistant"]
+    assert page.items[-1].content == "续接回复已写入。"
+    assert retry_request.user_query == "请同步续接消息到 Mongo"
+
+
+def test_conversation_store_blocks_when_mongo_mainline_write_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo-fail.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-mongo-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:secret@mysql.test:3306/smartcloud",
+        mongo_runtime=FailingConversationMongoRuntime(),
+    )
+    conversation = store.create(SessionCreateRequest(scene="billing", title="Mongo 失败"))
+    request = MessageRequest(user_query="Mongo 不可用时应阻断主链", scene="billing")
+    response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="这条响应不应成功落库。",
+        pending_actions=[],
+        trace=TraceContext(requestId="req-mongo-fail", conversationId=conversation.conversation_id, traceId="trace-mongo-fail"),
+    )
+
+    with pytest.raises(ConversationStoreError, match="MongoDB conversation document store unavailable"):
+        store.store_exchange(
+            conversation_id=conversation.conversation_id,
+            user_message_id="msg-mongo-fail-1",
+            assistant_message_id="asst-mongo-fail-1",
+            message_request=request,
+            response=response,
+            status="completed",
+            trace=TraceContext(requestId="req-mongo-fail", conversationId=conversation.conversation_id, traceId="trace-mongo-fail"),
+        )
+
+    with sqlite3.connect(runtime_db) as connection:
+        rows = connection.execute("SELECT COUNT(*) FROM orchestrator_messages").fetchone()[0]
+    assert rows == 0
+
+
+def test_conversation_store_blocks_when_mongo_continuation_write_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo-continuation-fail.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-mongo-continuation-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FailingContinuationMongoRuntime(),
+    )
+    conversation = store.create(SessionCreateRequest(scene="technical_support", title="Mongo continuation fail"))
+    initial_request = MessageRequest(user_query="请先写入主链消息", scene="technical_support")
+    initial_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="continue-agent-handoff",
+        final_response_summary="第一段回复已写入。",
+        pending_actions=["continue-agent-handoff"],
+        trace=TraceContext(
+            requestId="req-mongo-continuation-fail-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-fail-1",
+        ),
+    )
+    store.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-mongo-continuation-fail-1",
+        assistant_message_id="asst-mongo-continuation-fail-1",
+        message_request=initial_request,
+        response=initial_response,
+        status="completed",
+        trace=TraceContext(
+            requestId="req-mongo-continuation-fail-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-fail-1",
+        ),
+    )
+    continued_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="续接回复不应成功落库。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-mongo-continuation-fail-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-continuation-fail-2",
+        ),
+    )
+
+    with pytest.raises(ConversationStoreError, match="MongoDB conversation document store unavailable"):
+        store.store_assistant_continuation(
+            conversation_id=conversation.conversation_id,
+            source_user_message_id="msg-mongo-continuation-fail-1",
+            assistant_message_id="asst-mongo-continuation-fail-2",
+            message_request=initial_request,
+            response=continued_response,
+            status="completed",
+            trace=TraceContext(
+                requestId="req-mongo-continuation-fail-2",
+                conversationId=conversation.conversation_id,
+                traceId="trace-mongo-continuation-fail-2",
+            ),
+        )
+
+    with sqlite3.connect(runtime_db) as connection:
+        rows = connection.execute("SELECT COUNT(*) FROM orchestrator_messages").fetchone()[0]
+    assert rows == 2
+    assert store.describe_backend()["backend"] == "mysql"
+
+
+def test_conversation_store_blocks_when_mongo_history_read_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo-history-read-fail.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    primary = ConversationStore(
+        file_path=tmp_path / "primary-conversations-mongo-history-read-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FakeConversationMongoRuntime(),
+    )
+    conversation = primary.create(SessionCreateRequest(scene="billing", title="Mongo 读失败"))
+    request = MessageRequest(user_query="请先写入用于读取的消息", scene="billing")
+    response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="主链消息已写入。",
+        pending_actions=[],
+        trace=TraceContext(requestId="req-mongo-read-1", conversationId=conversation.conversation_id, traceId="trace-mongo-read-1"),
+    )
+    primary.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-mongo-read-1",
+        assistant_message_id="asst-mongo-read-1",
+        message_request=request,
+        response=response,
+        status="completed",
+        trace=TraceContext(requestId="req-mongo-read-1", conversationId=conversation.conversation_id, traceId="trace-mongo-read-1"),
+    )
+
+    replica = ConversationStore(
+        file_path=tmp_path / "replica-conversations-mongo-history-read-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FailingHistoryReadMongoRuntime(),
+    )
+
+    with pytest.raises(ConversationStoreError, match="MongoDB conversation history read failed"):
+        replica.list_messages(conversation.conversation_id)
+
+    assert replica.describe_backend()["backend"] == "mysql"
+
+
+def test_conversation_store_blocks_when_mongo_snapshot_read_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-mongo-snapshot-read-fail.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    primary = ConversationStore(
+        file_path=tmp_path / "primary-conversations-mongo-snapshot-read-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FakeConversationMongoRuntime(),
+    )
+    conversation = primary.create(SessionCreateRequest(scene="billing", title="Mongo 快照读失败"))
+    request = MessageRequest(user_query="请先写入用于重试的消息", scene="billing")
+    response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="主链消息已写入。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-mongo-snapshot-read-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-snapshot-read-1",
+        ),
+    )
+    primary.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-mongo-snapshot-read-1",
+        assistant_message_id="asst-mongo-snapshot-read-1",
+        message_request=request,
+        response=response,
+        status="completed",
+        trace=TraceContext(
+            requestId="req-mongo-snapshot-read-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-mongo-snapshot-read-1",
+        ),
+    )
+
+    replica = ConversationStore(
+        file_path=tmp_path / "replica-conversations-mongo-snapshot-read-fail.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FailingSnapshotReadMongoRuntime(),
+    )
+
+    with pytest.raises(ConversationStoreError, match="MongoDB conversation snapshot read failed"):
+        replica.build_retry_request(
+            conversation_id=conversation.conversation_id,
+            message_id="asst-mongo-snapshot-read-1",
+        )
+
+    assert replica.describe_backend()["backend"] == "mysql"
+
+
+def test_assistant_continuation_rolls_back_mongo_when_mysql_write_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-continuation-rollback.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    mongo_runtime = RollbackRecordingMongoRuntime()
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-continuation-rollback.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=mongo_runtime,
+    )
+    conversation = store.create(SessionCreateRequest(scene="technical_support", title="rollback continuation"))
+    initial_request = MessageRequest(user_query="请先写入主链消息", scene="technical_support")
+    initial_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="continue-agent-handoff",
+        final_response_summary="第一段回复已写入。",
+        pending_actions=["continue-agent-handoff"],
+        trace=TraceContext(
+            requestId="req-continuation-rollback-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-continuation-rollback-1",
+        ),
+    )
+    store.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-continuation-rollback-1",
+        assistant_message_id="asst-continuation-rollback-1",
+        message_request=initial_request,
+        response=initial_response,
+        status="completed",
+        trace=TraceContext(
+            requestId="req-continuation-rollback-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-continuation-rollback-1",
+        ),
+    )
+
+    connection_attempts = {"count": 0}
+
+    def _connect_then_fail(**kwargs):
+        connection_attempts["count"] += 1
+        if connection_attempts["count"] == 1:
+            return _SQLiteConnection(runtime_db)
+        raise RuntimeError("mysql unavailable")
+
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FailingPyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(_connect_then_fail),
+            },
+        ),
+    )
+    continued_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="续接回复不应成功落库。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-continuation-rollback-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-continuation-rollback-2",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="mysql unavailable"):
+        assert store._backend is not None
+        store._backend.store_assistant_continuation(
+            conversation_id=conversation.conversation_id,
+            source_user_message_id="msg-continuation-rollback-1",
+            assistant_message_id="asst-continuation-rollback-2",
+            message_request=initial_request,
+            response=continued_response,
+            status="completed",
+            session_context=SessionContext(attributes={"stage": "continuation-rollback"}),
+            trace=TraceContext(
+                requestId="req-continuation-rollback-2",
+                conversationId=conversation.conversation_id,
+                traceId="trace-continuation-rollback-2",
+            ),
+        )
+
+    assert mongo_runtime.delete_calls == []
+    assert len(mongo_runtime.continuation_delete_calls) == 1
+    assert mongo_runtime.continuation_delete_calls[0]["assistant_message_id"] == "asst-continuation-rollback-2"
+    remaining_messages = mongo_runtime.fetch_messages(conversation.conversation_id)
+    assert [item.message_id for item in remaining_messages] == [
+        "msg-continuation-rollback-1",
+        "asst-continuation-rollback-1",
+    ]
+    assert mongo_runtime.get_request_snapshot(
+        conversation.conversation_id,
+        message_id="msg-continuation-rollback-1",
+    ) is not None
+    assert mongo_runtime.get_request_snapshot(
+        conversation.conversation_id,
+        message_id="asst-continuation-rollback-2",
+    ) is None
+
+
+def test_store_exchange_rolls_back_mongo_when_mysql_connect_fails(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-primary-rollback.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    mongo_runtime = RollbackRecordingMongoRuntime()
+    store = ConversationStore(
+        file_path=tmp_path / "degraded-conversations-primary-rollback.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=mongo_runtime,
+    )
+    conversation = store.create(SessionCreateRequest(scene="billing", title="rollback primary exchange"))
+    request = MessageRequest(user_query="请写入后触发主存储失败", scene="billing")
+    response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="这条回复不应成功落库。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-primary-rollback-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-primary-rollback-1",
+        ),
+    )
+
+    connection_attempts = {"count": 0}
+
+    def _connect_then_fail(**kwargs):
+        connection_attempts["count"] += 1
+        if connection_attempts["count"] == 1:
+            return _SQLiteConnection(runtime_db)
+        raise RuntimeError("mysql unavailable")
+
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FailingPyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(_connect_then_fail),
+            },
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="mysql unavailable"):
+        assert store._backend is not None
+        store._backend.store_exchange(
+            conversation_id=conversation.conversation_id,
+            user_message_id="msg-primary-rollback-1",
+            assistant_message_id="asst-primary-rollback-1",
+            message_request=request,
+            response=response,
+            status="completed",
+            session_context=SessionContext(attributes={"stage": "primary-rollback"}),
+            trace=TraceContext(
+                requestId="req-primary-rollback-1",
+                conversationId=conversation.conversation_id,
+                traceId="trace-primary-rollback-1",
+            ),
+        )
+
+    assert len(mongo_runtime.delete_calls) == 1
+    assert mongo_runtime.delete_calls[0]["user_message_id"] == "msg-primary-rollback-1"
+    assert mongo_runtime.delete_calls[0]["assistant_message_id"] == "asst-primary-rollback-1"
+    assert mongo_runtime.continuation_delete_calls == []
+    assert mongo_runtime.fetch_messages(conversation.conversation_id) == []
+    assert mongo_runtime.get_request_snapshot(
+        conversation.conversation_id,
+        message_id="msg-primary-rollback-1",
+    ) is None
+    assert mongo_runtime.get_request_snapshot(
+        conversation.conversation_id,
+        message_id="asst-primary-rollback-1",
+    ) is None
+
+
+def test_mysql_retry_snapshot_keeps_all_assistant_continuations_after_reload(tmp_path: Path, monkeypatch) -> None:
+    runtime_db = tmp_path / "orchestrator-runtime-multi-continuation.db"
+    monkeypatch.setattr(
+        runtime_mysql_module,
+        "pymysql",
+        type(
+            "FakePyMySQLModule",
+            (),
+            {
+                "cursors": type("FakeCursors", (), {"DictCursor": object}),
+                "connect": staticmethod(lambda **kwargs: _SQLiteConnection(runtime_db)),
+            },
+        ),
+    )
+    primary = ConversationStore(
+        file_path=tmp_path / "primary-multi-continuation.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+        mongo_runtime=FakeConversationMongoRuntime(),
+    )
+    conversation = primary.create(SessionCreateRequest(scene="technical_support", title="multi continuation retry"))
+    request = MessageRequest(user_query="有没有 GPU 活动，我要部署大模型", scene="technical_support")
+    initial_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="continue-agent-handoff",
+        final_response_summary="第一段回复已写入。",
+        pending_actions=["continue-agent-handoff"],
+        trace=TraceContext(
+            requestId="req-multi-cont-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-1",
+        ),
+    )
+    primary.store_exchange(
+        conversation_id=conversation.conversation_id,
+        user_message_id="msg-multi-cont-1",
+        assistant_message_id="asst-multi-cont-1",
+        message_request=request,
+        response=initial_response,
+        status="completed",
+        session_context=SessionContext(attributes={"step": "initial"}),
+        trace=TraceContext(
+            requestId="req-multi-cont-1",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-1",
+        ),
+    )
+
+    second_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="continue-agent-handoff",
+        final_response_summary="第二段回复已写入。",
+        pending_actions=["continue-agent-handoff"],
+        trace=TraceContext(
+            requestId="req-multi-cont-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-2",
+        ),
+    )
+    primary.store_assistant_continuation(
+        conversation_id=conversation.conversation_id,
+        source_user_message_id="msg-multi-cont-1",
+        assistant_message_id="asst-multi-cont-2",
+        message_request=request,
+        response=second_response,
+        status="completed",
+        session_context=SessionContext(attributes={"step": "second"}),
+        trace=TraceContext(
+            requestId="req-multi-cont-2",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-2",
+        ),
+    )
+
+    final_response = OrchestratorResponse(
+        conversation_id=conversation.conversation_id,
+        route=_route_decision(),
+        executions=[],
+        next_action="respond-with-agent-summary",
+        final_response_summary="第三段回复已写入。",
+        pending_actions=[],
+        trace=TraceContext(
+            requestId="req-multi-cont-3",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-3",
+        ),
+    )
+    primary.store_assistant_continuation(
+        conversation_id=conversation.conversation_id,
+        source_user_message_id="msg-multi-cont-1",
+        assistant_message_id="asst-multi-cont-3",
+        message_request=request,
+        response=final_response,
+        status="completed",
+        session_context=SessionContext(attributes={"step": "third"}),
+        trace=TraceContext(
+            requestId="req-multi-cont-3",
+            conversationId=conversation.conversation_id,
+            traceId="trace-multi-cont-3",
+        ),
+    )
+
+    replica = ConversationStore(
+        file_path=tmp_path / "replica-multi-continuation.json",
+        mysql_dsn="mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+    )
+
+    assert replica.resolve_request_message_id(conversation.conversation_id, "asst-multi-cont-2") == "msg-multi-cont-1"
+    assert replica.resolve_request_message_id(conversation.conversation_id, "asst-multi-cont-3") == "msg-multi-cont-1"
+    assert replica.build_retry_request(
+        conversation.conversation_id,
+        message_id="asst-multi-cont-2",
+    ).user_query == request.user_query
+    assert replica.build_retry_request(
+        conversation.conversation_id,
+        message_id="asst-multi-cont-3",
+    ).user_query == request.user_query
 
 
 def test_conversation_store_uses_redis_runtime_cache_when_configured(tmp_path: Path, monkeypatch) -> None:
@@ -1698,6 +2659,28 @@ def test_run_control_degrades_to_memory_when_redis_fails(monkeypatch) -> None:
     description = control.describe_backend()
     assert description["backend"] == "memory"
     assert description["degradedFrom"] == "redis-lock"
+
+
+def test_run_control_strict_mode_rejects_start_when_redis_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_redis_module,
+        "redis",
+        type("FakeRedisModule", (), {"from_url": staticmethod(lambda *args, **kwargs: FailingRedisKeyClient())}),
+    )
+    control = OrchestrationRunControl(
+        redis_url="redis://redis.test:6379/0",
+        redis_namespace="smartcloud:test:orchestrator:run-control-strict",
+        lease_seconds=60,
+        strict_backend=True,
+    )
+
+    with pytest.raises(RunControlBackendUnavailableError):
+        control.start("conv-run-strict-1", "msg-run-strict-1")
+
+    description = control.describe_backend()
+    assert description["backend"] == "memory"
+    assert description["strictBackend"] is True
+    assert control.is_running("conv-run-strict-1", "msg-run-strict-1") is False
 
 
 def test_run_control_recovers_redis_after_startup_degradation(monkeypatch) -> None:

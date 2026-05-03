@@ -24,8 +24,35 @@ smartcloud_qa_repo_root() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
 }
 
+smartcloud_qa_append_no_proxy_host() {
+  local variable_name="$1"
+  local host="$2"
+  local current_value="${!variable_name:-}"
+
+  case ",$current_value," in
+    *",$host,"*) ;;
+    "")
+      printf -v "$variable_name" '%s' "$host"
+      export "$variable_name"
+      ;;
+    *)
+      printf -v "$variable_name" '%s,%s' "$current_value" "$host"
+      export "$variable_name"
+      ;;
+  esac
+}
+
+smartcloud_qa_configure_loopback_no_proxy() {
+  smartcloud_qa_append_no_proxy_host NO_PROXY "127.0.0.1"
+  smartcloud_qa_append_no_proxy_host NO_PROXY "localhost"
+  smartcloud_qa_append_no_proxy_host no_proxy "127.0.0.1"
+  smartcloud_qa_append_no_proxy_host no_proxy "localhost"
+}
+
 smartcloud_qa_init() {
   ROOT_DIR="${ROOT_DIR:-$(smartcloud_qa_repo_root)}"
+  smartcloud_qa_configure_loopback_no_proxy
+  export SMARTCLOUD_QA_REQUEST_TIMEOUT_SECONDS="${SMARTCLOUD_QA_REQUEST_TIMEOUT_SECONDS:-30}"
   QA_PYTHON=(python3)
   QA_PYTEST=(python3 -m pytest)
   QA_RUNTIME_LABEL="system-python3"
@@ -70,10 +97,31 @@ smartcloud_qa_configure_live_infra_env() {
   echo "[qa-env] SMARTCLOUD_QA_USE_LIVE_INFRA=1; using localhost shared-backend defaults unless explicitly overridden"
 }
 
+smartcloud_qa_require_gateway_acceptance_credentials() {
+  export SMARTCLOUD_QA_USER_ACCOUNT="${SMARTCLOUD_QA_USER_ACCOUNT:-demo@smartcloud.local}"
+  export SMARTCLOUD_QA_ADMIN_USERNAME="${SMARTCLOUD_QA_ADMIN_USERNAME:-admin}"
+  export SMARTCLOUD_QA_ADMIN_CAPTCHA_TOKEN="${SMARTCLOUD_QA_ADMIN_CAPTCHA_TOKEN:-captcha-ok}"
+
+  if [[ -z "${SMARTCLOUD_QA_USER_PASSWORD:-}" ]]; then
+    echo "[qa-env] SMARTCLOUD_QA_USER_PASSWORD is required for gateway acceptance checks"
+    return 1
+  fi
+
+  if [[ -z "${SMARTCLOUD_QA_ADMIN_PASSWORD:-}" ]]; then
+    echo "[qa-env] SMARTCLOUD_QA_ADMIN_PASSWORD is required for gateway acceptance checks"
+    return 1
+  fi
+}
+
 smartcloud_qa_require_playwright() {
   if [[ ! -x "$ROOT_DIR/apps/web-user/node_modules/.bin/playwright" ]]; then
     echo "[qa-env] Playwright is missing under apps/web-user/node_modules"
     echo "[qa-env] run: npm --prefix apps/web-user ci && npm --prefix tests/e2e run install:browsers"
+    return 1
+  fi
+  if [[ ! -x "$ROOT_DIR/apps/web-admin/node_modules/.bin/vite" ]]; then
+    echo "[qa-env] web-admin frontend dependencies are missing under apps/web-admin/node_modules"
+    echo "[qa-env] run: npm --prefix apps/web-admin ci"
     return 1
   fi
 }
@@ -104,8 +152,10 @@ PY
 smartcloud_qa_configure_browser_ports() {
   local requested_app_port="${QA_BROWSER_APP_PORT:-3200}"
   local requested_api_port="${QA_BROWSER_API_PORT:-39090}"
+  local requested_admin_port="${QA_BROWSER_ADMIN_PORT:-3201}"
   local resolved_app_port="$requested_app_port"
   local resolved_api_port="$requested_api_port"
+  local resolved_admin_port="$requested_admin_port"
 
   if smartcloud_qa_port_in_use "$requested_app_port"; then
     resolved_app_port="$(smartcloud_qa_find_free_port)"
@@ -128,6 +178,15 @@ smartcloud_qa_configure_browser_ports() {
     echo "[qa-env] browser app/api ports collided; using QA_BROWSER_API_PORT=$resolved_api_port"
   fi
 
+  if smartcloud_qa_port_in_use "$requested_admin_port"; then
+    resolved_admin_port="$(smartcloud_qa_find_free_port)"
+    while [[ "$resolved_admin_port" == "$resolved_app_port" || "$resolved_admin_port" == "$resolved_api_port" ]]; do
+      resolved_admin_port="$(smartcloud_qa_find_free_port)"
+    done
+    echo "[qa-env] QA_BROWSER_ADMIN_PORT=$requested_admin_port is busy; using $resolved_admin_port"
+  fi
+
   export QA_BROWSER_APP_PORT="$resolved_app_port"
   export QA_BROWSER_API_PORT="$resolved_api_port"
+  export QA_BROWSER_ADMIN_PORT="$resolved_admin_port"
 }

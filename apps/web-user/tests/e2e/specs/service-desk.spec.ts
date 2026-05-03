@@ -85,4 +85,8 @@ test('registers an ICP material upload, passes precheck, and submits an applicat
   await page.getByRole('button', { name: '提交备案申请' }).click();
   await expect(page.getByText(/备案申请 ICP_E2E_/)).toBeVisible();
   await expect(page.getByText('SmartCloud 模型体验站')).toBeVisible();
+  await expect(page.getByText('浏览器跟踪回填', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('当前 ICP 申请历史仍来自浏览器跟踪的申请号回填，因为后端尚未提供 canonical list endpoint。')
+  ).toBeVisible();
 });

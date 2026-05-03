@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { login, openAppPage, resetApi } from '../helpers';
+import { login, openAppPage, resetApi, resolveAppUrl } from '../helpers';
 
 test('recovers from a one-time 401 by refreshing the auth session', async ({ page }) => {
   await resetApi({
@@ -19,7 +19,7 @@ test('shows permission denial UX when the logged-in user lacks route access', as
     profile: 'limited_marketing'
   });
   await login(page);
-  await page.goto('/marketing');
+  await page.goto(resolveAppUrl('/marketing'));
 
   await expect(page.getByText('营销暂未开通')).toBeVisible();
   await expect(page.getByText('user:marketing.read')).toBeVisible();

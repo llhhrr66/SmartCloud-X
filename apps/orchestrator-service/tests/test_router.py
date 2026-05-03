@@ -666,6 +666,25 @@ def test_router_plans_marketing_copy_after_campaign_lookup() -> None:
     assert copy_tool.readiness == "ready_after_dependencies"
 
 
+def test_router_does_not_plan_marketing_tools_for_greeting_only() -> None:
+    router = AgentRouter()
+    decision = router.route(
+        RouteRequest(
+            user_query="你好",
+            conversation_id="conv-marketing-greeting",
+            scene="marketing",
+            user_profile={
+                "user_id": "u-1",
+                "permissions": ["user:marketing.read", "user:marketing.write"],
+            },
+        )
+    )
+
+    assert decision.primary_agent == "ops_marketing_agent"
+    assert decision.tool_plan == []
+    assert decision.requires_tools is False
+
+
 def test_router_plans_report_export_after_research_generation() -> None:
     router = AgentRouter()
     decision = router.route(

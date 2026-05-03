@@ -79,6 +79,7 @@ class KnowledgeChunk(BaseModel):
     token_estimate: int = Field(alias="tokenEstimate")
     keywords: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
     created_at: str = Field(alias="createdAt")
 
     model_config = {
@@ -107,6 +108,9 @@ class IngestionResponse(BaseModel):
     source: KnowledgeSource
     document: KnowledgeDocument
     chunks_created: int = Field(alias="chunksCreated")
+    avg_chunk_tokens: float = Field(default=0.0, alias="avgChunkTokens")
+    max_chunk_tokens: int = Field(default=0, alias="maxChunkTokens")
+    min_chunk_tokens: int = Field(default=0, alias="minChunkTokens")
 
     model_config = {
         "populate_by_name": True,
@@ -322,6 +326,7 @@ class SearchResponse(BaseModel):
         alias="sourceBreakdown",
     )
     tag_breakdown: list[CountBucket] = Field(default_factory=list, alias="tagBreakdown")
+    backend_used: str = Field(default="local-keyword", alias="backendUsed")
     results: list[SearchResult] = Field(default_factory=list)
 
     model_config = {

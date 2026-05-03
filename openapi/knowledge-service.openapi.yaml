@@ -43,6 +43,65 @@ paths:
                     chunks: 12
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /readyz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: knowledge_readyz
+      summary: Check knowledge-service runtime readiness for traffic.
+      description: Readiness route for the current knowledge runtime. This baseline freezes the shared readiness wrapper fields (`status`, `service`, `runtime_mode`, `not_ready_components`, `runtime`) and intentionally leaves knowledge-owned nested repository, connector, and index-target details additive instead of treating them as a completed global contract.
+      x-owner-service: knowledge-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Knowledge runtime is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: ready
+                service: knowledge-service
+                runtime_mode: shared-backend
+                not_ready_components: []
+                runtime:
+                  backends:
+                    mysql:
+                      kind: mysql
+                      role: primary
+                      configured: true
+                      active: true
+                      restart_durable: true
+                      required_for_release: true
+                      evidence: sql-ping
+                  indexTargets:
+                    active_mode: mixed
+          description: Knowledge runtime is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: not_ready
+                service: knowledge-service
+                runtime_mode: mixed
+                not_ready_components: [vectorStore]
+                runtime:
+                  backends:
+                    qdrant:
+                      kind: qdrant
+                      role: index
+                      configured: true
+                      active: false
+                      restart_durable: true
+                      required_for_release: true
+                      evidence: collection-probe
+                  indexTargets:
+                    active_mode: mixed
   /metrics:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader

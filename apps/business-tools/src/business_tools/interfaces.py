@@ -124,6 +124,7 @@ class ToolExecutionResult(BaseModel):
     error_detail: dict[str, Any] = Field(default_factory=dict)
     compensation: ToolCompensationAction | None = None
     idempotency_key: str | None = None
+    attempts: int = 1
     user_action_hint: ToolUserActionHint | None = None
 
 

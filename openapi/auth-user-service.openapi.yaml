@@ -14,7 +14,7 @@ paths:
       tags: [health]
       operationId: auth_healthz
       summary: Check auth-user-service liveness.
-      description: Liveness-only health contract. Backend-selection proof is not yet surfaced on this route; when auth publishes additive runtime backend evidence, it should follow `docs/contracts/shared/runtime-health.md`.
+      description: Liveness route for the current auth service. Runtime backend evidence is now partially surfaced in code, but this OpenAPI baseline still treats `/healthz` as a minimal health contract and does not claim that every backend detail is frozen here.
       x-owner-service: auth-user-service
       x-permission-code: service:internal.call
       x-error-codes: [SERVICE_UNAVAILABLE]
@@ -32,6 +32,65 @@ paths:
                 service: auth-user-service
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /readyz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: auth_readyz
+      summary: Check auth-user-service runtime readiness for traffic.
+      description: Readiness route added for the current auth runtime. The route returns the shared `RuntimeReadinessStatus` shape with additive auth-owned runtime backend evidence. This baseline freezes the top-level readiness fields only and must not be read as proof that all backend-selection or fallback details are fully standardized across environments.
+      x-owner-service: auth-user-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: Auth runtime is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: ready
+                service: auth-user-service
+                runtime_mode: shared-backend
+                not_ready_components: []
+                runtime:
+                  backends:
+                    mysql:
+                      kind: mysql
+                      role: primary
+                      configured: true
+                      active: true
+                      restart_durable: true
+                      required_for_release: true
+                      evidence: engine-dialect
+                      fallback: sqlite://local-fallback
+        '503':
+          description: Auth runtime is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: not_ready
+                service: auth-user-service
+                runtime_mode: local-fallback
+                not_ready_components: [mysql]
+                runtime:
+                  backends:
+                    sqlite:
+                      kind: sqlite
+                      role: fallback
+                      configured: true
+                      active: true
+                      restart_durable: true
+                      required_for_release: false
+                      evidence: engine-dialect
+                      fallback: null
+                      notes: local/test compatibility database
   /api/v1/auth/login:
     post:
       tags: [user-auth]
@@ -590,7 +649,7 @@ paths:
       summary: Validate a downstream bearer token and return subject claims for internal services.
       x-owner-service: auth-user-service
       x-permission-code: service:internal.call
-      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-error-codes: [AUTH_CALLER_FORBIDDEN, AUTH_UNAUTHORIZED, VALIDATION_ERROR]
       x-idempotency-required: false
       x-rate-limit-scope: internal
       security:
@@ -616,6 +675,8 @@ paths:
           $ref: ./components.openapi.yaml#/components/responses/ValidationError
         '401':
           $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/Forbidden
   /internal/v1/auth/check-permission:
     post:
       tags: [internal-auth]
@@ -623,7 +684,7 @@ paths:
       summary: Check whether a subject holds the requested permission set.
       x-owner-service: auth-user-service
       x-permission-code: service:internal.call
-      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-error-codes: [AUTH_CALLER_FORBIDDEN, AUTH_UNAUTHORIZED, VALIDATION_ERROR]
       x-idempotency-required: false
       x-rate-limit-scope: internal
       security:
@@ -649,6 +710,8 @@ paths:
           $ref: ./components.openapi.yaml#/components/responses/ValidationError
         '401':
           $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/Forbidden
   /internal/v1/auth/invalidate-subject-cache:
     post:
       tags: [internal-auth]
@@ -656,7 +719,7 @@ paths:
       summary: Invalidate cached permission state after subject role or permission changes.
       x-owner-service: auth-user-service
       x-permission-code: service:internal.call
-      x-error-codes: [AUTH_UNAUTHORIZED, VALIDATION_ERROR]
+      x-error-codes: [AUTH_CALLER_FORBIDDEN, AUTH_UNAUTHORIZED, VALIDATION_ERROR]
       x-idempotency-required: false
       x-rate-limit-scope: internal
       security:
@@ -682,6 +745,8 @@ paths:
           $ref: ./components.openapi.yaml#/components/responses/ValidationError
         '401':
           $ref: ./components.openapi.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ./components.openapi.yaml#/components/responses/Forbidden
 components:
   schemas:
     LoginSuccessEnvelope:

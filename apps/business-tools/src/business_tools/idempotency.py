@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import time
@@ -31,7 +32,7 @@ class ToolIdempotencyStore:
         redis_namespace: str = "smartcloud:business-tools:idempotency",
     ) -> None:
         self._lock = RLock()
-        self._records: dict[tuple[str, str], StoredToolExecution] = {}
+        self._records: dict[tuple[str, str, str], StoredToolExecution] = {}
         self._persistence_path: Path | None = None
         self._redis_url: str | None = None
         self._redis_namespace = normalize_namespace(redis_namespace)
@@ -73,10 +74,11 @@ class ToolIdempotencyStore:
     ) -> tuple[ToolExecutionResult | None, bool]:
         self._maybe_restore_backend()
         fingerprint = self._fingerprint(tool_name, payload, context)
-        redis_record = self._get_from_redis(tool_name, idempotency_key)
+        scope_token = self._scope_token(context)
+        redis_record = self._get_from_redis(tool_name, idempotency_key, scope_token=scope_token)
         if redis_record is not None:
             with self._lock:
-                self._records[(tool_name, idempotency_key)] = StoredToolExecution(
+                self._records[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                     fingerprint=redis_record.fingerprint,
                     result=redis_record.result.model_copy(deep=True),
                     expires_at=redis_record.expires_at,
@@ -88,9 +90,9 @@ class ToolIdempotencyStore:
                 replay.audit_tags.append("idempotent-replay")
             return replay, False
         with self._lock:
-            record = self._records.get((tool_name, idempotency_key))
+            record = self._records.get((tool_name, scope_token, idempotency_key))
             if record is not None and record.expires_at is not None and record.expires_at <= time.time():
-                self._records.pop((tool_name, idempotency_key), None)
+                self._records.pop((tool_name, scope_token, idempotency_key), None)
                 self._persist_unlocked()
                 record = None
         if record is None:
@@ -113,6 +115,7 @@ class ToolIdempotencyStore:
     ) -> ToolExecutionResult:
         self._maybe_restore_backend()
         fingerprint = self._fingerprint(tool_name, payload, context)
+        scope_token = self._scope_token(context)
         stored = result.model_copy(deep=True)
         expires_at = time.time() + ttl_seconds if ttl_seconds and ttl_seconds > 0 else None
         if self._save_to_redis(
@@ -123,10 +126,11 @@ class ToolIdempotencyStore:
                 result=stored,
                 expires_at=expires_at,
             ),
+            scope_token=scope_token,
             ttl_seconds=ttl_seconds,
         ):
             with self._lock:
-                self._records[(tool_name, idempotency_key)] = StoredToolExecution(
+                self._records[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                     fingerprint=fingerprint,
                     result=stored.model_copy(deep=True),
                     expires_at=expires_at,
@@ -134,7 +138,7 @@ class ToolIdempotencyStore:
                 self._persist_unlocked()
             return result
         with self._lock:
-            self._records[(tool_name, idempotency_key)] = StoredToolExecution(
+            self._records[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                 fingerprint=fingerprint,
                 result=stored,
                 expires_at=expires_at,
@@ -166,39 +170,55 @@ class ToolIdempotencyStore:
             "backendError": self._backend_error,
         }
 
-    def _key(self, tool_name: str, idempotency_key: str) -> str:
-        return f"{self._redis_namespace}:{tool_name}:{idempotency_key}"
+    def _key(
+        self,
+        tool_name: str,
+        idempotency_key: str,
+        *,
+        scope_token: str = "legacy",
+        legacy: bool = False,
+    ) -> str:
+        if legacy:
+            scope_fragment = scope_token
+        else:
+            scope_fragment = hashlib.sha256(scope_token.encode("utf-8")).hexdigest()
+        return f"{self._redis_namespace}:{tool_name}:{scope_fragment}:{idempotency_key}"
 
     def _get_from_redis(
         self,
         tool_name: str,
         idempotency_key: str,
+        *,
+        scope_token: str = "legacy",
     ) -> StoredToolExecution | None:
         client = self._redis_client
         if client is None:
             return None
-        try:
-            payload = client.get(self._key(tool_name, idempotency_key))
-        except Exception as exc:
-            self._degrade_backend(exc)
-            return None
-        if not isinstance(payload, str) or not payload.strip():
-            return None
-        try:
-            parsed = json.loads(payload)
-            expires_at = parsed.get("expires_at")
-            parsed_expires_at = float(expires_at) if expires_at not in {None, ""} else None
-            return StoredToolExecution(
-                fingerprint=str(parsed.get("fingerprint", "")),
-                result=ToolExecutionResult.model_validate(parsed.get("result") or {}),
-                expires_at=parsed_expires_at,
-            )
-        except Exception:
+        for legacy in (False, True):
+            key = self._key(tool_name, idempotency_key, scope_token=scope_token, legacy=legacy)
             try:
-                client.delete(self._key(tool_name, idempotency_key))
+                payload = client.get(key)
+            except Exception as exc:
+                self._degrade_backend(exc)
+                return None
+            if not isinstance(payload, str) or not payload.strip():
+                continue
+            try:
+                parsed = json.loads(payload)
+                expires_at = parsed.get("expires_at")
+                parsed_expires_at = float(expires_at) if expires_at not in {None, ""} else None
+                return StoredToolExecution(
+                    fingerprint=str(parsed.get("fingerprint", "")),
+                    result=ToolExecutionResult.model_validate(parsed.get("result") or {}),
+                    expires_at=parsed_expires_at,
+                )
             except Exception:
-                pass
-            return None
+                try:
+                    client.delete(key)
+                except Exception:
+                    pass
+                return None
+        return None
 
     def _save_to_redis(
         self,
@@ -206,6 +226,7 @@ class ToolIdempotencyStore:
         idempotency_key: str,
         record: StoredToolExecution,
         *,
+        scope_token: str = "legacy",
         ttl_seconds: int | None,
     ) -> bool:
         client = self._redis_client
@@ -221,9 +242,9 @@ class ToolIdempotencyStore:
         )
         try:
             if ttl_seconds is not None and ttl_seconds > 0:
-                client.setex(self._key(tool_name, idempotency_key), max(int(ttl_seconds), 1), payload)
+                client.setex(self._key(tool_name, idempotency_key, scope_token=scope_token), max(int(ttl_seconds), 1), payload)
             else:
-                client.set(self._key(tool_name, idempotency_key), payload)
+                client.set(self._key(tool_name, idempotency_key, scope_token=scope_token), payload)
         except Exception as exc:
             self._degrade_backend(exc)
             return False
@@ -264,11 +285,11 @@ class ToolIdempotencyStore:
         if self._redis_client is None or not self._records:
             return
         now = time.time()
-        authoritative: dict[tuple[str, str], StoredToolExecution] = {}
-        for (tool_name, idempotency_key), record in self._records.items():
-            remote_record = self._get_from_redis(tool_name, idempotency_key)
+        authoritative: dict[tuple[str, str, str], StoredToolExecution] = {}
+        for (tool_name, scope_token, idempotency_key), record in self._records.items():
+            remote_record = self._get_from_redis(tool_name, idempotency_key, scope_token=scope_token)
             if remote_record is not None:
-                authoritative[(tool_name, idempotency_key)] = StoredToolExecution(
+                authoritative[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                     fingerprint=remote_record.fingerprint,
                     result=remote_record.result.model_copy(deep=True),
                     expires_at=remote_record.expires_at,
@@ -285,10 +306,11 @@ class ToolIdempotencyStore:
                     result=record.result.model_copy(deep=True),
                     expires_at=record.expires_at,
                 ),
+                scope_token=scope_token,
                 ttl_seconds=ttl_seconds,
             ):
                 return
-            authoritative[(tool_name, idempotency_key)] = StoredToolExecution(
+            authoritative[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                 fingerprint=record.fingerprint,
                 result=record.result.model_copy(deep=True),
                 expires_at=record.expires_at,
@@ -304,12 +326,12 @@ class ToolIdempotencyStore:
         self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "records": {
-                f"{tool_name}::{idempotency_key}": {
+                f"{tool_name}::{scope_token}::{idempotency_key}": {
                     "fingerprint": record.fingerprint,
                     "result": record.result.model_dump(mode="json"),
                     "expires_at": record.expires_at,
                 }
-                for (tool_name, idempotency_key), record in self._records.items()
+                for (tool_name, scope_token, idempotency_key), record in self._records.items()
             }
         }
         with tempfile.NamedTemporaryFile(
@@ -335,26 +357,47 @@ class ToolIdempotencyStore:
             return
 
     @staticmethod
-    def _load_records(path: Path | None) -> dict[tuple[str, str], StoredToolExecution]:
+    def _load_records(path: Path | None) -> dict[tuple[str, str, str], StoredToolExecution]:
         if path is None or not path.exists():
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
-        records: dict[tuple[str, str], StoredToolExecution] = {}
+        records: dict[tuple[str, str, str], StoredToolExecution] = {}
         now = time.time()
         for composite_key, raw_record in payload.get("records", {}).items():
-            tool_name, _, idempotency_key = composite_key.partition("::")
-            if not tool_name or not idempotency_key:
+            parts = composite_key.split("::", 2)
+            if len(parts) == 3:
+                tool_name, scope_token, idempotency_key = parts
+            elif len(parts) == 2:
+                tool_name, idempotency_key = parts
+                scope_token = "legacy"
+            else:
+                continue
+            if not tool_name or not scope_token or not idempotency_key:
                 continue
             expires_at = raw_record.get("expires_at")
             parsed_expires_at = float(expires_at) if expires_at not in {None, ""} else None
             if parsed_expires_at is not None and parsed_expires_at <= now:
                 continue
-            records[(tool_name, idempotency_key)] = StoredToolExecution(
+            records[(tool_name, scope_token, idempotency_key)] = StoredToolExecution(
                 fingerprint=str(raw_record.get("fingerprint", "")),
                 result=ToolExecutionResult.model_validate(raw_record.get("result", {})),
                 expires_at=parsed_expires_at,
             )
         return records
+
+    @staticmethod
+    def _scope_token(context: ToolExecutionContext) -> str:
+        return json.dumps(
+            {
+                "tenant_id": context.tenant_id,
+                "user_id": context.user_id,
+                "account_id": context.account_id,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
 
     @staticmethod
     def _fingerprint(tool_name: str, payload: dict, context: ToolExecutionContext) -> str:

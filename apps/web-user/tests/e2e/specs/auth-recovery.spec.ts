@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { resetApi } from '../helpers';
+import { resetApi, resolveAppUrl } from '../helpers';
 
 test('sends a reset code, completes password recovery, and signs in with the new password', async ({ page }) => {
   await resetApi();
-  await page.goto('/login');
+  await page.goto(resolveAppUrl('/login'));
 
   await page.getByRole('button', { name: '忘记密码？通过验证码重置' }).click();
   await expect(page.getByRole('heading', { name: '找回并重置密码', exact: true })).toBeVisible();

@@ -29,7 +29,8 @@
         "tool_result",
         "delta",
         "citation",
-        "done"
+        "done",
+        "message.error"
       ]
     },
     "data": {

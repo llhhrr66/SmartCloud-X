@@ -1,5 +1,10 @@
+import hashlib
+import io
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
+from uuid import uuid4
 
 from app.core.config import get_settings
 from app.core.metrics import (
@@ -20,7 +25,13 @@ from app.models.knowledge import (
 )
 from app.services.ingestion import IngestionService, get_ingestion_service
 
+try:
+    from minio import Minio
+except ImportError:  # pragma: no cover - exercised in integration environments
+    Minio = None
+
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".text"}
+OBJECT_STORAGE_SOURCE_TYPES = {"minio", "object_storage"}
 
 
 class FileImportService:
@@ -151,15 +162,97 @@ class FileImportService:
 
     def load_import_file(self, file_id: str) -> tuple[Path, str]:
         path = self.resolve_file_id(file_id)
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported import file extension: {path.suffix or '(none)'}")
+        self._require_supported_text_extension(path.name, label="import file")
         try:
-            content = path.read_text(encoding="utf-8").strip()
+            content = self._validate_loaded_content(path.read_text(encoding="utf-8"), file_id)
         except UnicodeDecodeError as exc:
             raise ValueError(f"Import file is not valid UTF-8 text: {file_id}") from exc
-        if len(content) < 20:
-            raise ValueError(f"Import file content shorter than minimum ingestion size: {file_id}")
         return path, content
+
+    def load_admin_document_source(
+        self,
+        file_id: str,
+        *,
+        source_type: str,
+        source_uri: str | None = None,
+    ) -> tuple[str, str, str]:
+        normalized_source_type = source_type.strip().lower()
+        if normalized_source_type in OBJECT_STORAGE_SOURCE_TYPES:
+            bucket, object_key = self._resolve_minio_object(file_id, source_uri)
+            content = self._load_minio_object_text(bucket, object_key)
+            return (
+                f"{bucket}/{object_key}",
+                source_uri.strip() if source_uri and source_uri.strip() else f"minio://{bucket}/{object_key}",
+                content,
+            )
+
+        path, content = self.load_import_file(file_id)
+        return (
+            self.display_path(path),
+            source_uri.strip() if source_uri and source_uri.strip() else path.as_uri(),
+            content,
+        )
+
+    def begin_admin_upload(self, filename: str, content_type: str | None = None) -> tuple[str, str, str, str, str]:
+        normalized_name = Path(filename.strip()).name.strip()
+        if not normalized_name:
+            raise ValueError("filename must not be empty")
+        self._require_supported_text_extension(normalized_name, label="upload filename")
+        bucket = self.settings.minio_bucket or ""
+        if not bucket:
+            raise ValueError("SMARTCLOUD_MINIO_BUCKET is required for object-storage uploads")
+        upload_id = f"upl-{uuid4().hex[:12]}"
+        suffix = Path(normalized_name).suffix.lower()
+        stem = self._sanitize_filename_component(Path(normalized_name).stem)
+        date_prefix = datetime.now(UTC).strftime("%Y/%m/%d")
+        object_key = f"admin-uploads/{date_prefix}/{upload_id}/{stem}{suffix}"
+        source_uri = f"minio://{bucket}/{object_key}"
+        resolved_file_id = f"{bucket}/{object_key}"
+        return upload_id, bucket, object_key, source_uri, resolved_file_id
+
+    def upload_admin_file_bytes(
+        self,
+        *,
+        file_id: str,
+        source_uri: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> dict[str, str | int | None]:
+        if not content:
+            raise ValueError("upload body must not be empty")
+        bucket, object_key = self._resolve_minio_object(file_id, source_uri)
+        self._require_supported_text_extension(object_key, label="object-storage file")
+        client = self._minio_client()
+        try:
+            if not client.bucket_exists(bucket):
+                raise ValueError(
+                    f"Object storage bucket is unavailable or does not exist: {bucket}"
+                )
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - backend issues should surface as validation-style errors
+            raise ValueError(
+                f"Object storage bucket is unavailable or does not exist: {bucket}"
+            ) from exc
+        normalized_content_type = (content_type or "text/markdown; charset=utf-8").strip()
+        client.put_object(
+            bucket_name=bucket,
+            object_name=object_key,
+            data=io.BytesIO(content),
+            length=len(content),
+            content_type=normalized_content_type,
+        )
+        checksum = hashlib.sha256(content).hexdigest()[:16]
+        return {
+            "bucket": bucket,
+            "object_key": object_key,
+            "file_id": object_key,
+            "resolved_file_id": f"{bucket}/{object_key}",
+            "source_uri": f"minio://{bucket}/{object_key}",
+            "content_type": normalized_content_type,
+            "size_bytes": len(content),
+            "checksum": checksum,
+        }
 
     def resolve_file_id(self, file_id: str) -> Path:
         if not file_id.strip():
@@ -177,6 +270,69 @@ class FileImportService:
 
     def display_path(self, path: Path) -> str:
         return self._display_path(path)
+
+    def _load_minio_object_text(self, bucket: str, object_key: str) -> str:
+        self._require_supported_text_extension(object_key, label="object-storage file")
+        client = self._minio_client()
+        response = None
+        try:
+            response = client.get_object(bucket_name=bucket, object_name=object_key)
+            try:
+                return self._validate_loaded_content(response.read().decode("utf-8"), f"{bucket}/{object_key}")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"Object storage file is not valid UTF-8 text: {bucket}/{object_key}") from exc
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - service should convert backend issues to validation-style errors
+            raise ValueError(f"Object storage file could not be read: {bucket}/{object_key}") from exc
+        finally:
+            if response is not None:
+                response.close()
+
+    def _resolve_minio_object(self, file_id: str, source_uri: str | None) -> tuple[str, str]:
+        object_key = file_id.strip().lstrip("/")
+        if not object_key:
+            raise ValueError("file_id must not be empty")
+        bucket = self.settings.minio_bucket or ""
+
+        normalized_source_uri = source_uri.strip() if source_uri and source_uri.strip() else None
+        if normalized_source_uri:
+            parsed = urlparse(normalized_source_uri)
+            if parsed.scheme == "minio":
+                if parsed.netloc.strip():
+                    bucket = parsed.netloc.strip()
+                if parsed.path.strip("/"):
+                    object_key = parsed.path.lstrip("/")
+            elif parsed.scheme in {"http", "https"} and self.settings.minio_endpoint:
+                endpoint = urlparse(self._normalized_endpoint(self.settings.minio_endpoint))
+                if parsed.netloc == endpoint.netloc and parsed.path.strip("/"):
+                    parts = parsed.path.lstrip("/").split("/", 1)
+                    bucket = parts[0]
+                    if len(parts) > 1 and parts[1].strip():
+                        object_key = parts[1].strip()
+
+        if not bucket:
+            raise ValueError("SMARTCLOUD_MINIO_BUCKET is required for object-storage document reads")
+        if not object_key:
+            raise ValueError("object-storage file key must not be empty")
+        return bucket, object_key
+
+    def _minio_client(self):
+        if Minio is None:
+            raise ValueError("MinIO client dependency is unavailable")
+        if not self.settings.minio_endpoint:
+            raise ValueError("SMARTCLOUD_MINIO_ENDPOINT is required for object-storage document reads")
+        if not self.settings.minio_access_key or not self.settings.minio_secret_key:
+            raise ValueError(
+                "SMARTCLOUD_MINIO_ACCESS_KEY and SMARTCLOUD_MINIO_SECRET_KEY are required for object-storage document reads"
+            )
+        parsed = urlparse(self._normalized_endpoint(self.settings.minio_endpoint))
+        return Minio(
+            parsed.netloc,
+            access_key=self.settings.minio_access_key,
+            secret_key=self.settings.minio_secret_key,
+            secure=parsed.scheme == "https",
+        )
 
     def _resolve_directory(self, directory: str | None) -> Path:
         root = self.settings.import_root.expanduser().resolve()
@@ -246,9 +402,35 @@ class FileImportService:
     def _display_path(self, path: Path) -> str:
         root = self.settings.import_root.expanduser().resolve()
         try:
-            return str(path.resolve().relative_to(root))
+            return PurePosixPath(path.resolve().relative_to(root)).as_posix()
         except ValueError:
-            return str(path.resolve())
+            return PurePosixPath(path.resolve()).as_posix()
+
+    @staticmethod
+    def _normalized_endpoint(endpoint: str) -> str:
+        parsed = urlparse(endpoint)
+        if parsed.scheme and parsed.netloc:
+            return endpoint.rstrip("/")
+        return f"http://{endpoint.strip().rstrip('/')}"
+
+    @staticmethod
+    def _validate_loaded_content(content: str, file_id: str) -> str:
+        normalized = content.strip()
+        if len(normalized) < 20:
+            raise ValueError(f"Import file content shorter than minimum ingestion size: {file_id}")
+        return normalized
+
+    @staticmethod
+    def _require_supported_text_extension(value: str, *, label: str) -> None:
+        suffix = Path(value).suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
+            raise ValueError(f"Unsupported {label} extension: {suffix or '(none)'}")
+
+    @staticmethod
+    def _sanitize_filename_component(value: str) -> str:
+        normalized = "".join(character.lower() if character.isalnum() else "-" for character in value.strip())
+        collapsed = "-".join(part for part in normalized.split("-") if part)
+        return collapsed or "upload"
 
     @staticmethod
     def _ensure_within_root(path: Path, root: Path, *, message: str) -> None:

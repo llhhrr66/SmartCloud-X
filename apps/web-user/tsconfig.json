@@ -5,7 +5,20 @@
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@smartcloud-x/frontend-sdk": ["../../packages/frontend-sdk/src/index.ts"],
+      "@smartcloud-x/frontend-sdk/core": ["../../packages/frontend-sdk/src/core/index.ts"],
+      "@smartcloud-x/frontend-sdk/web-user": ["../../packages/frontend-sdk/src/web-user/index.ts"],
+      "@smartcloud-x/common-schemas": ["../../packages/common-schemas/src/index.ts"],
+      "@smartcloud-x/common-schemas/*": ["../../packages/common-schemas/src/*"],
+      "@smartcloud-x/common": ["../../packages/common/src/index.ts"],
+      "@smartcloud-x/common/*": ["../../packages/common/src/*"],
+      "@smartcloud-x/common-auth": ["../../packages/common-auth/src/index.ts"],
+      "@smartcloud-x/common-auth/*": ["../../packages/common-auth/src/*"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src"]
 }

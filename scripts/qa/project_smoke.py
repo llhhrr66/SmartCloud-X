@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import socket
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import ParseResult, urlencode, urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 
 if __package__ in {None, ""}:
@@ -25,6 +26,8 @@ if __package__ in {None, ""}:
 from scripts.qa.openapi_contracts import ContractValidationError, OpenApiContract
 from scripts.qa.contract_policy import validate_live_response_contract
 from scripts.qa.service_matrix import OPENAPI_SPECS, SERVICE_RUNTIMES, SMOKE_SCENARIOS
+
+DIRECT_HTTP = build_opener(ProxyHandler({}))
 
 try:  # pragma: no cover - optional QA runtime dependency
     from minio import Minio
@@ -44,7 +47,7 @@ except Exception:  # pragma: no cover - exercised on lean runners
     redis_module = None
 
 
-REQUEST_TIMEOUT = 10.0
+REQUEST_TIMEOUT = float(os.getenv("SMARTCLOUD_QA_REQUEST_TIMEOUT_SECONDS", "10"))
 WAIT_ATTEMPTS = 60
 WAIT_SECONDS = 0.5
 SCENARIO_SERVICE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
@@ -257,6 +260,36 @@ def _minio_object_exists(
         return False
 
 
+def _minio_put_text_object(
+    *,
+    endpoint: str | None,
+    bucket: str | None,
+    access_key: str | None,
+    secret_key: str | None,
+    object_name: str,
+    content: str,
+) -> None:
+    if not endpoint or not bucket or not access_key or not secret_key:
+        raise RuntimeError("live shared-backend QA requires MinIO endpoint, bucket, and credentials")
+    if Minio is None:
+        raise RuntimeError("live shared-backend QA requires minio in the selected runtime")
+    parsed = urlparse(endpoint)
+    client = Minio(
+        parsed.netloc or parsed.path,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=(parsed.scheme or "https") == "https",
+    )
+    payload = content.encode("utf-8")
+    client.put_object(
+        bucket_name=bucket,
+        object_name=object_name,
+        data=io.BytesIO(payload),
+        length=len(payload),
+        content_type="text/markdown; charset=utf-8",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SmartCloud-X multi-service smoke scenarios.")
     parser.add_argument(
@@ -366,9 +399,10 @@ def build_request(
     url: str,
     *,
     payload: dict[str, Any] | None = None,
+    raw_body: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> Request:
-    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    body = raw_body if raw_body is not None else (None if payload is None else json.dumps(payload).encode("utf-8"))
     request_headers = {
         "Content-Type": "application/json",
         "X-Request-Id": "smartcloud-qa-smoke",
@@ -385,11 +419,12 @@ def request_json(
     url: str,
     *,
     payload: dict[str, Any] | None = None,
+    raw_body: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> HttpResult:
-    req = build_request(method, url, payload=payload, headers=headers)
+    req = build_request(method, url, payload=payload, raw_body=raw_body, headers=headers)
     try:
-        with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+        with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
             body = response.read().decode("utf-8")
             parsed = json.loads(body) if body else None
             return HttpResult(
@@ -410,7 +445,7 @@ def request_json(
 def request_text(method: str, url: str, *, headers: dict[str, str] | None = None) -> HttpResult:
     req = build_request(method, url, headers=headers)
     try:
-        with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+        with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
             return HttpResult(
                 status_code=response.status,
                 payload=response.read().decode("utf-8"),
@@ -455,6 +490,32 @@ def assert_status(result: HttpResult, expected_status: int, *, label: str) -> An
         )
     assert_standard_headers(result, label=label)
     return unwrap_payload(result.payload)
+
+
+def assert_backend_health_surface(
+    payload: dict[str, Any],
+    *,
+    service_name: str,
+    expected_mode: str,
+    expected_backends: dict[str, dict[str, Any]],
+) -> None:
+    if payload.get("service") != service_name:
+        raise RuntimeError(f"{service_name} health service name drifted: {payload}")
+    if payload.get("runtime_mode") != expected_mode:
+        raise RuntimeError(f"{service_name} runtime_mode drifted: {payload}")
+    backends = payload.get("backends")
+    if not isinstance(backends, dict):
+        raise RuntimeError(f"{service_name} health backends payload is missing or invalid: {payload}")
+    for backend_name, expectations in expected_backends.items():
+        backend_payload = backends.get(backend_name)
+        if not isinstance(backend_payload, dict):
+            raise RuntimeError(f"{service_name} health backend '{backend_name}' is missing: {payload}")
+        for field_name, expected_value in expectations.items():
+            if backend_payload.get(field_name) != expected_value:
+                raise RuntimeError(
+                    f"{service_name} health backend '{backend_name}' field '{field_name}' drifted: "
+                    f"expected {expected_value!r}, got {backend_payload.get(field_name)!r}"
+                )
 
 
 def wait_for_health(service: ManagedService) -> None:
@@ -624,6 +685,7 @@ def launch_services(
             "SMARTCLOUD_KNOWLEDGE_RAW_MIRROR_ROOT": str(
                 temp_root / "knowledge-service" / "raw-objects"
             ),
+            "SMARTCLOUD_DIFY_EXTERNAL_KNOWLEDGE_API_KEY": "smartcloud-qa-dify-external",
         },
         "rag-service": {
             "KNOWLEDGE_SERVICE_BASE_URL": f"http://127.0.0.1:{ports.get('knowledge-service', 0)}",
@@ -859,6 +921,50 @@ def smoke_auth_marketing_research(
     research_bootstrap_before = research_bootstrap_path.read_text(encoding="utf-8")
 
     documented_drifts: list[dict[str, str]] = []
+    auth_health = request_json("GET", f"{auth_url}/healthz")
+    auth_health_data = assert_status(auth_health, 200, label="auth health")
+    marketing_health = request_json("GET", f"{marketing_url}/healthz")
+    marketing_health_data = assert_status(marketing_health, 200, label="marketing health")
+    research_health = request_json("GET", f"{research_url}/healthz")
+    research_health_data = assert_status(research_health, 200, label="research health")
+
+    expected_runtime_mode = "shared-backend" if backend_mode.live_infra and backend_mode.mysql_dsn else "local-fallback"
+    assert_backend_health_surface(
+        auth_health_data,
+        service_name="auth-user-service",
+        expected_mode=expected_runtime_mode,
+        expected_backends={
+            "mysql": {"kind": "mysql", "role": "primary", "active": expected_runtime_mode == "shared-backend"},
+            "sqlite": {"kind": "sqlite", "role": "fallback", "active": expected_runtime_mode == "local-fallback"},
+            "redis": {"kind": "redis", "role": "optional", "active": False},
+        },
+    )
+    assert_backend_health_surface(
+        marketing_health_data,
+        service_name="marketing-service",
+        expected_mode=expected_runtime_mode,
+        expected_backends={
+            "mysql": {"kind": "mysql", "role": "primary", "active": expected_runtime_mode == "shared-backend"},
+            "sqlite": {"kind": "sqlite", "role": "fallback", "active": expected_runtime_mode == "local-fallback"},
+            "minio": {
+                "kind": "minio",
+                "role": "raw-object",
+                "active": bool(services["marketing-service"].env.get("MARKETING_SERVICE_MINIO_ENDPOINT")),
+            },
+            "redis": {"kind": "redis", "role": "optional", "active": False},
+        },
+    )
+    assert_backend_health_surface(
+        research_health_data,
+        service_name="research-service",
+        expected_mode=expected_runtime_mode,
+        expected_backends={
+            "mysql": {"kind": "mysql", "role": "primary", "active": expected_runtime_mode == "shared-backend"},
+            "sqlite": {"kind": "sqlite", "role": "fallback", "active": expected_runtime_mode == "local-fallback"},
+            "redis": {"kind": "redis", "role": "optional", "active": False},
+        },
+    )
+
     login = request_json(
         "POST",
         f"{auth_url}/api/v1/auth/login",
@@ -1216,6 +1322,11 @@ def smoke_auth_marketing_research(
             "reportFileId": research_detail_data["report_file_id"],
             "persistedAfterRestart": True,
         },
+        "runtimeHealth": {
+            "auth": auth_health_data,
+            "marketing": marketing_health_data,
+            "research": research_health_data,
+        },
     }
 
 
@@ -1303,24 +1414,98 @@ def smoke_knowledge_rag_admin(
         drift_log=documented_drifts,
     )
 
+    expected_admin_source_type = "filesystem"
+    expected_admin_file_id = "starter/gpu-release-checklist.md"
+    expected_admin_source_uri_prefix = "file:///"
+    upload_lifecycle_verified = False
+    admin_document_payload = {
+        "file_id": "starter/gpu-release-checklist.md",
+        "title": "GPU Release Checklist",
+        "tags": ["gpu", "admin"],
+        "source_type": "filesystem",
+    }
+    if backend_mode.live_infra:
+        upload_init = request_json(
+            "POST",
+            f"{knowledge_url}/api/v1/admin/files/uploads",
+            headers={"X-Operator-Reason": "qa smoke init upload"},
+            payload={
+                "filename": "gpu-release-checklist.md",
+                "content_type": "text/markdown; charset=utf-8",
+            },
+        )
+        upload_init_data = assert_status(upload_init, 201, label="admin init upload")
+        upload_content = (
+            "# GPU Release Checklist\n\n"
+            "共享对象存储 smoke 会验证 admin 文档创建可以先通过 owner-local upload lifecycle 写入 MinIO，"
+            "再由 create document 正式消费。"
+        ).encode("utf-8")
+        upload_content_result = request_json(
+            "PUT",
+            f"{knowledge_url}/api/v1/admin/files/uploads/{upload_init_data['upload_id']}/content",
+            headers={
+                "X-Operator-Reason": "qa smoke upload content",
+                "Content-Type": "text/markdown; charset=utf-8",
+            },
+            raw_body=upload_content,
+        )
+        upload_content_data = assert_status(upload_content_result, 200, label="admin upload content")
+        upload_complete = request_json(
+            "POST",
+            f"{knowledge_url}/api/v1/admin/files/uploads/{upload_init_data['upload_id']}:complete",
+            headers={"X-Operator-Reason": "qa smoke complete upload"},
+        )
+        upload_complete_data = assert_status(upload_complete, 200, label="admin complete upload")
+        expected_admin_source_type = "minio"
+        expected_admin_file_id = upload_complete_data["resolved_file_id"]
+        expected_admin_source_uri_prefix = upload_complete_data["source_uri"]
+        upload_lifecycle_verified = (
+            upload_init_data["status"] == "initialized"
+            and upload_content_data["status"] == "uploaded"
+            and upload_complete_data["status"] == "completed"
+            and upload_complete_data["source_type"] == "minio"
+        )
+        admin_document_payload = {
+            "file_id": upload_complete_data["file_id"],
+            "title": "GPU Release Checklist",
+            "tags": ["gpu", "admin", "minio"],
+            "source_type": "minio",
+            "source_uri": upload_complete_data["source_uri"],
+        }
+
     admin_document = request_json(
         "POST",
         f"{knowledge_url}/api/v1/admin/knowledge-bases/{knowledge_base_data['kb_id']}/documents",
         headers={"X-Operator-Reason": "qa smoke ingest doc"},
-        payload={
-            "file_id": "starter/gpu-release-checklist.md",
-            "title": "GPU Release Checklist",
-            "tags": ["gpu", "admin"],
-            "source_type": "filesystem",
-        },
+        payload=admin_document_payload,
     )
     admin_document_data = assert_status(admin_document, 202, label="admin create document")
+    if admin_document_data["source_type"] != expected_admin_source_type:
+        raise RuntimeError(
+            "admin document source_type drifted from expected smoke path: "
+            f"{admin_document_data['source_type']!r} != {expected_admin_source_type!r}"
+        )
+    if admin_document_data["file_id"] != expected_admin_file_id:
+        raise RuntimeError(
+            "admin document file_id drifted from expected smoke path: "
+            f"{admin_document_data['file_id']!r} != {expected_admin_file_id!r}"
+        )
+    if not str(admin_document_data.get("source_uri", "")).startswith(expected_admin_source_uri_prefix):
+        raise RuntimeError(
+            "admin document source_uri drifted from expected smoke path: "
+            f"{admin_document_data.get('source_uri')!r}"
+        )
 
     document_detail = request_json(
         "GET",
         f"{knowledge_url}/api/v1/admin/knowledge-documents/{admin_document_data['doc_id']}",
     )
     document_detail_data = assert_status(document_detail, 200, label="admin document detail")
+    if document_detail_data["document"]["source_type"] != expected_admin_source_type:
+        raise RuntimeError(
+            "admin document detail source_type drifted from expected smoke path: "
+            f"{document_detail_data['document']['source_type']!r} != {expected_admin_source_type!r}"
+        )
     validate_contract(
         contracts,
         "admin-api",
@@ -1408,6 +1593,26 @@ def smoke_knowledge_rag_admin(
         drift_log=documented_drifts,
     )
 
+    dify_retrieval = request_json(
+        "POST",
+        f"{knowledge_url}/retrieval",
+        headers={"Authorization": "Bearer smartcloud-qa-dify-external"},
+        payload={
+            "knowledge_id": kb_code,
+            "query": "GPU部署前需要确认什么",
+            "retrieval_setting": {"top_k": 3, "score_threshold": 0.1},
+            "metadata_condition": {
+                "logical_operator": "and",
+                "conditions": [
+                    {"name": ["tags"], "comparison_operator": "contains", "value": "gpu"}
+                ],
+            },
+        },
+    )
+    dify_retrieval_data = assert_status(dify_retrieval, 200, label="dify external retrieval")
+    if len(dify_retrieval_data.get("records", [])) < 1:
+        raise RuntimeError(f"dify external retrieval returned no records: {dify_retrieval_data}")
+
     knowledge_metrics = request_text("GET", f"{knowledge_url}/metrics")
     assert_status(knowledge_metrics, 200, label="knowledge metrics")
     rag_metrics = request_text("GET", f"{rag_url}/metrics")
@@ -1423,6 +1628,11 @@ def smoke_knowledge_rag_admin(
         raise RuntimeError(f"rag diagnose returned no candidates: {rag_diagnose_data}")
     if int(admin_diagnostics_data.get("coverage", {}).get("candidate_count", 0)) < 1:
         raise RuntimeError(f"admin rag diagnostics returned no candidates: {admin_diagnostics_data}")
+    if dify_retrieval_data["records"][0]["metadata"].get("knowledge_id") != kb_code:
+        raise RuntimeError(
+            "dify external retrieval did not preserve requested knowledge_id: "
+            f"{dify_retrieval_data}"
+        )
     if "knowledge_readiness_state" not in str(knowledge_metrics.payload):
         raise RuntimeError("knowledge metrics did not expose readiness gauges")
     if "rag_upstream_ready_state" not in str(rag_metrics.payload):
@@ -1571,9 +1781,12 @@ def smoke_knowledge_rag_admin(
             "metadataStore": integrations.get("metadataStore", {}).get("backend"),
             "vectorStore": integrations.get("vectorStore", {}).get("backend"),
             "bm25Store": integrations.get("bm25Store", {}).get("backend"),
+            "difyExternalKnowledge": integrations.get("difyExternalKnowledge", {}).get("status"),
             "cache": integrations.get("cache", {}).get("backend"),
             "taskQueue": integrations.get("taskQueue", {}).get("backend"),
             "connectorResults": len(connector_results),
+            "adminDocumentSourceType": document_detail_after_restart_data["document"]["source_type"],
+            "uploadLifecycleVerified": upload_lifecycle_verified,
             "snapshotEventRetainedAfterRestart": True,
             "searchTotalAfterRestart": search_after_restart_data["total"],
             "ragCandidateCountAfterRestart": rag_diagnose_after_restart_data["candidateCount"],
@@ -1604,6 +1817,18 @@ def smoke_knowledge_rag_admin(
                 "knowledge live backend snapshot exposed no connector results after restart: "
                 f"{snapshot_event_after_restart}"
             )
+        if backend_evidence["adminDocumentSourceType"] != expected_admin_source_type:
+            raise RuntimeError(
+                "knowledge live backend snapshot did not retain the expected admin source type: "
+                f"{backend_evidence['adminDocumentSourceType']!r}"
+            )
+        if backend_evidence["uploadLifecycleVerified"] is not True:
+            raise RuntimeError("knowledge live backend upload lifecycle did not complete successfully")
+        if backend_evidence["difyExternalKnowledge"] != "configured":
+            raise RuntimeError(
+                "knowledge live backend did not expose configured Dify external knowledge status: "
+                f"{backend_evidence['difyExternalKnowledge']!r}"
+            )
 
     return {
         "documentedContractDrifts": documented_drifts,
@@ -1628,6 +1853,10 @@ def smoke_knowledge_rag_admin(
                 "candidate_count"
             ],
             "persistedAfterRestart": True,
+        },
+        "difyExternalKnowledge": {
+            "recordCount": len(dify_retrieval_data["records"]),
+            "firstKnowledgeId": dify_retrieval_data["records"][0]["metadata"]["knowledge_id"],
         },
     }
 

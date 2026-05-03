@@ -1,7 +1,9 @@
 import asyncio
 import importlib
+import json
 import os
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9,6 +11,7 @@ from threading import Thread
 
 from fastapi.testclient import TestClient
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState, use_span
+from prometheus_client import REGISTRY
 from prometheus_client.parser import text_string_to_metric_families
 
 
@@ -34,6 +37,7 @@ from app.core.config import get_settings
 from app.core.metrics import (
     CACHE_BACKEND_ERRORS_TOTAL,
     CACHE_HITS_TOTAL,
+    CACHE_HIT_RATIO,
     CACHE_MISSES_TOTAL,
     DEGRADED_RETRIEVALS_TOTAL,
     EMPTY_RETRIEVALS_TOTAL,
@@ -44,6 +48,7 @@ from app.main import app as service_app
 from app.models.common import TraceContext
 from app.models.rag import (
     AnswerRequest,
+    ConversationMessage,
     KnowledgeChunkRecord,
     KnowledgeSearchCandidate,
     QueryRewriteResult,
@@ -56,7 +61,7 @@ from app.services import knowledge_client as knowledge_client_module
 from app.services.knowledge_client import KnowledgeServiceClient, KnowledgeServiceProtocolError
 from app.services.health import get_health_service
 from app.services.providers import get_knowledge_client
-from app.services.query_rewriter import QueryRewriter
+from app.services.query_rewriter import QueryRewriter, tokenize
 from app.services.retrieval import RetrievalService, get_retrieval_service
 
 
@@ -70,10 +75,19 @@ def clear_service_caches() -> None:
     get_tracer_provider.cache_clear()
 
 
+def clear_prometheus_metrics() -> None:
+    collector_to_names = getattr(REGISTRY, "_collector_to_names", None)
+    collectors = list(collector_to_names) if isinstance(collector_to_names, dict) else []
+    for collector in collectors:
+        names = collector_to_names.get(collector, ()) if isinstance(collector_to_names, dict) else ()
+        if any(str(name).startswith("rag_") for name in names):
+            REGISTRY.unregister(collector)
+
+
 class TraceCollectorHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, object]] = []
 
-    def do_POST(self) -> None:  # noqa: N802 - stdlib callback signature
+    def do_POST(self) -> None:  # noqa: N802
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
         self.__class__.requests.append(
@@ -86,7 +100,7 @@ class TraceCollectorHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-    def log_message(self, format: str, *args) -> None:  # noqa: A003 - stdlib callback signature
+    def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
 
 
@@ -187,6 +201,38 @@ def metric_sample_value(text: str, sample_name: str, labels: dict[str, str] | No
     raise AssertionError(f"missing sample {sample_name} with labels {labels}")
 
 
+def build_candidate(
+    *,
+    chunk_id: str,
+    source_id: str,
+    document_id: str,
+    title: str,
+    content: str,
+    score: float,
+    source_name: str = "GPU 文档",
+    keywords: list[str] | None = None,
+    tags: list[str] | None = None,
+    created_at: str = "2026-04-16T00:00:00+00:00",
+) -> KnowledgeSearchCandidate:
+    return KnowledgeSearchCandidate(
+        chunk=KnowledgeChunkRecord(
+            id=chunk_id,
+            sourceId=source_id,
+            documentId=document_id,
+            documentTitle=title,
+            ordinal=1,
+            content=content,
+            tokenEstimate=max(1, len(tokenize(content))),
+            keywords=keywords or [],
+            tags=tags or [],
+            createdAt=created_at,
+        ),
+        sourceName=source_name,
+        score=score,
+        matchReason=f"matched tokens: {title}",
+    )
+
+
 def test_query_rewriter_expands_known_terms() -> None:
     result = QueryRewriter().rewrite("GPU 部署")
 
@@ -194,83 +240,142 @@ def test_query_rewriter_expands_known_terms() -> None:
     assert "配置" in result.expanded_terms
 
 
+def test_query_rewriter_merges_conversation_context() -> None:
+    result = QueryRewriter().rewrite(
+        "怎么配置",
+        [ConversationMessage(role="user", content="我刚买了 GPU 服务器，域名还没解析")],
+    )
+
+    assert any(term in result.context_terms for term in ["gpu", "服务器", "域名"])
+    assert "https" in result.expanded_terms or "ecs" in result.expanded_terms
+
+
+def test_query_rewriter_supports_external_synonym_file() -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+        json.dump({"gpu": ["显存"]}, handle, ensure_ascii=False)
+        path = handle.name
+    original = os.environ.get("SMARTCLOUD_RAG_SYNONYM_FILE")
+    os.environ["SMARTCLOUD_RAG_SYNONYM_FILE"] = path
+    clear_service_caches()
+    try:
+        result = QueryRewriter().rewrite("gpu")
+        assert "显存" in result.expanded_terms
+    finally:
+        if original is None:
+            os.environ.pop("SMARTCLOUD_RAG_SYNONYM_FILE", None)
+        else:
+            os.environ["SMARTCLOUD_RAG_SYNONYM_FILE"] = original
+        Path(path).unlink(missing_ok=True)
+        clear_service_caches()
+
+
 def test_retrieval_reranks_and_answer_composes() -> None:
     service = RetrievalService(QueryRewriter())
     candidates = [
-        KnowledgeSearchCandidate(
-            chunk=KnowledgeChunkRecord(
-                id="chk-1",
-                sourceId="src-1",
-                documentId="doc-1",
-                documentTitle="GPU 云主机部署建议",
-                ordinal=1,
-                content="部署 GPU 云主机前先确认驱动版本和镜像规格。",
-                tokenEstimate=20,
-                keywords=["gpu", "部署", "驱动"],
-                tags=["gpu"],
-                createdAt="2026-04-16T00:00:00+00:00",
-            ),
-            sourceName="GPU 文档",
+        build_candidate(
+            chunk_id="chk-1",
+            source_id="src-1",
+            document_id="doc-1",
+            title="GPU 云主机部署建议",
+            content="部署 GPU 云主机前先确认驱动版本和镜像规格。",
             score=0.7,
-            matchReason="matched tokens: gpu, 部署",
+            keywords=["gpu", "部署", "驱动"],
+            tags=["gpu"],
         ),
-        KnowledgeSearchCandidate(
-            chunk=KnowledgeChunkRecord(
-                id="chk-2",
-                sourceId="src-2",
-                documentId="doc-2",
-                documentTitle="账单 FAQ",
-                ordinal=1,
-                content="账单中心支持按月查询。",
-                tokenEstimate=10,
-                keywords=["账单"],
-                tags=["billing"],
-                createdAt="2026-04-16T00:00:00+00:00",
-            ),
-            sourceName="FAQ",
+        build_candidate(
+            chunk_id="chk-2",
+            source_id="src-2",
+            document_id="doc-2",
+            title="账单 FAQ",
+            content="账单中心支持按月查询。",
             score=0.4,
-            matchReason="matched tokens: 账单",
+            source_name="FAQ",
+            keywords=["账单"],
+            tags=["billing"],
         ),
     ]
 
-    retrieval = service.build_response(RetrieveRequest(query="GPU 部署", topK=2), candidates, "gpu 部署")
+    retrieval = service.build_response(
+        RetrieveRequest(query="GPU 部署", topK=2),
+        candidates,
+        "gpu 部署",
+        include_context=True,
+        backend_used="knowledge-service-search",
+    )
     answer = AnswerComposer().compose("GPU 部署", retrieval, style="brief")
 
     assert retrieval.citations[0].document_title == "GPU 云主机部署建议"
+    assert retrieval.citations[0].citation_id == "knowledge-service-search:chk-1"
+    assert retrieval.citations[0].backend_used == "knowledge-service-search"
+    assert retrieval.backend_used == "knowledge-service-search"
+    assert answer.backend_used == "knowledge-service-search"
     assert "GPU 云主机部署建议" in answer.answer
+    assert retrieval.context is not None
     assert not answer.degraded
+
+
+def test_context_builder_enforces_budget_deduplicates_and_marks_source() -> None:
+    service = RetrievalService(QueryRewriter())
+    service.context_builder.max_context_tokens = 20
+    candidates = [
+        build_candidate(
+            chunk_id="chk-1",
+            source_id="src-1",
+            document_id="doc-1",
+            title="GPU 指南",
+            content="GPU 部署前确认驱动版本和镜像规格。",
+            score=0.9,
+            keywords=["gpu", "部署"],
+        ),
+        build_candidate(
+            chunk_id="chk-2",
+            source_id="src-1",
+            document_id="doc-1",
+            title="GPU 指南",
+            content="GPU 部署前确认驱动版本和镜像规格。",
+            score=0.88,
+            keywords=["gpu", "部署"],
+        ),
+        build_candidate(
+            chunk_id="chk-3",
+            source_id="src-2",
+            document_id="doc-2",
+            title="域名指南",
+            content="域名解析完成后再绑定 HTTPS 证书。",
+            score=0.85,
+            keywords=["域名", "https"],
+        ),
+    ]
+
+    context = service.build_context(RetrieveRequest(query="GPU 部署", topK=3), candidates, "gpu 部署")
+
+    assert "[来源: GPU 指南]" in context.context_text
+    assert context.included_count == 1
+    assert context.truncated_count >= 1
+    assert context.token_estimate <= 20
 
 
 def test_diagnostic_exposes_expanded_terms_and_filters() -> None:
     service = RetrievalService(QueryRewriter())
-    rewrite = service.rewrite_query("GPU 部署")
+    request = RetrieveRequest(query="GPU 部署", topK=3, filters={"tags": ["gpu"], "sourceIds": ["src-1"]})
+    rewrite = service.rewrite_query(request)
     candidates = [
-        KnowledgeSearchCandidate(
-            chunk=KnowledgeChunkRecord(
-                id="chk-1",
-                sourceId="src-1",
-                documentId="doc-1",
-                documentTitle="GPU 云主机部署建议",
-                ordinal=1,
-                content="部署 GPU 云主机前先确认驱动版本和镜像规格。",
-                tokenEstimate=20,
-                keywords=["gpu", "部署", "驱动"],
-                tags=["gpu", "launch"],
-                createdAt="2026-04-16T00:00:00+00:00",
-            ),
-            sourceName="GPU 文档",
+        build_candidate(
+            chunk_id="chk-1",
+            source_id="src-1",
+            document_id="doc-1",
+            title="GPU 云主机部署建议",
+            content="部署 GPU 云主机前先确认驱动版本和镜像规格。",
             score=0.7,
-            matchReason="matched tokens: gpu, 部署",
+            keywords=["gpu", "部署", "驱动"],
+            tags=["gpu", "launch"],
         )
     ]
 
-    diagnostic = service.build_diagnostic(
-        RetrieveRequest(query="GPU 部署", topK=3, filters={"tags": ["gpu"], "sourceIds": ["src-1"]}),
-        candidates,
-        rewrite,
-    )
+    diagnostic = service.build_diagnostic(request, candidates, rewrite, backend_used="knowledge-service-search")
 
     assert diagnostic.candidate_count == 1
+    assert diagnostic.backend_used == "knowledge-service-search"
     assert "算力" in diagnostic.expanded_terms
     assert "gpu" in diagnostic.query_terms
     assert "配置" in diagnostic.unmatched_terms
@@ -278,6 +383,100 @@ def test_diagnostic_exposes_expanded_terms_and_filters() -> None:
     assert diagnostic.applied_filters.source_ids == ["src-1"]
     assert diagnostic.source_breakdown[0].source_name == "GPU 文档"
     assert any(bucket.label == "gpu" for bucket in diagnostic.tag_breakdown)
+
+
+def test_degraded_response_marks_backend_and_citation_contract() -> None:
+    service = RetrievalService(QueryRewriter())
+    response = service.build_response(
+        RetrieveRequest(query="GPU 部署", topK=2),
+        [],
+        "gpu 部署",
+        degraded=True,
+        degradation_note="knowledge-service unavailable",
+        backend_used="knowledge-service-unavailable",
+    )
+
+    assert response.backend_used == "knowledge-service-unavailable"
+    assert response.citations == []
+    assert response.degraded is True
+    assert any("knowledge-service unavailable" in note for note in response.coverage_notes)
+
+
+def test_rerank_respects_configurable_weights_and_domain_boosts() -> None:
+    originals = {
+        "SMARTCLOUD_RAG_RERANK_SCORE_WEIGHT": os.environ.get("SMARTCLOUD_RAG_RERANK_SCORE_WEIGHT"),
+        "SMARTCLOUD_RAG_RERANK_DENSITY_WEIGHT": os.environ.get("SMARTCLOUD_RAG_RERANK_DENSITY_WEIGHT"),
+        "SMARTCLOUD_RAG_RERANK_KEYWORD_WEIGHT": os.environ.get("SMARTCLOUD_RAG_RERANK_KEYWORD_WEIGHT"),
+        "SMARTCLOUD_RAG_RERANK_TITLE_BOOST": os.environ.get("SMARTCLOUD_RAG_RERANK_TITLE_BOOST"),
+    }
+    os.environ["SMARTCLOUD_RAG_RERANK_SCORE_WEIGHT"] = "0.5"
+    os.environ["SMARTCLOUD_RAG_RERANK_DENSITY_WEIGHT"] = "0.3"
+    os.environ["SMARTCLOUD_RAG_RERANK_KEYWORD_WEIGHT"] = "0.2"
+    os.environ["SMARTCLOUD_RAG_RERANK_TITLE_BOOST"] = "0.15"
+    clear_service_caches()
+    try:
+        service = RetrievalService(QueryRewriter())
+        candidates = [
+            build_candidate(
+                chunk_id="billing-1",
+                source_id="src-bill",
+                document_id="doc-bill",
+                title="账单 FAQ",
+                content="账单和发票下载入口说明。",
+                score=0.6,
+                source_name="billing_docs",
+                keywords=["账单", "发票"],
+                tags=["billing"],
+                created_at="2099-04-16T00:00:00+00:00",
+            ),
+            build_candidate(
+                chunk_id="other-1",
+                source_id="src-other",
+                document_id="doc-other",
+                title="产品说明",
+                content="通用产品帮助。",
+                score=0.61,
+                source_name="product_docs",
+                keywords=["帮助"],
+                tags=["product"],
+                created_at="2024-01-01T00:00:00+00:00",
+            ),
+        ]
+        response = service.build_response(RetrieveRequest(query="账单 发票", topK=2), candidates, "账单 发票")
+        assert response.citations[0].document_title == "账单 FAQ"
+    finally:
+        for key, value in originals.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_service_caches()
+
+
+def test_rerank_filters_below_min_score_threshold() -> None:
+    original = os.environ.get("SMARTCLOUD_RAG_MIN_RERANK_SCORE")
+    os.environ["SMARTCLOUD_RAG_MIN_RERANK_SCORE"] = "0.95"
+    clear_service_caches()
+    try:
+        service = RetrievalService(QueryRewriter())
+        candidates = [
+            build_candidate(
+                chunk_id="low-1",
+                source_id="src-low",
+                document_id="doc-low",
+                title="普通帮助",
+                content="一些一般性说明。",
+                score=0.3,
+            )
+        ]
+        response = service.build_response(RetrieveRequest(query="普通帮助", topK=2), candidates, "普通帮助")
+        assert response.citations == []
+    finally:
+        if original is None:
+            os.environ.pop("SMARTCLOUD_RAG_MIN_RERANK_SCORE", None)
+        else:
+            os.environ["SMARTCLOUD_RAG_MIN_RERANK_SCORE"] = original
+        clear_service_caches()
 
 
 def test_search_candidates_records_retrieval_duration_metric() -> None:
@@ -303,38 +502,36 @@ def test_search_candidates_uses_cache_on_repeat_requests() -> None:
     misses_before = counter_value(CACHE_MISSES_TOTAL)
     client = FakeKnowledgeClient(
         [
-            KnowledgeSearchCandidate(
-                chunk=KnowledgeChunkRecord(
-                    id="chk-cache-1",
-                    sourceId="src-cache-1",
-                    documentId="doc-cache-1",
-                    documentTitle="GPU 缓存测试",
-                    ordinal=1,
-                    content="GPU 缓存测试文档用于验证 rag-service 的检索缓存。",
-                    tokenEstimate=14,
-                    keywords=["gpu", "缓存"],
-                    tags=["gpu", "cache"],
-                    createdAt="2026-04-16T00:00:00+00:00",
-                ),
-                sourceName="GPU Cache",
+            build_candidate(
+                chunk_id="chk-cache-1",
+                source_id="src-cache-1",
+                document_id="doc-cache-1",
+                title="GPU 缓存测试",
+                content="GPU 缓存测试文档用于验证 rag-service 的检索缓存。",
                 score=0.82,
-                matchReason="matched tokens: gpu, 缓存",
+                source_name="GPU Cache",
+                keywords=["gpu", "缓存"],
+                tags=["gpu", "cache"],
             )
         ]
     )
 
     request = RetrieveRequest(query="GPU 缓存", topK=2, filters={"tags": ["gpu"]})
-    first_rewrite, first_candidates = asyncio.run(
-        service.search_candidates(request, client, cache_service=cache)
-    )
-    second_rewrite, second_candidates = asyncio.run(
-        service.search_candidates(request, client, cache_service=cache)
-    )
+    first_rewrite, first_candidates = asyncio.run(service.search_candidates(request, client, cache_service=cache))
+    second_rewrite, second_candidates = asyncio.run(service.search_candidates(request, client, cache_service=cache))
 
     assert first_rewrite.rewritten_query == second_rewrite.rewritten_query
     assert first_candidates[0].chunk.id == second_candidates[0].chunk.id
     assert counter_value(CACHE_MISSES_TOTAL) == misses_before + 1
     assert counter_value(CACHE_HITS_TOTAL) == hits_before + 1
+    assert counter_value(CACHE_HIT_RATIO) >= 0.5
+
+
+def test_cache_key_format_matches_documented_l1_convention() -> None:
+    cache = get_retrieval_cache()
+    key = cache._build_key(RetrieveRequest(query="GPU 缓存", topK=2))
+    assert key.startswith("smartcloud:rag:l1:")
+    assert "GPU 缓存" not in key
 
 
 def test_retrieval_cache_uses_redis_backend_when_configured(monkeypatch) -> None:
@@ -355,24 +552,19 @@ def test_retrieval_cache_uses_redis_backend_when_configured(monkeypatch) -> None
             originalQuery="GPU Redis 缓存",
             rewrittenQuery="gpu redis 缓存",
             expandedTerms=["gpu", "缓存"],
+            contextTerms=[],
         )
         candidates = [
-            KnowledgeSearchCandidate(
-                chunk=KnowledgeChunkRecord(
-                    id="chk-redis-1",
-                    sourceId="src-redis-1",
-                    documentId="doc-redis-1",
-                    documentTitle="GPU Redis 缓存",
-                    ordinal=1,
-                    content="GPU Redis 缓存验证检索结果可以持久化到 Redis。",
-                    tokenEstimate=12,
-                    keywords=["gpu", "redis"],
-                    tags=["gpu", "cache"],
-                    createdAt="2026-04-16T00:00:00+00:00",
-                ),
-                sourceName="GPU Redis",
+            build_candidate(
+                chunk_id="chk-redis-1",
+                source_id="src-redis-1",
+                document_id="doc-redis-1",
+                title="GPU Redis 缓存",
+                content="GPU Redis 缓存验证检索结果可以持久化到 Redis。",
                 score=0.88,
-                matchReason="matched tokens: gpu, redis",
+                source_name="GPU Redis",
+                keywords=["gpu", "redis"],
+                tags=["gpu", "cache"],
             )
         ]
 
@@ -414,24 +606,19 @@ def test_retrieval_cache_falls_back_to_memory_when_redis_errors(monkeypatch) -> 
             originalQuery="GPU Redis Fallback",
             rewrittenQuery="gpu redis fallback",
             expandedTerms=["gpu", "fallback"],
+            contextTerms=[],
         )
         candidates = [
-            KnowledgeSearchCandidate(
-                chunk=KnowledgeChunkRecord(
-                    id="chk-fallback-1",
-                    sourceId="src-fallback-1",
-                    documentId="doc-fallback-1",
-                    documentTitle="GPU Redis Fallback",
-                    ordinal=1,
-                    content="当 Redis 不可用时，rag-service 会回退到本地 TTL 缓存。",
-                    tokenEstimate=12,
-                    keywords=["gpu", "fallback"],
-                    tags=["gpu", "cache"],
-                    createdAt="2026-04-16T00:00:00+00:00",
-                ),
-                sourceName="GPU Fallback",
+            build_candidate(
+                chunk_id="chk-fallback-1",
+                source_id="src-fallback-1",
+                document_id="doc-fallback-1",
+                title="GPU Redis Fallback",
+                content="当 Redis 不可用时，rag-service 会回退到本地 TTL 缓存。",
                 score=0.8,
-                matchReason="matched tokens: gpu, fallback",
+                source_name="GPU Fallback",
+                keywords=["gpu", "fallback"],
+                tags=["gpu", "cache"],
             )
         ]
 
@@ -449,6 +636,25 @@ def test_retrieval_cache_falls_back_to_memory_when_redis_errors(monkeypatch) -> 
         clear_service_caches()
 
 
+def test_cache_clear_endpoints_invalidate_entries(monkeypatch) -> None:
+    monkeypatch.setattr(rag_routes, "get_knowledge_client", lambda: FakeKnowledgeClient([]))
+    cache = get_retrieval_cache()
+    request_model = RetrieveRequest(query="GPU 缓存", topK=2)
+    cache.set(
+        request_model,
+        QueryRewriteResult(originalQuery="GPU 缓存", rewrittenQuery="gpu 缓存", expandedTerms=[], contextTerms=[]),
+        [],
+    )
+    client = TestClient(service_app)
+
+    response = client.delete("/api/rag/v1/cache")
+    admin_response = client.post("/api/v1/admin/cache/clear")
+
+    assert response.status_code == 200
+    assert admin_response.status_code == 200
+    assert cache.describe()["cacheSize"] == 0
+
+
 def test_answer_falls_back_when_no_citations() -> None:
     service = RetrievalService(QueryRewriter())
     empty_before = counter_value(EMPTY_RETRIEVALS_TOTAL)
@@ -459,6 +665,7 @@ def test_answer_falls_back_when_no_citations() -> None:
         rewritten_query="未知问题",
         degraded=True,
         degradation_note="upstream unavailable",
+        include_context=True,
     )
     answer = AnswerComposer().compose("未知问题", retrieval)
 
@@ -485,6 +692,75 @@ def test_answer_route_returns_guidance_when_no_candidates(monkeypatch) -> None:
     assert payload["citations"] == []
     assert payload["coverageNotes"][0] == "未检索到匹配知识，请先补充知识库文档或放宽过滤条件。"
     assert "没有检索到可引用知识" in payload["answer"]
+    assert payload["context"]["includedCount"] == 0
+
+
+def test_context_endpoint_happy_path_and_large_candidate_list(monkeypatch) -> None:
+    candidates = [
+        build_candidate(
+            chunk_id=f"chk-{index}",
+            source_id=f"src-{index}",
+            document_id=f"doc-{index}",
+            title=f"文档 {index}",
+            content=f"第 {index} 条候选内容，包含 GPU 和 域名 配置 信息。",
+            score=1 - index * 0.01,
+            keywords=["gpu", "域名", "配置"],
+        )
+        for index in range(1, 55)
+    ]
+    monkeypatch.setattr(rag_routes, "get_knowledge_client", lambda: FakeKnowledgeClient(candidates))
+    monkeypatch.setattr(rag_routes, "get_retrieval_service", lambda: RetrievalService(QueryRewriter()))
+    client = TestClient(service_app)
+
+    response = client.post("/api/rag/v1/context", json={"query": "GPU 域名 配置", "topK": 20})
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["includedCount"] > 0
+    assert payload["tokenEstimate"] > 0
+    assert "[来源:" in payload["contextText"]
+
+
+def test_rewrite_endpoint_returns_context_aware_output(monkeypatch) -> None:
+    monkeypatch.setattr(rag_routes, "get_retrieval_service", lambda: RetrievalService(QueryRewriter()))
+    client = TestClient(service_app)
+    response = client.post(
+        "/api/rag/v1/rewrite",
+        json={
+            "query": "怎么配",
+            "conversationContext": [{"role": "user", "content": "我在看 GPU 服务器和 SSL 证书配置"}],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["contextTerms"]
+    assert data["rewrittenQuery"]
+
+
+def test_tokenization_edge_cases() -> None:
+    assert tokenize("") == []
+    assert tokenize("!!!") == []
+    assert tokenize("云服务器A100部署")
+    long_text = "服务器" * 200
+    assert tokenize(long_text)
+    assert tokenize("GPU服务器 ssl https 域名DNS")
+
+
+def test_concurrent_cache_access_thread_safety() -> None:
+    cache = get_retrieval_cache()
+    cache.clear()
+    request_model = RetrieveRequest(query="并发缓存", topK=2)
+    rewrite = QueryRewriteResult(originalQuery="并发缓存", rewrittenQuery="并发缓存", expandedTerms=[], contextTerms=[])
+    candidates = [build_candidate(chunk_id="cc-1", source_id="src", document_id="doc", title="并发", content="缓存并发测试", score=0.8)]
+
+    async def run_all() -> None:
+        async def run_once() -> None:
+            cache.set(request_model, rewrite, candidates)
+            assert cache.get(request_model) is not None
+
+        await asyncio.gather(*(run_once() for _ in range(10)))
+
+    asyncio.run(run_all())
 
 
 def test_upstream_headers_preserve_trace_context() -> None:
@@ -520,7 +796,7 @@ def test_knowledge_client_rejects_invalid_search_payload(monkeypatch) -> None:
     monkeypatch.setattr(
         knowledge_client_module.httpx,
         "AsyncClient",
-        lambda timeout: FakeHttpxAsyncClient(FakeMalformedHttpxResponse()),
+        lambda *args, **kwargs: FakeHttpxAsyncClient(FakeMalformedHttpxResponse()),
     )
     client = KnowledgeServiceClient()
 
@@ -594,7 +870,7 @@ def test_healthz_sets_standard_trace_headers() -> None:
     assert payload["trace"]["traceId"] == "req-rag-1"
 
 
-def test_healthz_surfaces_upstream_readiness(monkeypatch) -> None:
+def test_healthz_surfaces_upstream_readiness_and_cache_stats(monkeypatch) -> None:
     class FakeHealthService:
         async def build_payload(self):
             return {
@@ -605,6 +881,10 @@ def test_healthz_surfaces_upstream_readiness(monkeypatch) -> None:
                 "knowledgeServiceApiPrefix": "/api/knowledge/v1",
                 "requestTimeoutMs": 10000,
                 "corsAllowedOrigins": ["http://localhost:8050"],
+                "cache": {"cacheHitRate": 0.5, "cacheSize": 3, "lastPruneTime": 123.4},
+                "cacheHitRate": 0.5,
+                "cacheSize": 3,
+                "lastPruneTime": 123.4,
                 "upstream": {
                     "url": "http://knowledge-service:8030/healthz",
                     "reachable": True,
@@ -624,6 +904,8 @@ def test_healthz_surfaces_upstream_readiness(monkeypatch) -> None:
     payload = response.json()["data"]
     assert payload["status"] == "degraded"
     assert payload["ready"] is False
+    assert payload["cacheHitRate"] == 0.5
+    assert payload["cacheSize"] == 3
     assert payload["upstream"]["reachable"] is True
     assert payload["upstream"]["ready"] is False
     assert payload["warnings"] == ["missing starter catalog"]
@@ -640,6 +922,10 @@ def test_metrics_refreshes_readiness_and_upstream_gauges(monkeypatch) -> None:
                 "knowledgeServiceApiPrefix": "/api/knowledge/v1",
                 "requestTimeoutMs": 10000,
                 "corsAllowedOrigins": ["http://localhost:8050"],
+                "cache": {"cacheHitRate": 0.25, "cacheSize": 1, "lastPruneTime": 10.0},
+                "cacheHitRate": 0.25,
+                "cacheSize": 1,
+                "lastPruneTime": 10.0,
                 "upstream": {
                     "url": "http://knowledge-service:8030/healthz",
                     "reachable": True,
@@ -662,26 +948,20 @@ def test_metrics_refreshes_readiness_and_upstream_gauges(monkeypatch) -> None:
     assert metric_sample_value(text, "rag_upstream_ready_state") == 0
     assert abs(metric_sample_value(text, "rag_upstream_probe_latency_ms") - 12.4) < 0.001
     assert metric_sample_value(text, "rag_health_warning_count") == 1
+    assert abs(metric_sample_value(text, "rag_cache_hit_ratio") - 0.25) < 0.001
 
 
 def test_admin_diagnostics_route_returns_canonical_envelope(monkeypatch) -> None:
     candidates = [
-        KnowledgeSearchCandidate(
-            chunk=KnowledgeChunkRecord(
-                id="chk-1",
-                sourceId="src-1",
-                documentId="doc-1",
-                documentTitle="GPU 云主机部署建议",
-                ordinal=1,
-                content="部署前确认驱动版本、镜像规格和网络出口。",
-                tokenEstimate=18,
-                keywords=["gpu", "部署", "驱动"],
-                tags=["gpu"],
-                createdAt="2026-04-16T00:00:00+00:00",
-            ),
-            sourceName="GPU 文档",
+        build_candidate(
+            chunk_id="chk-1",
+            source_id="src-1",
+            document_id="doc-1",
+            title="GPU 云主机部署建议",
+            content="部署前确认驱动版本、镜像规格和网络出口。",
             score=0.72,
-            matchReason="matched tokens: gpu, 部署",
+            keywords=["gpu", "部署", "驱动"],
+            tags=["gpu"],
         )
     ]
     monkeypatch.setattr(admin_routes, "get_knowledge_client", lambda: FakeKnowledgeClient(candidates))
@@ -746,22 +1026,16 @@ def test_otlp_tracing_exports_rag_answer_request(monkeypatch) -> None:
             "get_knowledge_client",
             lambda: FakeKnowledgeClient(
                 [
-                    KnowledgeSearchCandidate(
-                        chunk=KnowledgeChunkRecord(
-                            id="chk-trace-1",
-                            sourceId="src-trace-1",
-                            documentId="doc-trace-1",
-                            documentTitle="GPU Trace 文档",
-                            ordinal=1,
-                            content="GPU Trace 文档用于验证 rag-service 的 OTLP 导出。",
-                            tokenEstimate=12,
-                            keywords=["gpu", "trace"],
-                            tags=["gpu", "trace"],
-                            createdAt="2026-04-16T00:00:00+00:00",
-                        ),
-                        sourceName="GPU Trace",
+                    build_candidate(
+                        chunk_id="chk-trace-1",
+                        source_id="src-trace-1",
+                        document_id="doc-trace-1",
+                        title="GPU Trace 文档",
+                        content="GPU Trace 文档用于验证 rag-service 的 OTLP 导出。",
                         score=0.91,
-                        matchReason="matched tokens: gpu, trace",
+                        source_name="GPU Trace",
+                        keywords=["gpu", "trace"],
+                        tags=["gpu", "trace"],
                     )
                 ]
             ),
@@ -789,4 +1063,147 @@ def test_otlp_tracing_exports_rag_answer_request(monkeypatch) -> None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        clear_service_caches()
+
+
+def test_faq_cache_hits_bypass_retrieval(monkeypatch):
+    clear_service_caches()
+    monkeypatch.setenv("SMARTCLOUD_FAQ_CACHE_ENABLED", "true")
+    try:
+        from app.services.faq_cache import get_faq_cache
+
+        get_faq_cache.cache_clear()
+        client = TestClient(service_app)
+        response = client.post(
+            "/api/rag/v1/answer",
+            json={"query": "怎么开发票", "topK": 5},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["backendUsed"] == "L1_FAQ_CACHE"
+        assert "发票" in data["answer"]
+        assert data["cache"]["layer"] == "L1_FAQ"
+        assert data["cache"]["tokenSaved"] > 0
+    finally:
+        clear_service_caches()
+
+
+def test_faq_cache_miss_goes_to_l2(monkeypatch):
+    clear_service_caches()
+    monkeypatch.setenv("SMARTCLOUD_FAQ_CACHE_ENABLED", "true")
+    try:
+        from app.services.faq_cache import get_faq_cache
+
+        get_faq_cache.cache_clear()
+        monkeypatch.setattr(
+            rag_routes,
+            "get_knowledge_client",
+            lambda: FakeKnowledgeClient(
+                [
+                    build_candidate(
+                        chunk_id="chk-l2-1",
+                        source_id="src-l2-1",
+                        document_id="doc-l2-1",
+                        title="GPU 部署文档",
+                        content="GPU 部署需要确认驱动版本。",
+                        score=0.88,
+                        source_name="GPU 文档",
+                        keywords=["gpu", "部署"],
+                        tags=["gpu"],
+                    )
+                ]
+            ),
+        )
+        client = TestClient(service_app)
+        response = client.post(
+            "/api/rag/v1/answer",
+            json={"query": "GPU 部署需要确认什么", "topK": 5},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["backendUsed"] != "L1_FAQ_CACHE"
+    finally:
+        clear_service_caches()
+
+
+def test_faq_cache_disabled_skips_l1(monkeypatch):
+    clear_service_caches()
+    monkeypatch.setenv("SMARTCLOUD_FAQ_CACHE_ENABLED", "false")
+    try:
+        from app.services.faq_cache import get_faq_cache
+
+        get_faq_cache.cache_clear()
+        monkeypatch.setattr(
+            rag_routes,
+            "get_knowledge_client",
+            lambda: FakeKnowledgeClient(
+                [
+                    build_candidate(
+                        chunk_id="chk-dis-1",
+                        source_id="src-dis-1",
+                        document_id="doc-dis-1",
+                        title="发票说明",
+                        content="发票相关说明文档。",
+                        score=0.85,
+                        source_name="发票文档",
+                        keywords=["发票"],
+                        tags=["发票"],
+                    )
+                ]
+            ),
+        )
+        client = TestClient(service_app)
+        response = client.post(
+            "/api/rag/v1/answer",
+            json={"query": "怎么开发票", "topK": 5},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["backendUsed"] != "L1_FAQ_CACHE"
+    finally:
+        clear_service_caches()
+
+
+def test_faq_cache_redis_fallback_to_memory(monkeypatch):
+    clear_service_caches()
+    monkeypatch.setenv("SMARTCLOUD_FAQ_CACHE_ENABLED", "true")
+    try:
+        from app.services.faq_cache import get_faq_cache
+
+        get_faq_cache.cache_clear()
+        faq = get_faq_cache()
+        faq._redis_client = None
+        result = faq.match("怎么开发票")
+        assert result is not None
+        assert "发票" in result.entry.answer
+    finally:
+        clear_service_caches()
+
+
+def test_faq_cache_metrics(monkeypatch):
+    clear_service_caches()
+    monkeypatch.setenv("SMARTCLOUD_FAQ_CACHE_ENABLED", "true")
+    try:
+        from app.services.faq_cache import get_faq_cache
+        from app.core.metrics import SMART_CACHE_REQUESTS_TOTAL
+
+        get_faq_cache.cache_clear()
+        faq = get_faq_cache()
+        faq.match("怎么开发票")
+        faq.match("不存在的问题 xyz")
+        hit_samples = [
+            s.value
+            for m in SMART_CACHE_REQUESTS_TOTAL.collect()
+            for s in m.samples
+            if s.name == "smart_cache_requests_total" and s.labels.get("result") == "hit"
+        ]
+        miss_samples = [
+            s.value
+            for m in SMART_CACHE_REQUESTS_TOTAL.collect()
+            for s in m.samples
+            if s.name == "smart_cache_requests_total" and s.labels.get("result") == "miss"
+        ]
+        assert sum(hit_samples) >= 1
+        assert sum(miss_samples) >= 1
+    finally:
         clear_service_caches()

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import os
 import re
 import socket
@@ -34,11 +32,12 @@ from app.core.tracing import get_tracer_provider, start_span
 from app.models.admin import KnowledgeDocumentProfile
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument, KnowledgeSource
 from app.models.runtime import ConnectorWriteResult, IndexingOutboxEvent
+from app.services.embeddings import build_embedding_provider
+from app.services.index_targets import KnowledgeIndexTargetResolver
 from app.services.runtime_sync import KnowledgeRuntimeSyncService, get_runtime_sync_service, utc_now
 from app.services.store import KnowledgeStoreRepository
 from app.services.store_provider import get_repository
 
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]{2,}")
 
 
 @dataclass(frozen=True)
@@ -72,28 +71,6 @@ def _target_label(value: str | None, fallback: str) -> str:
     return value if isinstance(value, str) and value.strip() else fallback
 
 
-def _tokenize_embedding_text(value: str) -> list[str]:
-    return TOKEN_PATTERN.findall(value.lower())
-
-
-def _build_embedding(text: str, dimensions: int) -> list[float]:
-    vector = [0.0] * max(dimensions, 4)
-    tokens = _tokenize_embedding_text(text)
-    if not tokens:
-        return vector
-
-    for token in tokens:
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        for index in range(len(vector)):
-            bucket = digest[index % len(digest)]
-            vector[index] += (bucket / 255.0) - 0.5
-
-    magnitude = math.sqrt(sum(component * component for component in vector))
-    if magnitude <= 0:
-        return vector
-    return [round(component / magnitude, 6) for component in vector]
-
-
 class KnowledgeIndexingWorkerService:
     def __init__(
         self,
@@ -105,6 +82,8 @@ class KnowledgeIndexingWorkerService:
         self.repository = repository
         self.runtime_sync_service = runtime_sync_service
         self.settings = settings or get_settings()
+        self.embedding_provider = build_embedding_provider(self.settings)
+        self.target_resolver = KnowledgeIndexTargetResolver(self.settings)
 
     def process_next_event(self, processor_id: str | None = None) -> IndexingOutboxEvent | None:
         event = self.runtime_sync_service.claim_next_event(processor_id or _default_processor_id())
@@ -130,7 +109,7 @@ class KnowledgeIndexingWorkerService:
                     connector_results=connector_results,
                 )
 
-            for connector_name, backend, target, handler in self._connector_steps():
+            for connector_name, backend, target, handler in self._connector_steps(context):
                 with start_span(
                     f"knowledge.indexing.{connector_name}",
                     smartcloud_connector_name=connector_name,
@@ -193,8 +172,13 @@ class KnowledgeIndexingWorkerService:
             return
         provider.force_flush()
 
-    def _connector_steps(self):
+    def _connector_steps(self, context: EventContext):
         queue_target = f"{self.settings.redis_namespace}:{self.settings.task_queue_name}"
+        targets = self.target_resolver.resolve_for_document(
+            context.document,
+            context.source,
+            context.chunks,
+        )
         return (
             (
                 "raw_object_sync",
@@ -211,13 +195,13 @@ class KnowledgeIndexingWorkerService:
             (
                 "vector_upsert",
                 "qdrant" if self.settings.qdrant_url else "planner-only",
-                _target_label(self.settings.qdrant_collection, "knowledge_chunks"),
+                targets.qdrant_collection,
                 self._sync_vector_store,
             ),
             (
                 "bm25_upsert",
                 "opensearch" if self.settings.opensearch_url else "keyword-baseline",
-                _target_label(self.settings.opensearch_index, "knowledge_chunks"),
+                targets.opensearch_index,
                 self._sync_bm25_store,
             ),
             (
@@ -399,12 +383,17 @@ class KnowledgeIndexingWorkerService:
         )
 
     def _sync_vector_store(self, context: EventContext) -> ConnectorWriteResult:
+        targets = self.target_resolver.resolve_for_document(
+            context.document,
+            context.source,
+            context.chunks,
+        )
         if not self.settings.qdrant_url:
             return self._build_result(
                 connector="vector_upsert",
                 backend="planner-only",
                 status="skipped",
-                target=self.settings.qdrant_collection,
+                target=targets.qdrant_collection,
                 detail="qdrant is not configured",
                 item_count=len(context.chunks),
             )
@@ -413,19 +402,21 @@ class KnowledgeIndexingWorkerService:
                 connector="vector_upsert",
                 backend="qdrant",
                 status="skipped",
-                target=self.settings.qdrant_collection,
+                target=targets.qdrant_collection,
                 detail="document has no chunks to index",
                 item_count=0,
             )
 
         base_url = _normalized_endpoint(self.settings.qdrant_url)
+        point_texts = [
+            "\n".join([context.document.title, chunk.content, " ".join(chunk.keywords)])
+            for chunk in context.chunks
+        ]
+        vectors = self.embedding_provider.embed(point_texts)
         points = [
             {
                 "id": chunk.id,
-                "vector": _build_embedding(
-                    "\n".join([context.document.title, chunk.content, " ".join(chunk.keywords)]),
-                    self.settings.qdrant_vector_size,
-                ),
+                "vector": vector,
                 "payload": {
                     "kb_id": context.document.source_id,
                     "source_id": chunk.source_id,
@@ -440,13 +431,20 @@ class KnowledgeIndexingWorkerService:
                     "created_at": chunk.created_at,
                     "source_type": self._event_source_type(context),
                     "source_uri": self._event_source_uri(context),
+                    "index_target_mode": targets.mode,
+                    "index_target_domain": targets.domain,
+                    "index_target_collection": targets.qdrant_collection,
+                    "index_target_fallback_collection": targets.fallback_qdrant_collection,
                 },
             }
-            for chunk in context.chunks
+            for chunk, vector in zip(context.chunks, vectors, strict=True)
         ]
 
-        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000) as client:
-            collection_url = f"{base_url}/collections/{self.settings.qdrant_collection}"
+        with httpx.Client(
+            timeout=self.settings.connector_timeout_ms / 1000,
+            trust_env=False,
+        ) as client:
+            collection_url = f"{base_url}/collections/{targets.qdrant_collection}"
             check_response = client.get(collection_url)
             if check_response.status_code == 404:
                 create_response = client.put(
@@ -472,18 +470,23 @@ class KnowledgeIndexingWorkerService:
             connector="vector_upsert",
             backend="qdrant",
             status="succeeded",
-            target=self.settings.qdrant_collection,
-            detail="upserted chunk vectors into Qdrant",
+            target=targets.qdrant_collection,
+            detail=f"upserted chunk vectors into Qdrant ({targets.mode})",
             item_count=len(points),
         )
 
     def _sync_bm25_store(self, context: EventContext) -> ConnectorWriteResult:
+        targets = self.target_resolver.resolve_for_document(
+            context.document,
+            context.source,
+            context.chunks,
+        )
         if not self.settings.opensearch_url:
             return self._build_result(
                 connector="bm25_upsert",
                 backend="keyword-baseline",
                 status="skipped",
-                target=self.settings.opensearch_index,
+                target=targets.opensearch_index,
                 detail="opensearch is not configured",
                 item_count=len(context.chunks),
             )
@@ -492,14 +495,17 @@ class KnowledgeIndexingWorkerService:
                 connector="bm25_upsert",
                 backend="opensearch",
                 status="skipped",
-                target=self.settings.opensearch_index,
+                target=targets.opensearch_index,
                 detail="document has no chunks to index",
                 item_count=0,
             )
 
         base_url = _normalized_endpoint(self.settings.opensearch_url)
-        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000) as client:
-            index_url = f"{base_url}/{self.settings.opensearch_index}"
+        with httpx.Client(
+            timeout=self.settings.connector_timeout_ms / 1000,
+            trust_env=False,
+        ) as client:
+            index_url = f"{base_url}/{targets.opensearch_index}"
             head_response = client.head(index_url)
             if head_response.status_code == 404:
                 create_response = client.put(
@@ -518,6 +524,8 @@ class KnowledgeIndexingWorkerService:
                                 "ordinal": {"type": "integer"},
                                 "source_type": {"type": "keyword"},
                                 "source_uri": {"type": "keyword"},
+                                "index_target_mode": {"type": "keyword"},
+                                "index_target_domain": {"type": "keyword"},
                             }
                         }
                     },
@@ -532,7 +540,7 @@ class KnowledgeIndexingWorkerService:
                     json.dumps(
                         {
                             "index": {
-                                "_index": self.settings.opensearch_index,
+                                "_index": targets.opensearch_index,
                                 "_id": chunk.id,
                             }
                         },
@@ -559,6 +567,8 @@ class KnowledgeIndexingWorkerService:
                             "source_uri": (
                                 self._event_source_uri(context)
                             ),
+                            "index_target_mode": targets.mode,
+                            "index_target_domain": targets.domain,
                         },
                         ensure_ascii=False,
                     )
@@ -577,8 +587,8 @@ class KnowledgeIndexingWorkerService:
             connector="bm25_upsert",
             backend="opensearch",
             status="succeeded",
-            target=self.settings.opensearch_index,
-            detail="upserted chunk documents into OpenSearch",
+            target=targets.opensearch_index,
+            detail=f"upserted chunk documents into OpenSearch ({targets.mode})",
             item_count=len(context.chunks),
         )
 

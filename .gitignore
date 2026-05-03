@@ -21,3 +21,8 @@ apps/knowledge-service/data/raw-objects/
 apps/*/.env.dev
 apps/*/.env.local
 scripts/dev/
+__tmp_do_not_write__
+autoresearch-*
+*.db
+*.png
+.pytest_cache/

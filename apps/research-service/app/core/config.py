@@ -61,7 +61,7 @@ def _default_database_url() -> str:
 
 class Settings(BaseModel):
     app_name: str = "smartcloud-x-research-service"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     api_prefix: str = "/api/v1"
     env: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_ENV", "local"))
     log_level: str = Field(default_factory=lambda: os.getenv("SMARTCLOUD_LOG_LEVEL", "INFO"))
@@ -123,6 +123,17 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("RESEARCH_SERVICE_INTERNAL_SERVICE_NAME", "research-service")
     )
     database_url: str = Field(default_factory=_default_database_url)
+    mongodb_uri: str | None = Field(
+        default_factory=lambda: _optional_env("RESEARCH_SERVICE_MONGODB_URI")
+        or _optional_env("SMARTCLOUD_MONGODB_URI")
+        or _optional_env("MONGO_URI")
+    )
+    mongodb_database: str = Field(
+        default_factory=lambda: os.getenv(
+            "RESEARCH_SERVICE_MONGODB_DATABASE",
+            os.getenv("SMARTCLOUD_MONGODB_DATABASE", "smartcloud"),
+        )
+    )
     bootstrap_path: Path | None = Field(
         default_factory=lambda: _resolve_path_env_aliases(
             ("RESEARCH_SERVICE_BOOTSTRAP_PATH", "RESEARCH_SERVICE_DATA_PATH"),
@@ -139,7 +150,7 @@ class Settings(BaseModel):
     report_download_base_url: str = Field(
         default_factory=lambda: os.getenv(
             "RESEARCH_SERVICE_REPORT_DOWNLOAD_BASE_URL",
-            "https://downloads.smartcloud.local/research",
+            "",
         )
     )
     default_estimated_minutes: int = Field(
@@ -147,6 +158,52 @@ class Settings(BaseModel):
     )
     task_auto_complete_seconds: int = Field(
         default_factory=lambda: int(os.getenv("RESEARCH_SERVICE_AUTO_COMPLETE_SECONDS", "0"))
+    )
+    trace_enabled: bool = Field(
+        default_factory=lambda: os.getenv("SMARTCLOUD_TRACE_ENABLED", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    otlp_endpoint: str | None = Field(
+        default_factory=lambda: _optional_env("OTEL_EXPORTER_OTLP_ENDPOINT")
+    )
+    otlp_protocol: str = Field(
+        default_factory=lambda: os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    )
+    otel_service_name: str = Field(
+        default_factory=lambda: os.getenv("OTEL_SERVICE_NAME", "research-service")
+    )
+    research_agent_provider: Literal["placeholder", "http", "http_stub", "pipeline"] = Field(
+        default_factory=lambda: os.getenv("RESEARCH_AGENT_PROVIDER", "placeholder")
+    )
+    research_agent_api_url: str | None = Field(
+        default_factory=lambda: _optional_env("RESEARCH_AGENT_API_URL")
+    )
+    research_agent_api_key: str | None = Field(
+        default_factory=lambda: _optional_env("RESEARCH_AGENT_API_KEY")
+    )
+    research_agent_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("RESEARCH_AGENT_TIMEOUT_SECONDS", "15"))
+    )
+    external_search_provider: Literal["disabled", "http_stub"] = Field(
+        default_factory=lambda: os.getenv("RESEARCH_EXTERNAL_SEARCH_PROVIDER", "disabled")
+    )
+    external_search_api_url: str | None = Field(
+        default_factory=lambda: _optional_env("RESEARCH_EXTERNAL_SEARCH_API_URL")
+    )
+    external_search_api_key: str | None = Field(
+        default_factory=lambda: _optional_env("RESEARCH_EXTERNAL_SEARCH_API_KEY")
+    )
+    external_search_timeout_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("RESEARCH_EXTERNAL_SEARCH_TIMEOUT_SECONDS", "10"))
+    )
+    pipeline_max_pages: int = Field(
+        default_factory=lambda: int(os.getenv("RESEARCH_PIPELINE_MAX_PAGES", "5"))
+    )
+    pipeline_fetch_timeout: float = Field(
+        default_factory=lambda: float(os.getenv("RESEARCH_PIPELINE_FETCH_TIMEOUT", "10"))
+    )
+    pipeline_max_bytes: int = Field(
+        default_factory=lambda: int(os.getenv("RESEARCH_PIPELINE_MAX_BYTES", "500000"))
     )
 
     model_config = {"arbitrary_types_allowed": True}

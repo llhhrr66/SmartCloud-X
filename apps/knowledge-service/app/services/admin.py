@@ -20,6 +20,8 @@ from app.models.admin import (
     AdminKnowledgeDocumentCreateRequest,
     AdminKnowledgeDocumentListData,
     AdminKnowledgeDocumentRecord,
+    AdminKnowledgeDocumentUploadInitRequest,
+    AdminKnowledgeDocumentUploadRecord,
     AdminKnowledgeReindexRequest,
     AdminRetrievalSearchPreviewData,
     AdminRetrievalSearchPreviewRequest,
@@ -266,6 +268,169 @@ class KnowledgeAdminService:
             sort_order="desc",
         )
 
+    def init_document_upload(
+        self,
+        payload: AdminKnowledgeDocumentUploadInitRequest,
+        *,
+        operator_id: str,
+        operator_ip: str | None,
+        reason: str,
+    ) -> AdminKnowledgeDocumentUploadRecord:
+        upload_id, bucket, object_key, source_uri, resolved_file_id = self.file_import_service.begin_admin_upload(
+            payload.filename,
+            payload.content_type,
+        )
+        created_at = utc_now()
+        job = AdminAsyncJob(
+            job_id=upload_id,
+            type="knowledge_document_upload",
+            status="initialized",
+            progress=0,
+            created_at=created_at,
+            params={
+                "filename": payload.filename.strip(),
+                "bucket": bucket,
+                "object_key": object_key,
+                "file_id": object_key,
+                "resolved_file_id": resolved_file_id,
+                "source_type": "minio",
+                "source_uri": source_uri,
+                "content_type": payload.content_type.strip() if payload.content_type else None,
+                "updated_at": created_at,
+            },
+            result_file_id=object_key,
+        )
+        self.repository.save_admin_job(job)
+        record = self._build_upload_record(job)
+        self.audit_service.record(
+            operator_id=operator_id,
+            resource_type="knowledge_upload",
+            resource_id=record.upload_id,
+            action="upload_init",
+            reason=reason,
+            before_json=None,
+            after_json=record.model_dump(mode="json"),
+            operator_ip=operator_ip,
+            created_at=utc_now(),
+        )
+        ADMIN_WRITE_REQUESTS_TOTAL.labels(action="init_document_upload", outcome="success").inc()
+        return record
+
+    def upload_document_content(
+        self,
+        upload_id: str,
+        content: bytes,
+        *,
+        content_type: str | None,
+        operator_id: str,
+        operator_ip: str | None,
+        reason: str,
+    ) -> AdminKnowledgeDocumentUploadRecord:
+        job = self._require_upload_job(upload_id)
+        record_before = self._build_upload_record(job)
+        if job.status == "completed":
+            raise AdminValidationError("upload session is already completed")
+        params = dict(job.params or {})
+        upload_result = self.file_import_service.upload_admin_file_bytes(
+            file_id=str(params.get("file_id") or ""),
+            source_uri=str(params.get("source_uri") or ""),
+            content=content,
+            content_type=content_type or params.get("content_type"),
+        )
+        updated_at = utc_now()
+        params.update(
+            {
+                "bucket": upload_result["bucket"],
+                "object_key": upload_result["object_key"],
+                "file_id": upload_result["file_id"],
+                "resolved_file_id": upload_result["resolved_file_id"],
+                "source_uri": upload_result["source_uri"],
+                "source_type": "minio",
+                "content_type": upload_result["content_type"],
+                "size_bytes": upload_result["size_bytes"],
+                "checksum": upload_result["checksum"],
+                "updated_at": updated_at,
+            }
+        )
+        updated_job = job.model_copy(
+            update={
+                "status": "uploaded",
+                "progress": 80,
+                "params": params,
+                "result_file_id": str(upload_result["file_id"]),
+            }
+        )
+        self.repository.save_admin_job(updated_job)
+        record = self._build_upload_record(updated_job)
+        self.audit_service.record(
+            operator_id=operator_id,
+            resource_type="knowledge_upload",
+            resource_id=record.upload_id,
+            action="upload_content",
+            reason=reason,
+            before_json=record_before.model_dump(mode="json"),
+            after_json=record.model_dump(mode="json"),
+            operator_ip=operator_ip,
+            created_at=utc_now(),
+        )
+        ADMIN_WRITE_REQUESTS_TOTAL.labels(action="upload_document_content", outcome="success").inc()
+        return record
+
+    def complete_document_upload(
+        self,
+        upload_id: str,
+        *,
+        operator_id: str,
+        operator_ip: str | None,
+        reason: str,
+    ) -> AdminKnowledgeDocumentUploadRecord:
+        job = self._require_upload_job(upload_id)
+        record_before = self._build_upload_record(job)
+        params = dict(job.params or {})
+        file_id = str(params.get("file_id") or "")
+        source_uri = str(params.get("source_uri") or "")
+        if not file_id or not source_uri:
+            raise AdminValidationError("upload session is missing object reference")
+        resolved_file_id, resolved_source_uri, content = self.file_import_service.load_admin_document_source(
+            file_id,
+            source_type="minio",
+            source_uri=source_uri,
+        )
+        completed_at = utc_now()
+        params.update(
+            {
+                "resolved_file_id": resolved_file_id,
+                "source_uri": resolved_source_uri,
+                "source_type": "minio",
+                "size_bytes": len(content.encode("utf-8")),
+                "updated_at": completed_at,
+            }
+        )
+        updated_job = job.model_copy(
+            update={
+                "status": "completed",
+                "progress": 100,
+                "params": params,
+                "result_file_id": file_id,
+                "finished_at": completed_at,
+            }
+        )
+        self.repository.save_admin_job(updated_job)
+        record = self._build_upload_record(updated_job)
+        self.audit_service.record(
+            operator_id=operator_id,
+            resource_type="knowledge_upload",
+            resource_id=record.upload_id,
+            action="upload_complete",
+            reason=reason,
+            before_json=record_before.model_dump(mode="json"),
+            after_json=record.model_dump(mode="json"),
+            operator_ip=operator_ip,
+            created_at=utc_now(),
+        )
+        ADMIN_WRITE_REQUESTS_TOTAL.labels(action="complete_document_upload", outcome="success").inc()
+        return record
+
     def create_document(
         self,
         kb_id: str,
@@ -277,8 +442,11 @@ class KnowledgeAdminService:
     ) -> AdminKnowledgeDocumentRecord:
         source = self._require_source(kb_id)
         kb_profile = self._ensure_knowledge_base_profile(source.id)
-        path, content = self.file_import_service.load_import_file(payload.file_id)
-        source_uri = payload.source_uri or path.as_uri()
+        resolved_file_id, source_uri, content = self.file_import_service.load_admin_document_source(
+            payload.file_id,
+            source_type=payload.source_type,
+            source_uri=payload.source_uri,
+        )
         response = self.ingestion_service.ingest_document(
             IngestDocumentRequest(
                 sourceId=source.id,
@@ -313,7 +481,7 @@ class KnowledgeAdminService:
             parse_status="completed",
             index_status="ready",
             version_no=version_no,
-            file_id=self.file_import_service.display_path(path),
+            file_id=resolved_file_id,
             source_type=payload.source_type.strip(),
             source_uri=source_uri,
             indexed_at=response.document.updated_at,
@@ -540,6 +708,42 @@ class KnowledgeAdminService:
             indexed_at=profile.indexed_at or document.updated_at,
         )
 
+    def _build_upload_record(self, job: AdminAsyncJob) -> AdminKnowledgeDocumentUploadRecord:
+        params = dict(job.params or {})
+        updated_at = str(params.get("updated_at") or job.finished_at or job.created_at)
+        return AdminKnowledgeDocumentUploadRecord(
+            upload_id=job.job_id,
+            status=job.status,
+            filename=str(params.get("filename") or job.job_id),
+            bucket=str(params.get("bucket") or ""),
+            object_key=str(params.get("object_key") or ""),
+            file_id=str(params.get("file_id") or job.result_file_id or ""),
+            resolved_file_id=(
+                str(params.get("resolved_file_id"))
+                if params.get("resolved_file_id") is not None
+                else None
+            ),
+            source_type=str(params.get("source_type") or "minio"),
+            source_uri=str(params.get("source_uri") or ""),
+            content_type=(
+                str(params.get("content_type"))
+                if params.get("content_type") is not None
+                else None
+            ),
+            size_bytes=(
+                int(params.get("size_bytes"))
+                if params.get("size_bytes") is not None
+                else None
+            ),
+            checksum=(
+                str(params.get("checksum"))
+                if params.get("checksum") is not None
+                else None
+            ),
+            created_at=job.created_at,
+            updated_at=updated_at,
+        )
+
     def _ensure_knowledge_base_profile(self, kb_id: str) -> KnowledgeBaseProfile:
         profile = self.repository.get_knowledge_base_profile(kb_id)
         if profile is not None:
@@ -593,6 +797,12 @@ class KnowledgeAdminService:
         if document is None:
             raise AdminNotFoundError(f"Unknown knowledge document: {doc_id}")
         return document
+
+    def _require_upload_job(self, upload_id: str) -> AdminAsyncJob:
+        job = self.repository.get_admin_job(upload_id)
+        if job is None or job.type != "knowledge_document_upload":
+            raise AdminNotFoundError(f"Unknown knowledge upload session: {upload_id}")
+        return job
 
     @staticmethod
     def _paginate(items, *, page: int, page_size: int, factory, sort_by: str, sort_order: str):

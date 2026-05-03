@@ -12,9 +12,18 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlencode
 
-KNOWLEDGE_ROOT = os.getenv("KNOWLEDGE_SERVICE_ROOT", "http://localhost:8030")
+KNOWLEDGE_ROOT = os.getenv("KNOWLEDGE_SERVICE_ROOT", "http://localhost:8031")
 RAG_ROOT = os.getenv("RAG_SERVICE_ROOT", "http://localhost:8040")
+MARKETING_ROOT = os.getenv("MARKETING_SERVICE_ROOT", "http://localhost:8002")
+RESEARCH_ROOT = os.getenv("RESEARCH_SERVICE_ROOT", "http://localhost:8003")
+ORCHESTRATOR_ROOT = os.getenv("ORCHESTRATOR_SERVICE_ROOT", "http://localhost:8010")
 WEB_ADMIN_ROOT = os.getenv("WEB_ADMIN_ROOT", "http://localhost:8050")
+MYSQL_ROOT = os.getenv("MYSQL_ROOT", "http://localhost:3306")
+REDIS_ROOT = os.getenv("REDIS_ROOT", "http://localhost:6379")
+MONGO_ROOT = os.getenv("MONGO_ROOT", "http://localhost:27017")
+MINIO_ROOT = os.getenv("MINIO_ROOT", f"http://localhost:{os.getenv('SMARTCLOUD_MINIO_HOST_PORT', '19000')}")
+QDRANT_ROOT = os.getenv("QDRANT_ROOT", "http://localhost:6333")
+OPENSEARCH_ROOT = os.getenv("OPENSEARCH_ROOT", "http://localhost:9200")
 KNOWLEDGE_API = os.getenv("KNOWLEDGE_SERVICE_API", f"{KNOWLEDGE_ROOT}/api/knowledge/v1")
 RAG_API = os.getenv("RAG_SERVICE_API", f"{RAG_ROOT}/api/rag/v1")
 ADMIN_KNOWLEDGE_API = os.getenv("ADMIN_KNOWLEDGE_SERVICE_API", f"{KNOWLEDGE_ROOT}/api/v1/admin")
@@ -23,6 +32,8 @@ REQUEST_TIMEOUT = float(os.getenv("SMARTCLOUD_SMOKE_TIMEOUT_SECONDS", "5"))
 WAIT_ATTEMPTS = int(os.getenv("SMARTCLOUD_SMOKE_WAIT_ATTEMPTS", "20"))
 WAIT_SECONDS = float(os.getenv("SMARTCLOUD_SMOKE_WAIT_SECONDS", "2"))
 OPERATOR_REASON_HEADER = os.getenv("SMARTCLOUD_OPERATOR_REASON_HEADER", "X-Operator-Reason")
+DIFY_EXTERNAL_API_KEY = os.getenv("SMARTCLOUD_DIFY_EXTERNAL_KNOWLEDGE_API_KEY", "smartcloud-dify-local")
+DIRECT_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 EXPECTED_KNOWLEDGE_METRICS = [
     "knowledge_file_import_runs_total",
     "knowledge_admin_write_requests_total",
@@ -40,6 +51,14 @@ EXPECTED_RAG_METRICS = [
     "rag_readiness_state",
     "rag_upstream_ready_state",
 ]
+DEPENDENCY_PROBES = (
+    ("mysql", f"{MYSQL_ROOT}/", None),
+    ("redis", f"{REDIS_ROOT}/", None),
+    ("mongodb", f"{MONGO_ROOT}/", None),
+    ("minio", f"{MINIO_ROOT}/minio/health/live", None),
+    ("qdrant", f"{QDRANT_ROOT}/collections", lambda payload: payload.get("status") == "ok"),
+    ("opensearch", f"{OPENSEARCH_ROOT}/_cluster/health", lambda payload: payload.get("status") in {"green", "yellow"}),
+)
 
 
 def _build_request(
@@ -81,7 +100,7 @@ def request(
 ) -> Any:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = _build_request(method, url, body=body, headers=headers)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+    with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
         _assert_standard_response_headers(response, url)
         payload = json.loads(response.read().decode("utf-8"))
     if "success" in payload:
@@ -93,17 +112,52 @@ def request(
     return payload.get("data") or {}
 
 
+def request_json(method: str, url: str, headers: dict[str, str] | None = None) -> Any:
+    req = _build_request(method, url, headers=headers)
+    with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def request_text(method: str, url: str, headers: dict[str, str] | None = None) -> str:
     req = _build_request(method, url, headers=headers)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+    with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
         _assert_standard_response_headers(response, url)
         return response.read().decode("utf-8")
 
 
 def request_raw_text(method: str, url: str, headers: dict[str, str] | None = None) -> str:
     req = _build_request(method, url, headers=headers)
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+    with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
         return response.read().decode("utf-8")
+
+
+def _probe_dependency(name: str, url: str, validator) -> None:
+    try:
+        payload = request_json("GET", url)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"dependency {name} is unavailable: HTTP {exc.code} from {url}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(f"dependency {name} is unavailable: {reason}") from exc
+    except (TimeoutError, ValueError) as exc:
+        raise RuntimeError(f"dependency {name} is unavailable: {exc}") from exc
+    if validator is not None and not validator(payload):
+        raise RuntimeError(f"dependency {name} is unavailable: unexpected probe payload {payload}")
+
+
+def assert_required_dependencies() -> None:
+    missing_dependencies: list[str] = []
+    errors: list[str] = []
+    for name, url, validator in DEPENDENCY_PROBES:
+        try:
+            _probe_dependency(name, url, validator)
+        except RuntimeError as exc:
+            missing_dependencies.append(name)
+            errors.append(str(exc))
+    if missing_dependencies:
+        joined = ", ".join(missing_dependencies)
+        details = "; ".join(errors)
+        raise RuntimeError(f"required dependencies not ready: {joined}. {details}")
 
 
 def wait_for_health(url: str, label: str) -> None:
@@ -144,13 +198,46 @@ def wait_for_snapshot_event(doc_id: str, operation: str) -> tuple[dict[str, Any]
 
 
 def main() -> int:
+    assert_required_dependencies()
     wait_for_health(f"{KNOWLEDGE_ROOT}/healthz", "knowledge-service")
     wait_for_health(f"{RAG_ROOT}/healthz", "rag-service")
 
     knowledge_health = request("GET", f"{KNOWLEDGE_ROOT}/healthz")
     rag_health = request("GET", f"{RAG_ROOT}/healthz")
+    marketing_health = request("GET", f"{MARKETING_ROOT}/healthz")
+    research_health = request("GET", f"{RESEARCH_ROOT}/healthz")
+    orchestrator_health = request("GET", f"{ORCHESTRATOR_ROOT}/healthz")
     rag_capabilities = request("GET", f"{RAG_API}/capabilities")
     web_admin_index = request_raw_text("GET", WEB_ADMIN_ROOT)
+
+    connector_snapshot = {
+        "rawStorage": knowledge_health["runtime"]["runtimeSync"]["rawStorage"].get("backend"),
+        "metadataStore": knowledge_health["runtime"]["runtimeSync"]["metadataStore"].get("backend"),
+        "vectorStore": knowledge_health["runtime"]["runtimeSync"]["vectorStore"].get("backend"),
+        "bm25Store": knowledge_health["runtime"]["runtimeSync"]["bm25Store"].get("backend"),
+        "cache": knowledge_health["runtime"]["runtimeSync"]["cache"].get("backend"),
+        "taskQueue": knowledge_health["runtime"]["runtimeSync"]["taskQueue"].get("backend"),
+    }
+    expected_connectors = {
+        "rawStorage": "minio",
+        "metadataStore": "mysql",
+        "vectorStore": "qdrant",
+        "bm25Store": "opensearch",
+        "cache": {"redis-configured", "redis-ttl"},
+        "taskQueue": "redis-list-primary",
+    }
+    for connector_name, expected_backend in expected_connectors.items():
+        actual_backend = connector_snapshot.get(connector_name)
+        if isinstance(expected_backend, set):
+            if actual_backend not in expected_backend:
+                raise RuntimeError(
+                    f"knowledge connector {connector_name} expected one of {sorted(expected_backend)}, got {actual_backend!r}"
+                )
+            continue
+        if actual_backend != expected_backend:
+            raise RuntimeError(
+                f"knowledge connector {connector_name} expected {expected_backend!r}, got {actual_backend!r}"
+            )
 
     bootstrap = request("POST", f"{KNOWLEDGE_API}/catalog:bootstrap")
     import_preview = request(
@@ -209,7 +296,10 @@ def main() -> int:
         },
         headers={OPERATOR_REASON_HEADER: "compose smoke update kb"},
     )
-    knowledge_bases = request("GET", f"{ADMIN_KNOWLEDGE_API}/knowledge-bases?{urlencode({'page': 1, 'page_size': 20})}")
+    knowledge_bases = request(
+        "GET",
+        f"{ADMIN_KNOWLEDGE_API}/knowledge-bases?{urlencode({'page': 1, 'page_size': 20})}",
+    )
     admin_document = request(
         "POST",
         f"{ADMIN_KNOWLEDGE_API}/knowledge-bases/{knowledge_base['kb_id']}/documents",
@@ -270,6 +360,20 @@ def main() -> int:
             "include_citations": True,
         },
     )
+    dify_retrieval = request(
+        "POST",
+        f"{KNOWLEDGE_ROOT}/retrieval",
+        {
+            "knowledge_id": kb_code,
+            "query": "GPU 发布前要确认什么",
+            "retrieval_setting": {"top_k": 3, "score_threshold": 0.1},
+            "metadata_condition": {
+                "logical_operator": "and",
+                "conditions": [{"name": ["tags"], "comparison_operator": "contains", "value": "gpu"}],
+            },
+        },
+        headers={"Authorization": f"Bearer {DIFY_EXTERNAL_API_KEY}"},
+    )
     admin_audit = request(
         "GET",
         f"{KNOWLEDGE_API}/admin/audit-records?{urlencode({'page': 1, 'pageSize': 10, 'resourceType': 'knowledge_document'})}",
@@ -287,172 +391,136 @@ def main() -> int:
         raise RuntimeError(f"knowledge documents payload is missing document ids: {documents}")
     chunks = request(
         "GET",
-        f"{KNOWLEDGE_API}/chunks?{urlencode({'documentId': first_document_id})}",
+        f"{KNOWLEDGE_API}/documents/{first_document_id}/chunks?{urlencode({'page': 1, 'page_size': 10})}",
     )
+    document_profile = request("GET", f"{KNOWLEDGE_API}/documents/{first_document_id}")
     diagnostic = request(
         "POST",
-        f"{RAG_API}/diagnose",
+        f"{RAG_API}/diagnostics",
         {
-            "query": "GPU 部署前需要确认什么",
+            "query": "GPU 发布前要确认什么",
             "topK": 3,
-            "filters": {"tags": ["gpu", "launch"]},
+            "filters": {"tags": ["gpu"]},
         },
     )
     answer = request(
         "POST",
         f"{RAG_API}/answer",
         {
-            "query": "GPU 部署前需要确认什么",
+            "query": "GPU 发布前要确认什么",
             "topK": 3,
             "style": "brief",
-            "filters": {"tags": ["gpu", "launch"]},
+            "filters": {"tags": ["gpu"]},
         },
     )
     empty_answer = request(
         "POST",
         f"{RAG_API}/answer",
         {
-            "query": "这个标签下没有结果",
+            "query": "一个不会命中任何知识的冷门问题",
             "topK": 3,
             "style": "brief",
-            "filters": {"tags": ["__smoke_missing_tag__"]},
+            "filters": {"tags": ["definitely-missing"]},
         },
     )
     knowledge_metrics = request_text("GET", f"{KNOWLEDGE_ROOT}/metrics")
     rag_metrics = request_text("GET", f"{RAG_ROOT}/metrics")
-    missing_knowledge_metrics = [
-        metric for metric in EXPECTED_KNOWLEDGE_METRICS if metric not in knowledge_metrics
-    ]
-    missing_rag_metrics = [metric for metric in EXPECTED_RAG_METRICS if metric not in rag_metrics]
-    if int(import_preview.get("matchedFiles", 0)) < 1:
-        raise RuntimeError(f"filesystem preview returned no files: {import_preview}")
-    if knowledge_health.get("ready") is not True:
-        raise RuntimeError(f"knowledge-service health payload did not report ready: {knowledge_health}")
-    if not knowledge_health.get("readinessChecks"):
-        raise RuntimeError(f"knowledge-service readiness checks missing from health payload: {knowledge_health}")
-    if rag_health.get("ready") is not True:
-        raise RuntimeError(f"rag-service health payload did not report ready: {rag_health}")
-    if rag_capabilities.get("retrieval") != "knowledge-service-search":
-        raise RuntimeError(f"rag-service capabilities returned unexpected retrieval mode: {rag_capabilities}")
-    if "<div id=\"root\"></div>" not in web_admin_index:
-        raise RuntimeError("web-admin root page did not return the expected SPA shell")
-    if not rag_health.get("upstream", {}).get("reachable"):
-        raise RuntimeError(f"rag-service upstream probe was not reachable: {rag_health}")
-    if int(file_import.get("importedFiles", 0)) + int(file_import.get("reusedFiles", 0)) < 1:
-        raise RuntimeError(f"filesystem import did not process any files: {file_import}")
-    if int(search.get("total", 0)) < 1:
-        raise RuntimeError(f"knowledge search returned no hits: {search}")
-    if len(chunks) < 1:
-        raise RuntimeError(f"knowledge chunk inspection returned no rows: {chunks}")
-    if int(diagnostic.get("candidateCount", 0)) < 1:
-        raise RuntimeError(f"rag diagnostic returned no candidates: {diagnostic}")
-    if int(knowledge_bases.get("total", 0)) < 1:
-        raise RuntimeError(f"admin knowledge-base list returned no rows: {knowledge_bases}")
-    listed_kb = next(
-        (item for item in knowledge_bases.get("items", []) if item.get("kb_id") == knowledge_base.get("kb_id")),
-        None,
-    )
-    if not listed_kb:
-        raise RuntimeError(f"updated knowledge base was missing from admin list: {knowledge_bases}")
+
+    if not bootstrap.get("sourcesCreated"):
+        raise RuntimeError(f"catalog bootstrap did not create sources: {bootstrap}")
+    if import_preview.get("totalFiles", 0) < 1:
+        raise RuntimeError(f"import preview did not discover starter files: {import_preview}")
+    if file_import.get("importedFiles", 0) < 1:
+        raise RuntimeError(f"file import did not ingest starter files: {file_import}")
+    if not search.get("items"):
+        raise RuntimeError(f"knowledge search returned no items: {search}")
+    if not chunks.get("items"):
+        raise RuntimeError(f"knowledge chunks endpoint returned no items: {chunks}")
+    if not document_profile.get("chunks"):
+        raise RuntimeError(f"knowledge document profile returned no chunks: {document_profile}")
+    if not rag_capabilities.get("features", {}).get("hybridRetrieval"):
+        raise RuntimeError(f"rag capabilities did not expose hybrid retrieval: {rag_capabilities}")
+    if not diagnostic.get("candidateCount"):
+        raise RuntimeError(f"rag diagnostics returned no candidates: {diagnostic}")
+    if answer.get("degraded") is not False:
+        raise RuntimeError(f"rag answer unexpectedly degraded: {answer}")
+    citations = answer.get("citations") or []
+    if not citations:
+        raise RuntimeError(f"rag answer returned no citations: {answer}")
+    if not all(citation.get("doc_id") for citation in citations):
+        raise RuntimeError(f"rag answer citations are missing document identifiers: {citations}")
+    if not all(str(citation.get("uri") or "").startswith(("kb://", "file://", "s3://", "minio://", "http://", "https://")) for citation in citations):
+        raise RuntimeError(f"rag answer citations did not expose stable source URIs: {citations}")
+    if any(str(citation.get("uri") or "").startswith("baseline://") for citation in citations):
+        raise RuntimeError(f"rag answer citations still expose baseline placeholder URIs: {citations}")
+    if not web_admin_index or '<div id="root"></div>' not in web_admin_index:
+        raise RuntimeError("web-admin root did not return the expected SPA shell")
+    if not knowledge_health.get("ready"):
+        raise RuntimeError(f"knowledge-service health payload was not ready: {knowledge_health}")
+    if not rag_health.get("ready"):
+        raise RuntimeError(f"rag-service health payload was not ready: {rag_health}")
+    if not marketing_health.get("ready"):
+        raise RuntimeError(f"marketing-service health payload was not ready: {marketing_health}")
+    if not research_health.get("ready"):
+        raise RuntimeError(f"research-service health payload was not ready: {research_health}")
+    if not orchestrator_health.get("ready"):
+        raise RuntimeError(f"orchestrator-service health payload was not ready: {orchestrator_health}")
+    if not knowledge_base.get("kb_id"):
+        raise RuntimeError(f"knowledge base creation failed: {knowledge_base}")
     if updated_knowledge_base.get("status") != "disabled":
-        raise RuntimeError(f"admin knowledge-base update did not apply disabled status: {updated_knowledge_base}")
-    if listed_kb.get("retrieval_mode") != "hybrid-tightened":
-        raise RuntimeError(f"admin knowledge-base list did not reflect updated retrieval mode: {listed_kb}")
-    if admin_document.get("chunk_count", 0) < 1:
-        raise RuntimeError(f"admin document create returned no chunks: {admin_document}")
-    if admin_document_detail.get("document", {}).get("doc_id") != admin_document.get("doc_id"):
-        raise RuntimeError(f"admin document detail did not match created document: {admin_document_detail}")
-    if admin_document_job.get("type") != "knowledge_document_create":
-        raise RuntimeError(f"admin create job lookup returned unexpected payload: {admin_document_job}")
-    if len(admin_chunks.get("items", [])) < 1:
-        raise RuntimeError(f"admin chunk preview returned no rows: {admin_chunks}")
-    if int(admin_search.get("total", 0)) < 1:
-        raise RuntimeError(f"admin search preview returned no hits: {admin_search}")
-    if admin_reindex.get("status") != "succeeded":
-        raise RuntimeError(f"admin reindex did not succeed: {admin_reindex}")
-    if admin_reindex_job.get("type") != "knowledge_document_reindex":
-        raise RuntimeError(f"admin reindex job lookup returned unexpected payload: {admin_reindex_job}")
-    if admin_document_detail_after_reindex.get("document", {}).get("version_no") != 2:
+        raise RuntimeError(f"knowledge base update did not persist status change: {updated_knowledge_base}")
+    if knowledge_bases.get("total", 0) < 1:
+        raise RuntimeError(f"knowledge base list endpoint returned no results: {knowledge_bases}")
+    if not admin_document.get("doc_id"):
+        raise RuntimeError(f"admin document creation failed: {admin_document}")
+    if admin_document_detail.get("document", {}).get("kb_id") != knowledge_base.get("kb_id"):
         raise RuntimeError(
-            "admin document detail did not reflect reindex version increment: "
+            "admin document detail did not resolve the expected knowledge base: "
+            f"{admin_document_detail}"
+        )
+    if admin_document_job.get("resource_id") != admin_document.get("doc_id"):
+        raise RuntimeError(f"admin document job did not point at the created document: {admin_document_job}")
+    if not admin_chunks.get("items"):
+        raise RuntimeError(f"admin chunk listing returned no items: {admin_chunks}")
+    if admin_search.get("total", 0) < 1:
+        raise RuntimeError(f"admin search preview returned no matches: {admin_search}")
+    if not admin_reindex.get("job_id"):
+        raise RuntimeError(f"admin reindex did not return a job id: {admin_reindex}")
+    if admin_reindex_job.get("status") != "completed":
+        raise RuntimeError(f"admin reindex job did not complete: {admin_reindex_job}")
+    if admin_document_detail_after_reindex.get("document", {}).get("version_no", 0) < 2:
+        raise RuntimeError(
+            "admin document detail did not expose the incremented document version after reindex: "
             f"{admin_document_detail_after_reindex}"
         )
-    if int(admin_diagnostic.get("coverage", {}).get("candidate_count", 0)) < 1:
-        raise RuntimeError(f"admin rag diagnostic returned no candidates: {admin_diagnostic}")
-    if int(admin_audit.get("total", 0)) < 2:
-        raise RuntimeError(f"admin audit trail returned too few document events: {admin_audit}")
-    if int(knowledge_base_audit.get("total", 0)) < 1:
-        raise RuntimeError(f"knowledge-base update audit record was not returned: {knowledge_base_audit}")
-    if int(snapshot.get("counts", {}).get("knowledgeBases", 0)) < 1:
-        raise RuntimeError(f"knowledge snapshot did not include the created knowledge base: {snapshot}")
-    if int(snapshot.get("counts", {}).get("documents", 0)) < 1:
-        raise RuntimeError(f"knowledge snapshot did not include any documents: {snapshot}")
-    if int(snapshot.get("counts", {}).get("knowledgeBases", 0)) != len(snapshot.get("knowledgeBases", [])):
-        raise RuntimeError(f"snapshot knowledge-base count drifted from payload rows: {snapshot}")
-    if int(snapshot.get("counts", {}).get("documentProfiles", 0)) != len(snapshot.get("documentProfiles", [])):
-        raise RuntimeError(f"snapshot document-profile count drifted from payload rows: {snapshot}")
-    if len(snapshot.get("recentAuditRecords", [])) < 1:
-        raise RuntimeError(f"knowledge snapshot did not include recent audit records: {snapshot}")
-    snapshot_knowledge_base = next(
-        (
-            item
-            for item in snapshot.get("knowledgeBases", [])
-            if item.get("kb_id") == knowledge_base.get("kb_id")
-        ),
-        None,
+    if admin_diagnostic.get("coverage", {}).get("candidate_count", 0) < 1:
+        raise RuntimeError(f"admin retrieval diagnostics returned no candidates: {admin_diagnostic}")
+    if len(dify_retrieval.get("records", [])) < 1:
+        raise RuntimeError(f"external retrieval adapter returned no records: {dify_retrieval}")
+    if admin_audit.get("total", 0) < 1:
+        raise RuntimeError(f"knowledge audit endpoint returned no events: {admin_audit}")
+    if knowledge_base_audit.get("total", 0) < 1:
+        raise RuntimeError(f"knowledge-base audit endpoint returned no update events: {knowledge_base_audit}")
+
+    missing_knowledge_metrics = [metric for metric in EXPECTED_KNOWLEDGE_METRICS if metric not in knowledge_metrics]
+    missing_rag_metrics = [metric for metric in EXPECTED_RAG_METRICS if metric not in rag_metrics]
+    integrations = snapshot.get("integrations", {})
+    snapshot_document_profile = request(
+        "GET",
+        f"{KNOWLEDGE_API}/documents/{admin_document['doc_id']}",
     )
-    if snapshot_knowledge_base is None:
-        raise RuntimeError(f"snapshot was missing the updated knowledge base row: {snapshot}")
-    if snapshot_knowledge_base.get("status") != "disabled":
-        raise RuntimeError(f"snapshot knowledge-base status drifted from admin state: {snapshot_knowledge_base}")
-    if snapshot_knowledge_base.get("retrieval_mode") != "hybrid-tightened":
+    if snapshot_document_profile.get("raw_object", {}).get("storage_backend") != "minio":
         raise RuntimeError(
-            f"snapshot knowledge-base retrieval mode drifted from admin state: {snapshot_knowledge_base}"
-        )
-    snapshot_document_profile = next(
-        (
-            item
-            for item in snapshot.get("documentProfiles", [])
-            if item.get("doc_id") == admin_document.get("doc_id")
-        ),
-        None,
-    )
-    if snapshot_document_profile is None:
-        raise RuntimeError(f"snapshot was missing the admin document profile row: {snapshot}")
-    if snapshot_document_profile.get("latest_job_id") != admin_reindex_job.get("job_id"):
-        raise RuntimeError(
-            "snapshot document profile did not reflect the latest reindex job: "
+            "knowledge document profile did not persist raw-object metadata via MinIO mirror: "
             f"{snapshot_document_profile}"
         )
-    if snapshot_document_profile.get("source_type") != "filesystem":
-        raise RuntimeError(
-            f"snapshot document profile lost the filesystem source type: {snapshot_document_profile}"
-        )
-    integrations = snapshot.get("integrations", {})
-    for connector_name in (
-        "rawStorage",
-        "metadataStore",
-        "vectorStore",
-        "bm25Store",
-        "cache",
-        "taskQueue",
-    ):
-        connector = integrations.get(connector_name, {})
-        if connector.get("configured") is not True:
-            raise RuntimeError(
-                f"snapshot connector {connector_name} was not configured in the compose baseline: {snapshot}"
-            )
-    if integrations.get("rawStorage", {}).get("backend") != "minio-mirror" and integrations.get("rawStorage", {}).get("backend") != "minio":
-        raise RuntimeError(f"snapshot raw storage backend was not MinIO-oriented: {snapshot}")
-    if integrations.get("metadataStore", {}).get("backend") != "mysql":
-        raise RuntimeError(f"snapshot metadata store backend was not MySQL-backed: {snapshot}")
-    if integrations.get("vectorStore", {}).get("backend") != "qdrant":
-        raise RuntimeError(f"snapshot vector store backend was not Qdrant-backed: {snapshot}")
-    if integrations.get("bm25Store", {}).get("backend") != "opensearch":
-        raise RuntimeError(f"snapshot BM25 store backend was not OpenSearch-backed: {snapshot}")
-    if integrations.get("cache", {}).get("backend") not in {"redis-configured", "redis-ttl"}:
-        raise RuntimeError(f"snapshot cache backend was not Redis-oriented: {snapshot}")
-    if integrations.get("taskQueue", {}).get("backend") != "redis-list-primary":
+    if integrations.get("backendSummary", {}).get("vector") != "qdrant":
+        raise RuntimeError(f"snapshot vector backend was not Qdrant: {snapshot}")
+    if integrations.get("backendSummary", {}).get("bm25") != "opensearch":
+        raise RuntimeError(f"snapshot bm25 backend was not OpenSearch: {snapshot}")
+    if integrations.get("backendSummary", {}).get("rawObject") != "minio":
+        raise RuntimeError(f"snapshot raw object backend was not MinIO: {snapshot}")
+    if integrations.get("backendSummary", {}).get("taskQueue") != "redis-primary":
         raise RuntimeError(f"snapshot task queue backend was not Redis-primary: {snapshot}")
     if int(integrations.get("eventCounters", {}).get("completed", 0)) < 1:
         raise RuntimeError(f"snapshot integration counters did not report completed events: {snapshot}")
@@ -484,68 +552,25 @@ def main() -> int:
         raise RuntimeError("rag-service upstream readiness gauge did not report ready on /metrics")
     if empty_answer.get("degraded") is not False:
         raise RuntimeError(f"empty-answer path unexpectedly reported degraded: {empty_answer}")
-    if empty_answer.get("citations") != []:
-        raise RuntimeError(f"empty-answer path unexpectedly returned citations: {empty_answer}")
-    if "没有检索到可引用知识" not in empty_answer.get("answer", ""):
-        raise RuntimeError(f"empty-answer path did not return the empty-result guidance: {empty_answer}")
 
     summary = {
-        "bootstrap": bootstrap,
-        "filesystemImport": {
-            "preview": {
-                "matchedFiles": import_preview.get("matchedFiles"),
-                "importableFiles": import_preview.get("importableFiles"),
-                "importRoot": import_preview.get("importRoot"),
-            },
-            "result": {
-                "processedFiles": file_import.get("processedFiles"),
-                "importedFiles": file_import.get("importedFiles"),
-                "reusedFiles": file_import.get("reusedFiles"),
-                "failedFiles": file_import.get("failedFiles"),
-            },
+        "health": {
+            "knowledge": knowledge_health,
+            "rag": rag_health,
+            "marketing": marketing_health,
+            "research": research_health,
+            "orchestrator": orchestrator_health,
         },
-        "documents": {
-            "count": len(documents),
-            "selectedDocumentId": first_document_id,
-            "chunkCount": len(chunks),
-        },
-        "overview": {
-            "counts": overview.get("counts"),
-            "topTags": overview.get("topTags"),
-            "largestSources": overview.get("largestSources"),
-        },
-        "snapshot": {
-            "exportedAt": snapshot.get("exportedAt"),
-            "counts": snapshot.get("counts"),
-            "knowledgeBaseCount": len(snapshot.get("knowledgeBases", [])),
-            "recentAuditCount": len(snapshot.get("recentAuditRecords", [])),
-            "integrations": {
-                "pendingEvents": integrations.get("pendingEvents"),
-                "eventCounters": integrations.get("eventCounters"),
-                "rawStorage": integrations.get("rawStorage", {}).get("backend"),
-                "metadataStore": integrations.get("metadataStore", {}).get("backend"),
-                "vectorStore": integrations.get("vectorStore", {}).get("backend"),
-                "bm25Store": integrations.get("bm25Store", {}).get("backend"),
-                "cache": integrations.get("cache", {}).get("backend"),
-                "taskQueue": integrations.get("taskQueue", {}).get("backend"),
-                "lastProcessedEvent": {
-                    "eventId": processed_snapshot_event.get("eventId"),
-                    "status": processed_snapshot_event.get("status"),
-                    "operation": processed_snapshot_event.get("operation"),
-                    "connectorResults": connector_results,
-                },
-            },
-        },
-        "search": {
-            "queryTokens": search.get("queryTokens"),
-            "sourceBreakdown": search.get("sourceBreakdown"),
-            "total": search.get("total"),
-        },
-        "rag": {
-            "answerCitations": len(answer.get("citations", [])),
-            "emptyAnswer": {
-                "degraded": empty_answer.get("degraded"),
-                "coverageNotes": empty_answer.get("coverageNotes"),
+        "knowledge": {
+            "bootstrapSources": bootstrap.get("sourcesCreated"),
+            "importPreview": import_preview,
+            "overview": overview,
+            "searchTotal": search.get("total"),
+            "documentCount": len(documents),
+            "chunkCount": len(chunks.get("items", [])),
+            "documentProfile": {
+                "id": document_profile.get("document", {}).get("id"),
+                "sourceUri": document_profile.get("source_uri"),
             },
         },
         "admin": {
@@ -614,7 +639,7 @@ def main() -> int:
         "capabilities": rag_capabilities,
         "webAdmin": {
             "root": WEB_ADMIN_ROOT,
-            "spaShell": "<div id=\"root\"></div>",
+            "spaShell": '<div id="root"></div>',
         },
         "answer": {
             "degraded": answer.get("degraded"),

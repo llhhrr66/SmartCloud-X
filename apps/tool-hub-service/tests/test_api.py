@@ -1,10 +1,15 @@
 from fastapi.testclient import TestClient
 
 from app.core.business_tools_sdk import ToolDefinition, ToolExecutionResult, ToolPreflightResult
+from app.core.config import Settings
 from app.main import app
 from app.api.routes import health as health_routes
 from app.api.routes import tools as tools_routes
-from app.services.business_tools_client import BusinessToolsDiscoveryUnavailableError
+from app.models.tools import ToolCallResponse
+from app.services.business_tools_client import (
+    BusinessToolsDiscoveryUnavailableError,
+    BusinessToolsInvokeHttpError,
+)
 
 
 client = TestClient(app)
@@ -18,6 +23,7 @@ def test_healthz_reports_business_tools_transport_runtime() -> None:
     runtime = response.json()["runtime"]
     assert runtime["businessToolsTransport"]["transport"] in {"local", "http"}
     assert "degradedLocalFallbackEnabled" in runtime["businessToolsTransport"]
+    assert "strictRemoteDiscoveryEnabled" in runtime["businessToolsTransport"]
     if runtime["businessToolsTransport"]["transport"] == "http":
         assert runtime["businessToolsIdempotency"]["active"] is False
         assert runtime["businessToolsIdempotency"]["backend"] == "inactive"
@@ -488,8 +494,9 @@ def test_tool_detail_uses_remote_business_tools_descriptor_when_http_transport_e
 
 def test_internal_tools_preflight_uses_remote_business_tools_preflight_when_http_transport_enabled(monkeypatch) -> None:
     class StubBusinessToolsClient:
-        def preflight_call(self, tool_name, request):
+        def preflight_call(self, tool_name, request, *, definition=None):
             assert tool_name == "order.create_refund"
+            assert definition is remote_descriptor
             return ToolPreflightResult(
                 tool_name=tool_name,
                 operation=request.operation,
@@ -634,6 +641,148 @@ def test_direct_invoke_creates_public_audit_record() -> None:
     assert "public-direct-invoke" in records[0]["audit_tags"]
     assert records[0]["operation"] == "execute"
     assert records[0]["operator"]["type"] == "user"
+
+
+def test_direct_invoke_generates_unique_tool_call_ids_when_request_id_is_missing() -> None:
+    first = client.post(
+        "/api/v1/tools/billing.query_statement/invoke",
+        json={
+            "operation": "execute",
+            "payload": {"range": "this_month"},
+            "context": {
+                "trace_id": "trace-public-generated-id",
+                "conversation_id": "conv-public-generated-id",
+                "tenant_id": "tenant-public",
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+                "operator_type": "user",
+                "operator_id": "u-1",
+            },
+        },
+    )
+    second = client.post(
+        "/api/v1/tools/billing.query_statement/invoke",
+        json={
+            "operation": "execute",
+            "payload": {"range": "last_month"},
+            "context": {
+                "trace_id": "trace-public-generated-id",
+                "conversation_id": "conv-public-generated-id",
+                "tenant_id": "tenant-public",
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+                "operator_type": "user",
+                "operator_id": "u-1",
+            },
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_tool_call_id = first.json()["data"]["tool_call_id"]
+    second_tool_call_id = second.json()["data"]["tool_call_id"]
+    assert first_tool_call_id != second_tool_call_id
+    assert first_tool_call_id.startswith("public-billing.query_statement-")
+    assert second_tool_call_id.startswith("public-billing.query_statement-")
+
+    audit_response = client.get("/api/v1/tool-calls", params={"trace_id": "trace-public-generated-id"})
+    assert audit_response.status_code == 200
+    records = audit_response.json()["data"]
+    assert len(records) == 2
+    assert {record["tool_call_id"] for record in records} == {first_tool_call_id, second_tool_call_id}
+
+
+def test_direct_invoke_propagates_attempts_to_response_and_audit_record(monkeypatch) -> None:
+    class StubBusinessToolsClient:
+        def invoke_tool(self, definition, request):
+            return ToolExecutionResult(
+                tool_name=definition.name,
+                operation=request.operation,
+                status="completed",
+                summary="remote billing summary",
+                result={"billing_cycle": "2026-04"},
+                citations=["billing://statement"],
+                success=True,
+                code=0,
+                message="ok",
+                provider=definition.provider,
+                attempts=2,
+            )
+
+    monkeypatch.setattr(tools_routes._settings, "business_tools_transport", "http", raising=False)
+    monkeypatch.setattr(tools_routes, "_business_tools_client", StubBusinessToolsClient(), raising=False)
+
+    response = client.post(
+        "/api/v1/tools/billing.query_statement/invoke",
+        json={
+            "operation": "execute",
+            "payload": {"range": "this_month"},
+            "context": {
+                "request_id": "tc-public-attempts-1",
+                "trace_id": "trace-public-attempts-1",
+                "conversation_id": "conv-public-attempts-1",
+                "tenant_id": "tenant-public",
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+                "operator_type": "user",
+                "operator_id": "u-1",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["attempts"] == 2
+    audit_response = client.get("/api/v1/tool-calls", params={"trace_id": "trace-public-attempts-1"})
+    assert audit_response.status_code == 200
+    records = audit_response.json()["data"]
+    assert len(records) == 1
+    assert records[0]["attempts"] == 2
+
+
+def test_direct_invoke_audits_retry_attempts_for_downstream_failure(monkeypatch) -> None:
+    class StubBusinessToolsClient:
+        def invoke_tool(self, definition, request):
+            raise BusinessToolsInvokeHttpError(
+                message="Tool provider unavailable for 'billing.query_statement'.",
+                provider=definition.provider,
+                retryable=True,
+                attempts=2,
+                details={"exception": "TimeoutException"},
+                status="timeout",
+            )
+
+    monkeypatch.setattr(tools_routes._settings, "business_tools_transport", "http", raising=False)
+    monkeypatch.setattr(tools_routes, "_business_tools_client", StubBusinessToolsClient(), raising=False)
+
+    response = client.post(
+        "/api/v1/tools/billing.query_statement/invoke",
+        json={
+            "operation": "execute",
+            "payload": {"range": "this_month"},
+            "context": {
+                "request_id": "tc-public-failed-attempts-1",
+                "trace_id": "trace-public-failed-attempts-1",
+                "conversation_id": "conv-public-failed-attempts-1",
+                "tenant_id": "tenant-public",
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+                "operator_type": "user",
+                "operator_id": "u-1",
+            },
+        },
+    )
+
+    assert response.status_code == 502
+    audit_response = client.get("/api/v1/tool-calls", params={"trace_id": "trace-public-failed-attempts-1"})
+    assert audit_response.status_code == 200
+    records = audit_response.json()["data"]
+    assert len(records) == 1
+    assert records[0]["attempts"] == 2
+    assert records[0]["status"] == "timeout"
 
 
 def test_direct_invoke_audits_validation_errors() -> None:
@@ -1136,7 +1285,7 @@ def test_tool_call_audit_surfaces_query_cache_hits_and_filtering() -> None:
             "permissions": ["user:billing.read"],
         },
         "payload": {"range": "this_month"},
-        "idempotency_key": "tool-cache-1",
+        "idempotency_key": None,
         "operation": "execute",
     }
     first = client.post(
@@ -1205,7 +1354,7 @@ def test_internal_tool_routes_require_allowed_caller() -> None:
     assert response.json()["detail"]["code"] == "TOOL_HUB_CALLER_FORBIDDEN"
 
 
-def test_internal_tool_routes_are_not_exposed_on_public_api_prefix() -> None:
+def test_public_tools_call_route_executes_query_tool() -> None:
     response = client.post(
         "/api/v1/tools/call",
         json={
@@ -1224,4 +1373,173 @@ def test_internal_tool_routes_are_not_exposed_on_public_api_prefix() -> None:
             "operation": "execute",
         },
     )
-    assert response.status_code == 405
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"]["currency"] == "CNY"
+    assert payload["tool_call_id"] == "tc-public-1"
+
+
+def test_tool_execution_routes_surface_503_when_remote_business_tools_discovery_is_unavailable(monkeypatch) -> None:
+    existing_registry = tools_routes._registry
+
+    class StubRegistry:
+        def get_tool(self, tool_name: str):
+            return existing_registry.get_tool(tool_name)
+
+        def list_tools(self, **kwargs):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+        def describe_tool(self, tool_name: str, **kwargs):
+            raise BusinessToolsDiscoveryUnavailableError("business-tools discovery unavailable")
+
+    monkeypatch.setattr(tools_routes, "_registry", StubRegistry())
+
+    call_response = client.post(
+        "/api/v1/tools/call",
+        json={
+            "trace_id": "trace-public-discovery-1",
+            "conversation_id": "conv-public-discovery-1",
+            "tool_call_id": "tc-public-discovery-1",
+            "tool_name": "billing.query_statement",
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            "payload": {"range": "this_month"},
+            "idempotency_key": "tool-public-discovery-1",
+            "operation": "execute",
+        },
+    )
+    preflight_response = client.post(
+        "/api/v1/tools/preflight",
+        json={
+            "trace_id": "trace-public-discovery-2",
+            "conversation_id": "conv-public-discovery-2",
+            "tool_call_id": "tc-public-discovery-2",
+            "tool_name": "billing.query_statement",
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            "payload": {"range": "this_month"},
+            "idempotency_key": "tool-public-discovery-2",
+            "operation": "execute",
+        },
+    )
+    invoke_response = client.post(
+        "/api/v1/tools/billing.query_statement/invoke",
+        json={
+            "operation": "execute",
+            "payload": {"range": "this_month"},
+            "context": {
+                "request_id": "tc-public-discovery-3",
+                "trace_id": "trace-public-discovery-3",
+                "conversation_id": "conv-public-discovery-3",
+                "message_id": "msg-public-discovery-3",
+                "tenant_id": "tenant-a",
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "roles": ["end_user"],
+                "permissions": ["user:billing.read"],
+                "locale": "zh-CN",
+                "operator_type": "agent",
+                "operator_id": "Finance_Order_Agent",
+                "idempotency_key": "tool-public-discovery-3",
+            },
+        },
+    )
+    mcp_list_response = client.get("/tools/list")
+
+    for response in (call_response, preflight_response, invoke_response, mcp_list_response):
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "ORCH_TOOL_DISCOVERY_UNAVAILABLE"
+
+
+def test_public_tools_call_supports_remote_only_tool_when_http_transport_is_enabled(monkeypatch) -> None:
+    remote_tool = ToolDefinition.model_validate(
+        {
+            "name": "remote.only_tool",
+            "capability": "billing",
+            "description": "remote-only tool",
+            "provider": "business-tools-service",
+            "downstream_target": "business-tools-service",
+        }
+    )
+
+    class StubRegistry:
+        def get_tool(self, tool_name: str):
+            assert tool_name == "remote.only_tool"
+            return None
+
+        def describe_tool(self, tool_name: str, **kwargs):
+            assert tool_name == "remote.only_tool"
+            return remote_tool
+
+    class StubBusinessToolsClient:
+        def invoke_call(self, tool, request, *, definition=None):
+            assert tool is None
+            assert definition is not None
+            assert definition.name == "remote.only_tool"
+            return ToolCallResponse(
+                success=True,
+                code=0,
+                message="ok",
+                status="completed",
+                summary="remote-only tool executed",
+                result={"remote": True},
+                data={"remote": True},
+                citations=["remote://tool"],
+                audit_tags=["remote-http"],
+                session_context_patch={},
+                tool_call_id=request.tool_call_id,
+                latency_ms=12,
+                provider="business-tools-service",
+                idempotency_key=request.idempotency_key,
+            )
+
+    monkeypatch.setattr(tools_routes, "_registry", StubRegistry())
+    monkeypatch.setattr(
+        tools_routes,
+        "_settings",
+        Settings.model_validate(
+            {
+                "APP_ENV": "prod",
+                "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+                "BUSINESS_TOOLS_TRANSPORT": "http",
+                "BUSINESS_TOOLS_URL": "http://example.local",
+            }
+        ),
+    )
+    monkeypatch.setattr(tools_routes, "_business_tools_client", StubBusinessToolsClient())
+
+    response = client.post(
+        "/api/v1/tools/call",
+        json={
+            "trace_id": "trace-remote-only-1",
+            "conversation_id": "conv-remote-only-1",
+            "tool_call_id": "tc-remote-only-1",
+            "tool_name": "remote.only_tool",
+            "operator": {"type": "agent", "id": "Finance_Order_Agent"},
+            "user_context": {
+                "user_id": "u-1",
+                "account_id": "acct-1",
+                "permissions": ["user:billing.read"],
+            },
+            "payload": {"range": "this_month"},
+            "idempotency_key": "tool-remote-only-1",
+            "operation": "execute",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["status"] == "completed"
+    assert payload["result"] == {"remote": True}
+    assert payload["citations"] == ["remote://tool"]

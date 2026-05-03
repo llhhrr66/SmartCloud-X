@@ -69,3 +69,17 @@ Promote one additive runtime-health baseline for `auth-user-service`, `marketing
   - no new response body schema or dedicated runtime/snapshot route was published for auth/marketing/research because those services do not expose one yet in repo reality
 - rationale:
   - foundation should freeze the naming contract now, but it should not invent live response payloads for owner services that still only publish minimal liveness today
+
+## Owner Follow-up Result
+- updated at: 2026-04-17T03:12:21+08:00
+- owner: `supervisor-auth-marketing-research`
+- result: implemented
+
+### Delivered
+- `auth-user-service`, `marketing-service`, and `research-service` `/healthz` now publish additive `runtime_mode` plus canonical `backends` records aligned with `docs/contracts/shared/runtime-health.md`.
+- `scripts/qa/project_smoke.py --scenario auth-marketing-research` now asserts those runtime backend fields in both local fallback mode and live shared-backend mode.
+- `apps/auth-user-service/tests`, `apps/marketing-service/tests`, and `apps/research-service/tests` now include local fallback health-surface assertions for the new payload shape.
+
+### Remaining Foundation Follow-up
+- frozen OpenAPI promotion is still deferred because `openapi/` remains outside owner scope for this window.
+- if foundation wants the new response shape reflected in frozen examples or shared schemas, it can now promote repo reality instead of documenting a placeholder gap.

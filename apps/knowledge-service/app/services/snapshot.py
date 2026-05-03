@@ -35,6 +35,7 @@ class KnowledgeSnapshotService:
             "knowledge.snapshot.export",
             smartcloud_snapshot_audit_limit=audit_limit,
         ):
+            self.repository.refresh_runtime_state()
             self.repository.refresh_metadata_state()
             self.repository.reconcile_runtime_state()
             knowledge_base_profiles = sorted(

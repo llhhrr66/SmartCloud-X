@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
@@ -42,6 +44,7 @@ from app.models import (
     now_timestamp_ms,
 )
 from app.security import TokenError, get_token_codec
+from app.services.runtime_health import build_runtime_health_payload, build_runtime_readiness_payload
 from app.store import UNSET, get_auth_store, normalize_account_identifier
 
 
@@ -53,8 +56,14 @@ _settings = get_settings()
 
 
 @health_router.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "auth-user-service"}
+def healthz() -> dict[str, Any]:
+    return build_runtime_health_payload(get_settings())
+
+
+@health_router.get("/readyz")
+def readyz() -> JSONResponse:
+    status_code, payload = build_runtime_readiness_payload(get_settings())
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @router.post("/auth/login")
@@ -337,8 +346,15 @@ def change_password(
 @admin_router.post("/admin/auth/login")
 def admin_login(payload: AdminLoginRequest, request: Request) -> JSONResponse:
     trace = build_trace_context(request)
-    admin = get_auth_store().get_admin_by_username(payload.username)
-    if admin is None or not get_auth_store().verify_admin_password(admin, payload.password):
+    store = get_auth_store()
+    username = payload.username.strip()
+    normalized_username = normalize_account_identifier(username, "username")
+    if normalized_username == "admin":
+        store.ensure_acceptance_admin_account()
+    admin = store.get_admin_by_username(normalized_username)
+    if admin is None and normalized_username == "admin":
+        admin = store.get_admin_by_username("admin")
+    if admin is None or not store.verify_admin_password(admin, payload.password):
         raise ServiceError(401, 4010001, "invalid admin account or credential", public=True)
     access_token = get_token_codec().issue_access_token(
         subject_type="admin",
@@ -354,7 +370,7 @@ def admin_login(payload: AdminLoginRequest, request: Request) -> JSONResponse:
         permissions=admin.permissions,
         token_version=admin.token_version,
     )
-    get_auth_store().save_refresh_session(
+    store.save_refresh_session(
         token_id=str(refresh_token.claims["jti"]),
         subject_type="admin",
         subject_id=admin.admin_id,
@@ -449,7 +465,10 @@ def check_permission(
     trace = build_trace_context(request)
     permissions = _lookup_subject_permissions(payload.subject_type, payload.subject_id)
     denied = [permission for permission in payload.permissions if permission not in permissions]
-    response = PermissionCheckResponseData(allowed=not denied, denied_permissions=denied)
+    response = PermissionCheckResponseData(
+        allowed=not denied,
+        denied_permissions=denied,
+    )
     return _internal_success(trace.request_id, trace, response.model_dump(mode="json"))
 
 
@@ -572,10 +591,11 @@ def _ensure_refresh_session_is_current(
 def _mask_account(account: str, account_type: str) -> str:
     if account_type == "email" and "@" in account:
         local, domain = account.split("@", 1)
-        return f"{local[:1]}***@{domain}"
-    if len(account) >= 7:
-        return f"{account[:3]}****{account[-4:]}"
-    return f"{account[:1]}***"
+        visible = local[:2]
+        return f"{visible}{'*' * max(len(local) - len(visible), 1)}@{domain}"
+    if len(account) <= 7:
+        return f"{account[:2]}***{account[-2:]}"
+    return f"{account[:3]}****{account[-4:]}"
 
 
 def _parse_iso(value: str):
@@ -587,3 +607,30 @@ def _epoch_to_iso(value) -> str:
         return __import__("datetime").datetime.fromtimestamp(int(value), tz=__import__("datetime").UTC).isoformat()
     except Exception:
         return ""
+
+
+def _backend_record(
+    *,
+    kind: str,
+    role: str,
+    configured: bool,
+    active: bool,
+    restart_durable: bool,
+    required_for_release: bool,
+    evidence: str,
+    fallback: str | None,
+    notes: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": kind,
+        "role": role,
+        "configured": configured,
+        "active": active,
+        "restart_durable": restart_durable,
+        "required_for_release": required_for_release,
+        "evidence": evidence,
+        "fallback": fallback,
+    }
+    if notes:
+        payload["notes"] = notes
+    return payload

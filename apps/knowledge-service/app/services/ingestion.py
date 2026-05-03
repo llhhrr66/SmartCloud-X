@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from datetime import UTC, datetime
 from functools import lru_cache
 from uuid import uuid4
@@ -26,30 +25,11 @@ from app.models.knowledge import (
     SourceSeed,
     StarterCatalog,
 )
+from app.services.embeddings import build_embedding_provider
 from app.services.runtime_sync import KnowledgeRuntimeSyncService
 from app.services.store import KnowledgeStoreRepository
 from app.services.store_provider import get_repository
-
-STOPWORDS = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "this",
-    "that",
-    "have",
-    "from",
-    "your",
-    "you",
-    "问题",
-    "一个",
-    "进行",
-    "以及",
-    "相关",
-    "通过",
-    "需要",
-    "可以",
-}
+from app.services.text_processing import ChunkingService, TextProcessor, estimate_tokens
 
 
 def utc_now() -> str:
@@ -60,6 +40,13 @@ class IngestionService:
     def __init__(self, repository: KnowledgeStoreRepository) -> None:
         self.repository = repository
         self.settings = get_settings()
+        self.text_processor = TextProcessor()
+        self.chunking_service = ChunkingService(
+            self.settings.max_chunk_chars,
+            self.settings.chunk_overlap_chars,
+            self.settings.chunk_strategy,
+        )
+        self.embedding_provider = build_embedding_provider(self.settings)
 
     def create_source(self, request: CreateSourceRequest) -> KnowledgeSource:
         now = utc_now()
@@ -125,8 +112,9 @@ class IngestionService:
                     else source.uri
                 )
                 now = utc_now()
-                normalized_content = request.content.strip()
-                checksum = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()[:16]
+                cleaned_content = self.text_processor.clean(request.content)
+                metadata = self.text_processor.extract_metadata(cleaned_content)
+                checksum = hashlib.sha256(cleaned_content.encode("utf-8")).hexdigest()[:16]
                 existing_document = self.repository.find_document(
                     source_id=source.id,
                     checksum=checksum,
@@ -155,37 +143,59 @@ class IngestionService:
                         source=source,
                         document=existing_document,
                         chunksCreated=0,
+                        avgChunkTokens=0.0,
+                        maxChunkTokens=0,
+                        minChunkTokens=0,
                     )
 
-                chunk_texts = self._split_text(normalized_content)
+                chunk_texts = self.chunking_service.split(cleaned_content)
+                corpus_texts = [document.content for document in self.repository.list_documents(source_id=source.id)]
+                embeddings = self.embedding_provider.embed(chunk_texts)
                 chunk_ids = [f"chk-{uuid4().hex[:12]}" for _ in chunk_texts]
                 document = KnowledgeDocument(
                     id=f"doc-{uuid4().hex[:12]}",
                     sourceId=source.id,
                     title=request.title.strip(),
-                    content=normalized_content,
+                    content=cleaned_content,
                     tags=self._normalize_tags(request.tags),
-                    language=request.language,
+                    language=str(metadata.get("language") or request.language),
                     checksum=checksum,
                     chunkIds=chunk_ids,
                     createdAt=now,
                     updatedAt=now,
                 )
-                chunks = [
-                    KnowledgeChunk(
-                        id=chunk_id,
-                        sourceId=source.id,
-                        documentId=document.id,
-                        documentTitle=document.title,
-                        ordinal=index,
-                        content=chunk_text,
-                        tokenEstimate=max(1, len(chunk_text) // 4),
-                        keywords=self._extract_keywords(chunk_text),
-                        tags=sorted(set(source.tags + document.tags)),
-                        createdAt=now,
+                chunks: list[KnowledgeChunk] = []
+                token_stats: list[int] = []
+                for index, (chunk_id, chunk_text, embedding) in enumerate(
+                    zip(chunk_ids, chunk_texts, embeddings),
+                    start=1,
+                ):
+                    token_estimate = estimate_tokens(chunk_text)
+                    token_stats.append(token_estimate)
+                    chunk_metadata = {
+                        **metadata,
+                        "embeddingProvider": self.embedding_provider.__class__.__name__,
+                        "embeddingPreview": embedding[:8],
+                    }
+                    chunks.append(
+                        KnowledgeChunk(
+                            id=chunk_id,
+                            sourceId=source.id,
+                            documentId=document.id,
+                            documentTitle=document.title,
+                            ordinal=index,
+                            content=chunk_text,
+                            tokenEstimate=token_estimate,
+                            keywords=self.text_processor.extract_keywords(
+                                chunk_text,
+                                8,
+                                corpus_texts=corpus_texts + chunk_texts,
+                            ),
+                            tags=sorted(set(source.tags + document.tags + list(metadata.get("domainHints") or []))),
+                            metadata=chunk_metadata,
+                            createdAt=now,
+                        )
                     )
-                    for index, (chunk_id, chunk_text) in enumerate(zip(chunk_ids, chunk_texts), start=1)
-                ]
                 job = IngestionJob(
                     id=f"ing-{uuid4().hex[:12]}",
                     sourceId=source.id,
@@ -225,6 +235,9 @@ class IngestionService:
                     source=updated_source,
                     document=document,
                     chunksCreated=len(chunks),
+                    avgChunkTokens=round(sum(token_stats) / len(token_stats), 2) if token_stats else 0.0,
+                    maxChunkTokens=max(token_stats) if token_stats else 0,
+                    minChunkTokens=min(token_stats) if token_stats else 0,
                 )
 
     def bootstrap_catalog(self) -> BootstrapCatalogResponse:
@@ -284,29 +297,43 @@ class IngestionService:
                 profile = self.repository.get_document_profile(document_id)
 
                 now = utc_now()
-                chunk_texts = self._split_text(document.content)
+                cleaned_content = self.text_processor.clean(document.content)
+                metadata = self.text_processor.extract_metadata(cleaned_content)
+                chunk_texts = self.chunking_service.split(cleaned_content)
                 chunk_ids = [f"chk-{uuid4().hex[:12]}" for _ in chunk_texts]
+                embeddings = self.embedding_provider.embed(chunk_texts)
                 updated_document = document.model_copy(
                     update={
+                        "content": cleaned_content,
+                        "language": str(metadata.get("language") or document.language),
                         "chunk_ids": chunk_ids,
                         "updated_at": now,
                     }
                 )
-                chunks = [
-                    KnowledgeChunk(
-                        id=chunk_id,
-                        sourceId=source.id,
-                        documentId=updated_document.id,
-                        documentTitle=updated_document.title,
-                        ordinal=index,
-                        content=chunk_text,
-                        tokenEstimate=max(1, len(chunk_text) // 4),
-                        keywords=self._extract_keywords(chunk_text),
-                        tags=sorted(set(source.tags + updated_document.tags)),
-                        createdAt=now,
+                token_stats: list[int] = []
+                chunks = []
+                for index, (chunk_id, chunk_text, embedding) in enumerate(zip(chunk_ids, chunk_texts, embeddings), start=1):
+                    token_estimate = estimate_tokens(chunk_text)
+                    token_stats.append(token_estimate)
+                    chunks.append(
+                        KnowledgeChunk(
+                            id=chunk_id,
+                            sourceId=source.id,
+                            documentId=updated_document.id,
+                            documentTitle=updated_document.title,
+                            ordinal=index,
+                            content=chunk_text,
+                            tokenEstimate=token_estimate,
+                            keywords=self.text_processor.extract_keywords(chunk_text, 8, corpus_texts=chunk_texts),
+                            tags=sorted(set(source.tags + updated_document.tags + list(metadata.get("domainHints") or []))),
+                            metadata={
+                                **metadata,
+                                "embeddingProvider": self.embedding_provider.__class__.__name__,
+                                "embeddingPreview": embedding[:8],
+                            },
+                            createdAt=now,
+                        )
                     )
-                    for index, (chunk_id, chunk_text) in enumerate(zip(chunk_ids, chunk_texts), start=1)
-                ]
                 previous_chunk_count = len(document.chunk_ids)
                 job = IngestionJob(
                     id=f"ing-{uuid4().hex[:12]}",
@@ -321,10 +348,7 @@ class IngestionService:
                 )
                 updated_source = source.model_copy(
                     update={
-                        "chunk_count": max(
-                            0,
-                            source.chunk_count - previous_chunk_count + len(chunks),
-                        ),
+                        "chunk_count": max(0, source.chunk_count - previous_chunk_count + len(chunks)),
                         "updated_at": now,
                     }
                 )
@@ -350,6 +374,9 @@ class IngestionService:
                     source=updated_source,
                     document=updated_document,
                     chunksCreated=len(chunks),
+                    avgChunkTokens=round(sum(token_stats) / len(token_stats), 2) if token_stats else 0.0,
+                    maxChunkTokens=max(token_stats) if token_stats else 0,
+                    minChunkTokens=min(token_stats) if token_stats else 0,
                 )
 
     def _publish_runtime_sync(
@@ -374,7 +401,7 @@ class IngestionService:
                 source_type=source_type,
                 source_uri=source_uri,
             )
-        except Exception as exc:  # noqa: BLE001 - ingestion should still complete when outbox staging degrades
+        except Exception as exc:  # noqa: BLE001
             warning = f"indexing outbox enqueue failed: {exc}"
             updated_job = job.model_copy(update={"warnings": job.warnings + [warning]})
             self.repository.save_ingestion_job(updated_job)
@@ -389,49 +416,6 @@ class IngestionService:
             span.set_attribute("smartcloud.indexing.queue_name", event.queue_name)
             span.set_attribute("smartcloud.indexing.raw_object_key", event.raw_object.object_key)
         return job
-
-    def _split_text(self, content: str) -> list[str]:
-        content = content.strip()
-        if len(content) <= self.settings.max_chunk_chars:
-            return [content]
-
-        paragraphs = [item.strip() for item in re.split(r"\n{2,}", content) if item.strip()]
-        if not paragraphs:
-            paragraphs = [content]
-
-        chunks: list[str] = []
-        buffer = ""
-        for paragraph in paragraphs:
-            candidate = f"{buffer}\n\n{paragraph}".strip() if buffer else paragraph
-            if len(candidate) <= self.settings.max_chunk_chars:
-                buffer = candidate
-                continue
-            if buffer:
-                chunks.append(buffer)
-                overlap = buffer[-self.settings.chunk_overlap_chars :]
-                buffer = f"{overlap}\n{paragraph}".strip()
-            else:
-                buffer = paragraph
-            while len(buffer) > self.settings.max_chunk_chars:
-                chunk = buffer[: self.settings.max_chunk_chars].strip()
-                chunks.append(chunk)
-                start = max(0, self.settings.max_chunk_chars - self.settings.chunk_overlap_chars)
-                buffer = buffer[start:].strip()
-        if buffer:
-            chunks.append(buffer)
-        return [chunk for chunk in chunks if chunk]
-
-    def _extract_keywords(self, content: str) -> list[str]:
-        tokens = re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]{2,}", content.lower())
-        scored: dict[str, int] = {}
-        for token in tokens:
-            if token in STOPWORDS:
-                continue
-            scored[token] = scored.get(token, 0) + 1
-        return [
-            token
-            for token, _count in sorted(scored.items(), key=lambda item: (-item[1], item[0]))[:8]
-        ]
 
     @staticmethod
     def _normalize_tags(tags: list[str]) -> list[str]:

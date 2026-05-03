@@ -15,7 +15,10 @@
     },
     "status": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "ready",
+        "not_ready"
+      ]
     },
     "mode": {
       "type": "string",

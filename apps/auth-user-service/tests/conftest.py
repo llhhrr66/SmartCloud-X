@@ -12,6 +12,11 @@ from fastapi.testclient import TestClient
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="smartcloud-auth-tests-"))
 os.environ["AUTH_USER_SERVICE_DATABASE_URL"] = f"sqlite:///{(TEST_DATA_ROOT / 'auth-user-service.db').as_posix()}"
+os.environ["AUTH_USER_SERVICE_SEED_USER_EMAIL"] = "demo@smartcloud.local"
+os.environ["AUTH_USER_SERVICE_SEED_USER_PASSWORD"] = "Password123!"
+os.environ["AUTH_USER_SERVICE_SEED_USER_MOBILE"] = "13800000001"
+os.environ["AUTH_USER_SERVICE_SEED_ADMIN_USERNAME"] = "admin"
+os.environ["AUTH_USER_SERVICE_SEED_ADMIN_PASSWORD"] = "Admin123!"
 
 
 def activate_service_imports() -> None:

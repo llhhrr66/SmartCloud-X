@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Demo Bootstrap</title>
+  </head>
+  <body>
+    <p style="font-family:sans-serif;padding:24px">注入演示会话…</p>
+    <script>
+      const session = {
+        accessToken: "demo-access-token",
+        refreshToken: "demo-refresh-token",
+        expiresIn: 36000,
+        expiresAt: new Date(Date.now() + 36000_000).toISOString(),
+        user: {
+          userId: "u-demo-001",
+          tenantId: "tenant-demo",
+          name: "梁俊荣",
+          email: "ljr@smartcloud-x.example.com",
+          mobile: "13800001234",
+          avatarUrl: "",
+          locale: "zh-CN",
+          timeZone: "Asia/Shanghai",
+          permissions: [
+            "user:billing.read", "user:billing.write",
+            "user:order.read", "user:order.write",
+            "user:ticket.read", "user:ticket.write",
+            "user:icp.read", "user:icp.write",
+            "user:marketing.read", "user:marketing.write",
+            "user:research.read", "user:research.write",
+            "user:chat.read", "user:chat.write",
+          ],
+        },
+      };
+      try {
+        localStorage.setItem(
+          "smartcloud-x:web-user:auth-session",
+          JSON.stringify(session)
+        );
+      } catch (_e) {}
+      const target = new URLSearchParams(location.search).get("target") || "/";
+      location.replace(target);
+    </script>
+  </body>
+</html>

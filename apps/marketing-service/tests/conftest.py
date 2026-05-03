@@ -33,20 +33,61 @@ def _load_service_modules() -> dict[str, Any]:
     security = importlib.import_module("app.security")
     dependencies = importlib.import_module("app.dependencies")
     models = importlib.import_module("app.models")
+    telemetry = importlib.import_module("app.core.telemetry")
+    metrics = importlib.import_module("app.core.metrics")
     store = importlib.import_module("app.store")
+    copy_generator = importlib.import_module("app.services.copy_generator")
+    poster_generator = importlib.import_module("app.services.poster_generator")
+    mongo_runtime = importlib.import_module("app.mongo_runtime")
+    celery_app = importlib.import_module("app.celery_app")
+    tasks = importlib.import_module("app.tasks")
+    routes = importlib.import_module("app.routes")
     main = importlib.import_module("app.main")
 
     config.get_settings.cache_clear()
     security.get_token_codec.cache_clear()
-    store.get_marketing_store.cache_clear()
-    store.get_marketing_store().clear()
+
+    modules_to_reload = [
+        telemetry,
+        metrics,
+        copy_generator,
+        poster_generator,
+        store,
+        mongo_runtime,
+        celery_app,
+        tasks,
+        dependencies,
+        routes,
+        main,
+    ]
+    reloaded = {module.__name__: importlib.reload(module) for module in modules_to_reload}
+
+    reloaded_store = reloaded["app.store"]
+    reloaded_store.get_marketing_store.cache_clear()
+    reloaded_store.get_marketing_store().clear()
+    reloaded_telemetry = reloaded["app.core.telemetry"]
+    if hasattr(reloaded_telemetry, "reset_tracing"):
+        reloaded_telemetry.reset_tracing()
+    reloaded_metrics = reloaded["app.core.metrics"]
+    if hasattr(reloaded_metrics, "reset_metrics"):
+        reloaded_metrics.reset_metrics()
+    importlib.reload(reloaded["app.routes"])
+    importlib.reload(reloaded["app.main"])
     return {
         "config": config,
         "security": security,
-        "dependencies": dependencies,
+        "dependencies": reloaded["app.dependencies"],
         "models": models,
-        "store": store,
-        "main": main,
+        "store": reloaded_store,
+        "telemetry": reloaded_telemetry,
+        "metrics": reloaded_metrics,
+        "copy_generator": reloaded["app.services.copy_generator"],
+        "poster_generator": reloaded["app.services.poster_generator"],
+        "mongo_runtime": reloaded["app.mongo_runtime"],
+        "celery_app": reloaded["app.celery_app"],
+        "tasks": reloaded["app.tasks"],
+        "routes": importlib.import_module("app.routes"),
+        "main": importlib.import_module("app.main"),
     }
 
 

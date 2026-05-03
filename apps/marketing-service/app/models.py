@@ -36,25 +36,18 @@ class TraceContext(BaseModel):
     conversation_id: str | None = Field(default=None, alias="conversationId")
     tenant_id: str | None = Field(default=None, alias="tenantId")
     caller_service: str | None = Field(default=None, alias="callerService")
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
 
     model_config = {"populate_by_name": True}
 
 
 class ServiceError(Exception):
-    def __init__(
-        self,
-        status_code: int,
-        code: int,
-        message: str,
-        *,
-        field: str | None = None,
-        error_type: str | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, status_code: int, code: int, message: str, *, public: bool = False, field: str | None = None, error_type: str | None = None, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.public = public
         self.field = field
         self.error_type = error_type
         self.details = details
@@ -72,11 +65,21 @@ class MarketingCampaign(BaseModel):
     campaign_id: str
     name: str
     product_type: str
-    status: Literal["published", "draft", "expired"]
+    status: Literal["published", "draft", "expired", "pending_review", "rejected", "suspended"]
     start_at: str
     end_at: str
     landing_page_url: str
     highlights: list[str] = Field(default_factory=list)
+    discount_type: str | None = None
+    discount_value: float | None = None
+    discount_description: str | None = None
+    target_segment: str | None = None
+    region: str | None = None
+    description: str | None = None
+    created_by: str | None = None
+    updated_at: str | None = None
+    max_redemptions: int | None = None
+    budget: float | None = None
 
 
 class MarketingCampaignListData(BaseModel):
@@ -207,7 +210,44 @@ class PromotionLinkListData(BaseModel):
 
 
 class MarketingCampaignRecord(MarketingCampaign):
-    pass
+    deleted_at: str | None = None
+
+
+class MarketingCapabilitiesData(BaseModel):
+    copy_provider: dict[str, Any] = Field(alias="copy")
+    poster_provider: dict[str, Any] = Field(alias="poster")
+
+    model_config = {"populate_by_name": True}
+
+
+class AdminCampaignUpsertRequest(BaseModel):
+    campaign_id: str | None = None
+    name: str = Field(min_length=1)
+    product_type: str = Field(min_length=1)
+    status: Literal["published", "draft", "expired", "pending_review", "rejected", "suspended"]
+    start_at: str
+    end_at: str
+    landing_page_url: str = Field(min_length=1)
+    highlights: list[str] = Field(default_factory=list)
+    discount_type: str | None = None
+    discount_value: float | None = None
+    discount_description: str | None = None
+    target_segment: str | None = None
+    region: str | None = None
+    description: str | None = None
+    created_by: str | None = None
+    max_redemptions: int | None = None
+    budget: float | None = None
+
+
+class AdminCampaignListData(BaseModel):
+    items: list[MarketingCampaign]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    sort_by: str = "start_at"
+    sort_order: Literal["asc", "desc"] = "desc"
 
 
 class PosterTaskRecord(BaseModel):
@@ -227,20 +267,7 @@ class PosterTaskRecord(BaseModel):
     updated_at: str | None = None
 
     def to_public(self) -> PosterTask:
-        return PosterTask(
-            task_id=self.task_id,
-            status=self.status,
-            campaign_id=self.campaign_id,
-            campaign_name=self.campaign_name,
-            theme=self.theme,
-            slogan=self.slogan,
-            size=self.size,
-            created_at=self.created_at,
-            image_url=self.image_url,
-            error_message=self.error_message,
-            estimated_seconds=self.estimated_seconds,
-            updated_at=self.updated_at,
-        )
+        return PosterTask(task_id=self.task_id, status=self.status, campaign_id=self.campaign_id, campaign_name=self.campaign_name, theme=self.theme, slogan=self.slogan, size=self.size, created_at=self.created_at, image_url=self.image_url, error_message=self.error_message, estimated_seconds=self.estimated_seconds, updated_at=self.updated_at)
 
 
 class PosterIdempotencyRecord(BaseModel):

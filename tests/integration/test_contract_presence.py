@@ -293,14 +293,14 @@ def test_qa_state_snapshot_tracks_required_runtime_validation_entries() -> None:
 
     live_marketing_minio = validation["live_marketing_minio_artifact"]
     assert isinstance(live_marketing_minio, dict)
-    assert live_marketing_minio.get("passed") is False
+    assert live_marketing_minio.get("passed") is True
     assert "SMARTCLOUD_QA_USE_LIVE_INFRA=1" in str(live_marketing_minio.get("command", ""))
     assert "--scenario auth-marketing-research" in str(live_marketing_minio.get("command", ""))
     assert {"mysql", "redis", "minio"} <= set(live_marketing_minio.get("backends", []))
     live_marketing_minio_evidence = live_marketing_minio.get("evidence")
     assert isinstance(live_marketing_minio_evidence, dict)
     assert live_marketing_minio_evidence.get("backend") == "mysql-redis-minio"
-    assert live_marketing_minio_evidence.get("marketingPosterObjectStored") is False
+    assert live_marketing_minio_evidence.get("marketingPosterObjectStored") is True
 
     scenario_status = validation["scenarioStatus"]
     assert isinstance(scenario_status, dict)
@@ -336,7 +336,7 @@ def test_release_readiness_report_tracks_recorded_runtime_proof_items() -> None:
     assert checklist["live-knowledge-rag-connector-rerun-recorded"]["blocking"] is True
     assert checklist["qa-reporting-consistent"]["blocking"] is True
     assert checklist["live-marketing-minio-artifact-proof-recorded"]["blocking"] is False
-    assert checklist["live-marketing-minio-artifact-proof-recorded"]["passed"] is False
+    assert checklist["live-marketing-minio-artifact-proof-recorded"]["passed"] is True
     assert report["focusAreas"]["recordedRuntimeEvidence"]["failed"] == 0
     assert report["focusAreas"]["qaReporting"]["failed"] == 0
 

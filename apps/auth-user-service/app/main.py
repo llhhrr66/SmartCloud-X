@@ -3,9 +3,10 @@ from __future__ import annotations
 from time import perf_counter
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -43,6 +44,24 @@ async def add_standard_headers(request: Request, call_next):
     return response
 
 
+@app.exception_handler(HTTPException)
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    trace = build_trace_context(request)
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    code = detail.get("code") if isinstance(detail.get("code"), int) else exc.status_code * 1000
+    message = detail.get("message") if isinstance(detail.get("message"), str) else str(exc.detail)
+    error = detail.get("error") if isinstance(detail.get("error"), dict) else None
+    payload = CanonicalErrorEnvelope(
+        code=code,
+        message=message,
+        request_id=trace.request_id or "",
+        timestamp=now_timestamp_ms(),
+        error=error,
+    ).model_dump(mode="json")
+    return JSONResponse(status_code=exc.status_code, content=payload)
+
+
 @app.exception_handler(ServiceError)
 async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
     trace = build_trace_context(request)
@@ -75,7 +94,50 @@ async def service_error_handler(request: Request, exc: ServiceError) -> JSONResp
 async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     trace = build_trace_context(request)
     first_error = exc.errors()[0] if exc.errors() else {}
-    field = ".".join(str(item) for item in first_error.get("loc", [])[1:]) or None
+    loc_items = list(first_error.get("loc", []))
+    field = None
+    if len(loc_items) >= 2 and str(loc_items[0]) == "body":
+        field = ".".join(str(item) for item in loc_items[1:]) or None
+    if field is None:
+        ctx = first_error.get("ctx") if isinstance(first_error.get("ctx"), dict) else {}
+        if isinstance(ctx, dict):
+            source = ctx.get("field_name")
+            if isinstance(source, str) and source:
+                field = source
+            elif loc_items == ["body"]:
+                raw_error = str(ctx.get("error") or "")
+                field_match = __import__("re").match(
+                    r"^(?P<field>[A-Za-z_][A-Za-z0-9_]*) (?:cannot be null|cannot be blank|must .+)$",
+                    raw_error,
+                )
+                if field_match is not None:
+                    field = field_match.group("field")
+    normalized_errors = []
+    for item in exc.errors():
+        error_item = dict(item)
+        ctx = error_item.get("ctx")
+        if isinstance(ctx, dict):
+            error_item["ctx"] = {
+                key: str(value) if isinstance(value, Exception) else value
+                for key, value in ctx.items()
+            }
+        normalized_errors.append(error_item)
+    if field is None:
+        for error_item in normalized_errors:
+            ctx = error_item.get("ctx") if isinstance(error_item.get("ctx"), dict) else {}
+            loc_items = list(error_item.get("loc", []))
+            if len(loc_items) >= 2 and str(loc_items[0]) == "body":
+                field = ".".join(str(item) for item in loc_items[1:]) or None
+                if field:
+                    break
+            raw_error = str(ctx.get("error") or "") if isinstance(ctx, dict) else ""
+            field_match = __import__("re").match(
+                r"^(?P<field>[A-Za-z_][A-Za-z0-9_]*) (?:cannot be null|cannot be blank|must be .+)$",
+                raw_error,
+            )
+            if field_match is not None:
+                field = field_match.group("field")
+                break
     if request.url.path.startswith(settings.internal_api_prefix):
         payload = ApiEnvelope(
             success=False,
@@ -84,7 +146,7 @@ async def request_validation_handler(request: Request, exc: RequestValidationErr
             error=ErrorInfo(
                 code="VALIDATION_ERROR",
                 message="request validation failed",
-                details={"errors": exc.errors()},
+                details={"errors": normalized_errors},
             ),
         ).model_dump(mode="json", by_alias=True)
         return JSONResponse(status_code=400, content=payload)
@@ -97,7 +159,7 @@ async def request_validation_handler(request: Request, exc: RequestValidationErr
         error={
             "type": "validation_error",
             "field": field,
-            "details": {"errors": exc.errors()},
+            "details": {"errors": normalized_errors},
         },
     ).model_dump(mode="json")
     return JSONResponse(status_code=400, content=payload)

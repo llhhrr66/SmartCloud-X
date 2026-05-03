@@ -37,7 +37,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 24,
         "x": 0,
         "y": 0
       },
@@ -60,13 +60,86 @@
       },
       "targets": [
         {
-          "expr": "up{job=~\"knowledge-service|rag-service\"}",
+          "expr": "up{job=~\"knowledge-service|rag-service|orchestrator-service|research-service|marketing-service|tool-hub-service\"}",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
         }
       ],
       "title": "Service Availability",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "knowledge_readiness_state",
+          "instant": true,
+          "legendFormat": "knowledge-service",
+          "refId": "A"
+        },
+        {
+          "expr": "rag_readiness_state",
+          "instant": true,
+          "legendFormat": "rag-service",
+          "refId": "B"
+        },
+        {
+          "expr": "research_readiness_state",
+          "instant": true,
+          "legendFormat": "research-service",
+          "refId": "C"
+        }
+      ],
+      "title": "Readiness State",
       "type": "stat"
     },
     {
@@ -84,11 +157,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 16,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 8
       },
-      "id": 2,
+      "id": 3,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -108,6 +181,11 @@
           "expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "rag retrieval p95",
           "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(research_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "research request p95",
+          "refId": "C"
         }
       ],
       "title": "Latency P95",
@@ -130,51 +208,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
-      },
-      "id": 3,
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "expr": "increase(knowledge_ingestions_total[15m])",
-          "legendFormat": "ingestions / 15m",
-          "refId": "A"
-        },
-        {
-          "expr": "increase(knowledge_search_requests_total[15m])",
-          "legendFormat": "knowledge search / 15m",
-          "refId": "B"
-        }
-      ],
-      "title": "Knowledge Activity",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 8
+        "y": 16
       },
       "id": 4,
       "options": {
@@ -240,8 +274,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 0,
+        "w": 12,
+        "x": 12,
         "y": 16
       },
       "id": 5,
@@ -263,13 +297,13 @@
       },
       "targets": [
         {
-          "expr": "increase(rag_upstream_errors_total[15m]) / clamp_min(increase(rag_retrieval_requests_total[15m]), 1)",
+          "expr": "rag_cache_hit_ratio",
           "instant": true,
-          "legendFormat": "upstream failure ratio / 15m",
+          "legendFormat": "L2 retrieval cache hit ratio",
           "refId": "A"
         }
       ],
-      "title": "Upstream Failure Ratio",
+      "title": "RAG Cache Hit Ratio",
       "type": "stat"
     },
     {
@@ -287,9 +321,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 16,
-        "x": 8,
-        "y": 16
+        "w": 12,
+        "x": 0,
+        "y": 24
       },
       "id": 6,
       "options": {
@@ -303,22 +337,22 @@
       },
       "targets": [
         {
-          "expr": "increase(rag_empty_retrievals_total[15m])",
-          "legendFormat": "empty retrievals / 15m",
+          "expr": "increase(smart_cache_requests_total{layer=\"L1_FAQ\",result=\"hit\"}[15m])",
+          "legendFormat": "L1 FAQ hits / 15m",
           "refId": "A"
         },
         {
-          "expr": "increase(rag_degraded_retrievals_total[15m])",
-          "legendFormat": "degraded retrievals / 15m",
+          "expr": "increase(smart_cache_requests_total{layer=\"L1_FAQ\",result=\"miss\"}[15m])",
+          "legendFormat": "L1 FAQ misses / 15m",
           "refId": "B"
         },
         {
-          "expr": "increase(knowledge_duplicate_documents_total[15m])",
-          "legendFormat": "duplicate docs reused / 15m",
+          "expr": "increase(smart_cache_requests_total{layer=\"L1_FAQ\",result=\"disabled\"}[15m])",
+          "legendFormat": "L1 FAQ disabled / 15m",
           "refId": "C"
         }
       ],
-      "title": "Quality Signals",
+      "title": "L1 FAQ Smart Cache",
       "type": "timeseries"
     },
     {
@@ -330,14 +364,15 @@
         "defaults": {
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "unit": "tokens"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
+        "w": 12,
+        "x": 12,
         "y": 24
       },
       "id": 7,
@@ -352,22 +387,18 @@
       },
       "targets": [
         {
-          "expr": "increase(knowledge_file_import_runs_total[15m])",
-          "legendFormat": "import runs / 15m",
+          "expr": "increase(smart_cache_token_saved_total[15m])",
+          "legendFormat": "tokens saved / 15m",
           "refId": "A"
         },
         {
-          "expr": "increase(knowledge_file_import_files_total[15m])",
-          "legendFormat": "files processed / 15m",
+          "expr": "faq_cache_entries",
+          "instant": true,
+          "legendFormat": "FAQ entries",
           "refId": "B"
-        },
-        {
-          "expr": "increase(knowledge_file_import_failures_total[15m])",
-          "legendFormat": "import failures / 15m",
-          "refId": "C"
         }
       ],
-      "title": "Filesystem Import Activity",
+      "title": "Smart Cache Token Savings",
       "type": "timeseries"
     },
     {
@@ -401,27 +432,22 @@
       },
       "targets": [
         {
-          "expr": "increase(knowledge_admin_write_requests_total{action=\"create_kb\",outcome=\"success\"}[15m])",
-          "legendFormat": "KB creates / 15m",
+          "expr": "increase(orchestrator_saga_steps_total[15m])",
+          "legendFormat": "saga steps / 15m",
           "refId": "A"
         },
         {
-          "expr": "increase(knowledge_admin_write_requests_total{action=\"create_document\",outcome=\"success\"}[15m])",
-          "legendFormat": "admin doc ingests / 15m",
+          "expr": "increase(orchestrator_saga_compensations_total[15m])",
+          "legendFormat": "compensations / 15m",
           "refId": "B"
         },
         {
-          "expr": "increase(knowledge_document_reindexes_total{outcome=\"success\"}[15m])",
-          "legendFormat": "reindexes / 15m",
+          "expr": "increase(orchestrator_saga_failures_total[15m])",
+          "legendFormat": "failures / 15m",
           "refId": "C"
-        },
-        {
-          "expr": "increase(knowledge_admin_audit_records_total[15m])",
-          "legendFormat": "audit records / 15m",
-          "refId": "D"
         }
       ],
-      "title": "Admin Operations Activity",
+      "title": "Saga Distributed Transactions",
       "type": "timeseries"
     },
     {
@@ -432,64 +458,51 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": 0
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
+            "mode": "palette-classic"
           }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 40
       },
       "id": 9,
       "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
         },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+        "tooltip": {
+          "mode": "single"
+        }
       },
       "targets": [
         {
-          "expr": "knowledge_readiness_state",
-          "instant": true,
-          "legendFormat": "knowledge-service",
+          "expr": "increase(research_pipeline_steps_total{step=\"search\"}[15m])",
+          "legendFormat": "search / 15m",
           "refId": "A"
         },
         {
-          "expr": "rag_readiness_state",
-          "instant": true,
-          "legendFormat": "rag-service",
+          "expr": "increase(research_pipeline_steps_total{step=\"fetch\"}[15m])",
+          "legendFormat": "web fetch / 15m",
           "refId": "B"
+        },
+        {
+          "expr": "increase(research_pipeline_steps_total{step=\"synthesize\"}[15m])",
+          "legendFormat": "synthesize / 15m",
+          "refId": "C"
+        },
+        {
+          "expr": "increase(research_pipeline_steps_total{step=\"report\"}[15m])",
+          "legendFormat": "report / 15m",
+          "refId": "D"
         }
       ],
-      "title": "Readiness State",
-      "type": "stat"
+      "title": "Research Pipeline Steps",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -500,65 +513,45 @@
         "defaults": {
           "color": {
             "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
           }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 40
       },
       "id": 10,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
         },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
+        "tooltip": {
+          "mode": "single"
+        }
       },
       "targets": [
         {
-          "expr": "knowledge_catalog_entity_count{entity=\"knowledge_bases\"}",
-          "instant": true,
-          "legendFormat": "knowledge bases",
+          "expr": "increase(research_requests_total[15m])",
+          "legendFormat": "requests / 15m",
           "refId": "A"
         },
         {
-          "expr": "knowledge_catalog_entity_count{entity=\"documents\"}",
-          "instant": true,
-          "legendFormat": "documents",
+          "expr": "increase(research_pipeline_fetch_errors_total[15m])",
+          "legendFormat": "fetch errors / 15m",
           "refId": "B"
         },
         {
-          "expr": "knowledge_catalog_entity_count{entity=\"chunks\"}",
-          "instant": true,
-          "legendFormat": "chunks",
+          "expr": "increase(research_upstream_errors_total[15m])",
+          "legendFormat": "upstream errors / 15m",
           "refId": "C"
         }
       ],
-      "title": "Knowledge Inventory",
-      "type": "stat"
+      "title": "Research Service Activity",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -568,63 +561,46 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "orange",
-                "value": 250
-              },
-              {
-                "color": "red",
-                "value": 1000
-              }
-            ]
-          },
-          "unit": "ms"
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 40
+        "w": 24,
+        "x": 0,
+        "y": 48
       },
       "id": 11,
       "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
         },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+        "tooltip": {
+          "mode": "single"
+        }
       },
       "targets": [
         {
-          "expr": "rag_upstream_probe_latency_ms",
-          "instant": true,
-          "legendFormat": "probe latency",
+          "expr": "increase(rag_empty_retrievals_total[15m])",
+          "legendFormat": "empty retrievals / 15m",
           "refId": "A"
+        },
+        {
+          "expr": "increase(rag_degraded_retrievals_total[15m])",
+          "legendFormat": "degraded retrievals / 15m",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(knowledge_duplicate_documents_total[15m])",
+          "legendFormat": "duplicate docs reused / 15m",
+          "refId": "C"
         }
       ],
-      "title": "RAG Upstream Probe Latency",
-      "type": "stat"
+      "title": "Quality Signals",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",
@@ -633,7 +609,10 @@
   "tags": [
     "smartcloud-x",
     "baseline",
-    "knowledge-rag"
+    "knowledge-rag",
+    "saga",
+    "research",
+    "smart-cache"
   ],
   "templating": {
     "list": []
@@ -643,7 +622,7 @@
     "to": "now"
   },
   "timezone": "browser",
-  "title": "SmartCloud-X Knowledge/RAG Baseline",
+  "title": "SmartCloud-X Full-Stack Observability",
   "uid": "smartcloud-baseline",
-  "version": 3
+  "version": 4
 }

@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./.tmp",
+    "rootDir": ".."
+  },
+  "include": ["./owner-check.ts", "../src/lib/operator-runtime.ts"]
+}

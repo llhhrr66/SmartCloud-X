@@ -12,6 +12,10 @@ from fastapi.testclient import TestClient
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="smartcloud-research-tests-"))
 os.environ["RESEARCH_SERVICE_DATABASE_URL"] = f"sqlite:///{(TEST_DATA_ROOT / 'research-service.db').as_posix()}"
+os.environ.pop("SMARTCLOUD_TRACE_ENABLED", None)
+os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+os.environ.pop("RESEARCH_AGENT_PROVIDER", None)
+os.environ.pop("RESEARCH_AGENT_API_URL", None)
 
 
 def activate_service_imports() -> None:
@@ -32,6 +36,8 @@ def _load_service_modules() -> dict[str, Any]:
     config = importlib.import_module("app.core.config")
     security = importlib.import_module("app.security")
     dependencies = importlib.import_module("app.dependencies")
+    metrics = importlib.import_module("app.core.metrics")
+    tracing = importlib.import_module("app.core.tracing")
     models = importlib.import_module("app.models")
     store = importlib.import_module("app.store")
     main = importlib.import_module("app.main")
@@ -39,11 +45,15 @@ def _load_service_modules() -> dict[str, Any]:
     config.get_settings.cache_clear()
     security.get_token_codec.cache_clear()
     store.get_research_store.cache_clear()
+    tracing.get_tracer_provider.cache_clear()
+    tracing.get_tracer.cache_clear()
     store.get_research_store().clear()
     return {
         "config": config,
         "security": security,
         "dependencies": dependencies,
+        "metrics": metrics,
+        "tracing": tracing,
         "models": models,
         "store": store,
         "main": main,

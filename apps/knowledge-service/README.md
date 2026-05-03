@@ -4,16 +4,17 @@ FastAPI-based knowledge ingestion service for SmartCloud-X.
 
 ## Scope
 - source registration and local catalog persistence
-- text document ingestion with chunking, duplicate protection, and lightweight keyword extraction
+- text document ingestion with chunking, duplicate protection, and upgraded text processing
 - starter catalog bootstrap for immediate admin and RAG validation
 - filesystem batch-import preview and ingestion for mounted markdown/text starter corpora
 - catalog overview API for operator inventory, top-tag tracking, recent-ingestion review, document-language coverage, and largest-source snapshots
-- search API for RAG consumers and admin preview flows, including query-token, source-breakdown, and tag-breakdown metadata
+- search API for RAG consumers and admin preview flows, including query-token, source-breakdown, tag-breakdown, and backend-used metadata
 - admin `/api/v1/admin/**` baseline for knowledge-base listing/create/update, document creation, chunk preview, search preview, and confirm-token-gated reindex operations
+- owner-local object-storage upload lifecycle for admin knowledge documents (`upload init -> upload content -> upload complete`)
 - admin document detail and async-job lookup routes so operators can inspect token/chunk stats plus latest create/reindex job state without opening runtime files
 - service-local admin audit log persisted beside the runtime JSON store
 - owner-local audit inspection route for recent admin write events
-- async indexing outbox lifecycle scaffolding with queued/processing/failed/completed state persisted beside the runtime store
+- async indexing outbox lifecycle scaffolding with queued/processing/failed/completed state persisted beside the runtime store; this is service-local failure recovery for knowledge indexing, not a cross-service Saga coordinator
 - MySQL-backed runtime metadata mirror for knowledge-base profiles, document profiles, and admin async jobs, with local JSON retained as a migration-safety fallback
 - a practical `app.worker` indexing worker that drains the outbox into MinIO, MySQL, Qdrant, OpenSearch, and Redis when those connectors are configured
 - live-search preference for OpenSearch BM25 and Qdrant vector hits when those backends are configured, with deterministic local keyword fallback for cold or degraded environments
@@ -40,16 +41,22 @@ FastAPI-based knowledge ingestion service for SmartCloud-X.
 - `POST /api/knowledge/v1/files:ingest`
 - `POST /api/knowledge/v1/catalog:bootstrap`
 - `POST /api/knowledge/v1/search`
+- `GET /api/knowledge/v1/embedding:test`
 - `GET /api/v1/admin/knowledge-bases`
 - `POST /api/v1/admin/knowledge-bases`
 - `PATCH /api/v1/admin/knowledge-bases/{kb_id}`
 - `GET /api/v1/admin/knowledge-bases/{kb_id}/documents`
 - `POST /api/v1/admin/knowledge-bases/{kb_id}/documents`
+- `POST /api/v1/admin/files/uploads`
+- `PUT /api/v1/admin/files/uploads/{upload_id}/content`
+- `POST /api/v1/admin/files/uploads/{upload_id}:complete`
 - `GET /api/v1/admin/knowledge-documents/{doc_id}`
 - `GET /api/v1/admin/knowledge-documents/{doc_id}/chunks`
 - `POST /api/v1/admin/knowledge-documents/{doc_id}/reindex`
 - `GET /api/v1/admin/jobs/{job_id}`
 - `POST /api/v1/admin/retrieval/search-preview`
+- `POST /api/v1/admin/dify/datasets/sync/{kb_id}`
+- `POST /retrieval` (Dify external knowledge adapter)
 
 ## Run
 ```bash
@@ -61,36 +68,36 @@ uvicorn app.main:app --reload --port 8030
 ```
 
 ## Notes
-- `GET /healthz` now returns additive readiness diagnostics (`ready`, `readinessChecks`, `warnings`) so deploy probes and `web-admin` can tell the difference between a running process and a usable local ingestion environment.
-- `/metrics` now refreshes and exports `knowledge_readiness_state`, `knowledge_readiness_check_state{check_name=...}`, `knowledge_health_warning_count`, and `knowledge_catalog_entity_count{entity=...}` for observability-friendly readiness and inventory tracking.
-- The baseline keeps documents/chunks in a local JSON runtime store at `data/knowledge-store.json`, but when `SMARTCLOUD_MYSQL_DSN` is configured it now prefers MySQL for KB/document/admin metadata while retaining the JSON mirror as a fallback.
-- A starter catalog lives at `data/starter-catalog.json` and can be loaded through `POST /api/knowledge/v1/catalog:bootstrap`.
-- Filesystem starter docs live under `data/imports/`; the compose baseline mounts that directory into the running container and exposes it through `GET /api/knowledge/v1/imports:preview` and `POST /api/knowledge/v1/files:ingest`.
-- `SMARTCLOUD_KNOWLEDGE_DATA_PATH` lets deploy/runtime environments persist the writable store outside the image without hiding the starter catalog asset.
-- `SMARTCLOUD_KNOWLEDGE_AUDIT_PATH` lets operators persist the admin audit trail outside the image alongside the runtime store.
-- `GET /api/knowledge/v1/admin/audit-records` exposes the recent admin audit trail with optional resource/action filters so `web-admin` can verify KB/document write activity without reading files directly.
-- `PATCH /api/v1/admin/knowledge-bases/{kb_id}` lets operators rename a KB, tune `retrieval_mode`, and toggle `status` between `ready` and `disabled` while preserving an auditable before/after record in the runtime audit log.
-- `GET /api/v1/admin/knowledge-documents/{doc_id}` returns the selected document read model together with chunk/token statistics and the latest async job id for operator drill-down.
-- `GET /api/v1/admin/jobs/{job_id}` lets the admin console resolve the latest create/reindex job record returned by the document detail payload.
+- Embedding strategy:
+  - default is `hash-baseline`, still fully offline and deterministic
+  - optional `openai-compatible` mode is enabled by `SMARTCLOUD_EMBEDDING_PROVIDER=openai-compatible` together with `SMARTCLOUD_EMBEDDING_API_URL`, `SMARTCLOUD_EMBEDDING_API_KEY`, and `SMARTCLOUD_EMBEDDING_MODEL`
+  - `GET /api/knowledge/v1/embedding:test?text=...` returns the active provider plus a sample vector preview
+- Text processing pipeline is now `clean -> metadata extract -> chunk -> keyword extract -> embed -> persist/index`.
+- Cleaning normalizes whitespace, strips markdown headers/links while preserving content, removes zero-width characters, and normalizes common CJK punctuation.
+- Metadata extraction adds `language`, `domainHints`, `entityMentions`, and `estimatedReadingMinutes` onto chunk metadata.
+- Chunking strategy is configurable with `SMARTCLOUD_CHUNK_STRATEGY=fixed|paragraph`; paragraph mode first splits on blank lines / markdown headers / horizontal rules, then falls back to bounded character windows.
+- Ingestion responses now expose `avgChunkTokens`, `maxChunkTokens`, and `minChunkTokens` for chunk quality inspection.
+- Token estimation now uses a mixed heuristic: about `1.5` tokens per CJK char and `1` token per English word, instead of raw `len(content)//4`.
+- Search backend priority and score merge:
+  - local fallback stays enabled
+  - remote BM25/vector merge uses configurable weights `SMARTCLOUD_SEARCH_REMOTE_WEIGHT` and `SMARTCLOUD_SEARCH_LEXICAL_WEIGHT`
+  - score floor is controlled by `SMARTCLOUD_SEARCH_MIN_SCORE`
+  - response now includes `backendUsed` (`local-keyword`, `opensearch-only`, `qdrant-only`, `hybrid-live-backends`)
 - `SMARTCLOUD_MINIO_ACCESS_KEY` and `SMARTCLOUD_MINIO_SECRET_KEY` let the worker upload raw mirrors into MinIO; snapshot/export payloads now treat the MinIO bucket/object key as the formal raw-object target while retaining a local mirror for migration safety.
 - `SMARTCLOUD_CONNECTOR_TIMEOUT_MS`, `SMARTCLOUD_QDRANT_VECTOR_SIZE`, `SMARTCLOUD_INDEX_WORKER_POLL_SECONDS`, and `SMARTCLOUD_INDEX_WORKER_BATCH_SIZE` tune the connector-processing worker without code changes.
 - `SMARTCLOUD_KNOWLEDGE_STARTER_CATALOG_PATH` lets operators swap in a different seed file when they need a service-local starter corpus.
 - `SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT` lets operators point filesystem imports at a different mounted directory.
 - `SMARTCLOUD_OPERATOR_REASON_HEADER` lets operators rename the required admin write audit header without editing service code; admin routes default to `X-Operator-Reason`.
 - `SMARTCLOUD_TRACE_ENABLED=true` plus `OTEL_EXPORTER_OTLP_ENDPOINT` enables Phoenix-compatible OTLP tracing for request spans and ingestion/search child spans; `/healthz` and `/metrics` are intentionally excluded to keep collector noise low.
+- `SMARTCLOUD_DIFY_EXTERNAL_KNOWLEDGE_API_KEY` enables the owner-local Dify External Knowledge adapter on `POST /retrieval`. When absent, the adapter is disabled instead of pretending to succeed.
+- `SMARTCLOUD_DIFY_DATASET_API_BASE_URL` + `SMARTCLOUD_DIFY_DATASET_API_KEY` + `SMARTCLOUD_DIFY_DATASET_ID` enable the dataset push/sync path on `POST /api/v1/admin/dify/datasets/sync/{kb_id}`.
 - Filesystem import requests must keep both `directory` and `glob` inside `SMARTCLOUD_KNOWLEDGE_IMPORT_ROOT`; parent-traversal, absolute, drive-prefixed, and out-of-root resolved matches are rejected.
-- `GET /api/knowledge/v1/overview` gives operators a quick inventory summary without requiring direct store access.
-- `GET /api/knowledge/v1/snapshot` returns a portable JSON export of the current runtime state, including overview data, raw sources/documents/chunks, MySQL-backed KB/document/admin metadata, and recent audit records for debugging or handoff.
-- snapshot export now refreshes KB/document/admin metadata from the MySQL authority before reconciling against the runtime store, so stale local JSON profile blobs do not overwrite exported admin state during migration.
-- snapshot export also reconciles missing KB/document profiles against the runtime store, merges legacy duplicate profiles without dropping more informative file/source fields, and keeps exported outbox connector results aligned with the live runtime state.
-- snapshot export now emits its own OTLP span (`knowledge.snapshot.export`) so QA trace checks can validate export/handoff behavior alongside ingestion, indexing, and search spans.
-- `GET /api/knowledge/v1/chunks?documentId=...` powers the admin chunk inspector so operators can validate chunk boundaries and extracted keywords after ingestion.
-- `GET /api/knowledge/v1/imports:preview?directory=starter` lists candidate markdown/text files before an import run.
-- Admin document create currently treats `file_id` as a relative path inside the configured import root, which keeps the baseline practical before object storage and async parsing jobs are introduced.
-- Admin reindex returns an async-job-shaped record but performs the chunk rebuild immediately in the baseline so operators can validate chunk/output changes without a worker queue.
-- Async indexing events are still mirrored into JSONL form with retry-friendly lifecycle fields (`queued`, `processing`, `failed`, `completed`) plus per-connector result records, but Redis pending/processing lists now act as the preferred active queue path when configured.
-- `python -m app.worker --once` drains one batch of queued indexing work, while `python -m app.worker` runs the worker loop used by the compose baseline.
-- Repeated ingestion of the same document under the same source reuses the existing record instead of inflating source counts.
-- Search responses include query tokens plus source/tag breakdowns so operators can compare direct knowledge hits with `rag-service` diagnostics.
-- The search implementation now prefers live OpenSearch/Qdrant retrieval when those connectors are configured, while preserving deterministic local keyword fallback so `rag-service` remains usable during migration and cold-start scenarios.
-- When the request arrives from `rag-service` with W3C `traceparent`, the emitted knowledge-service spans join the same distributed trace while keeping the SmartCloud `X-Trace-Id` headers unchanged for local debugging.
+- Known limitations:
+  - default embedding remains hash-based unless an external embedding API is configured
+  - Qdrant still uses a single configured collection and OpenSearch still uses a single configured index, not the per-domain collections/indices from the design doc yet
+  - Redis namespace/key layout still follows service-local conventions rather than the exact doc 10.3 prefixes
+  - indexing outbox / retry path covers service-local ingestion recovery only; cross-service Saga compensation still requires orchestrator-side coordination and is not implemented inside knowledge-service
+- Validation commands:
+  - `PYTHONPATH="/home/ljr/SmartCloud-X/apps/knowledge-service:/home/ljr/SmartCloud-X/apps:/home/ljr/SmartCloud-X/packages" /home/ljr/SmartCloud-X/.venv/bin/pytest /home/ljr/SmartCloud-X/apps/knowledge-service/tests/test_ingestion.py -q`
+  - `cd /home/ljr/SmartCloud-X && /home/ljr/SmartCloud-X/.venv/bin/python -m compileall apps/knowledge-service/app`
+  - `cd /home/ljr/SmartCloud-X && uv run --with-requirements apps/knowledge-service/requirements.txt --with httpx --with pytest python -m pytest apps/knowledge-service/tests apps/rag-service/tests -q`

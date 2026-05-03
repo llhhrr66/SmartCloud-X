@@ -166,6 +166,8 @@ components:
       $ref: ../packages/common-schemas/src/schemas/service-caller-context.schema.json
     TraceContext:
       $ref: ../packages/common-schemas/src/schemas/trace-context.schema.json
+    RagRetrievalResult:
+      $ref: ../packages/common-schemas/src/schemas/internal/rag/retrieval-result.schema.json
     CanonicalErrorDetail:
       $ref: ../packages/common-schemas/src/schemas/external/canonical-error-detail.schema.json
     CanonicalSuccessEnvelope:

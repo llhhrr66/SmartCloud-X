@@ -11,7 +11,7 @@ Shared internal APIs should prefer the `ApiEnvelope<T>` shape from `@smartcloud-
 - `error`: present on failures with `code`, `message`, optional `details`, and optional `retryable`; success responses may omit `error` or return `error: null`
 - `meta`: optional non-domain metadata such as pagination or degraded mode flags; success responses may omit `meta` or return `meta: null`
 
-This is the baseline for current in-repo internal services such as orchestrator, tool-hub, rag, and knowledge.
+This is the baseline for current in-repo internal services such as orchestrator, rag, and knowledge.
 
 ### External gateway-facing HTTP
 Gateway-facing or public user-surface APIs must publish the canonical contract from spec sections `20.5.5`, `20.5.6`, and `20.13`:
@@ -33,6 +33,7 @@ Compatibility rule:
 - internal services may keep `ApiEnvelope<T>` behind the gateway
 - gateways or public owner services should normalize outbound payloads to the canonical external envelope
 - admin surfaces published under `/api/v1/admin/**` follow the same canonical external envelope family
+- readiness routes are probe contracts, not public business DTOs; they may return direct JSON instead of canonical envelope when the owner service already uses that probe style
 - clients may temporarily accept both formats during migration, but new public OpenAPI placeholders must document the canonical external contract first
 
 ## Contract-only access markers for auth/bootstrap routes
@@ -78,6 +79,17 @@ Current internal HTTP services standardize these response headers when available
 - `X-App-Version`
 - `X-Response-Time`
 
+## Health and readiness payload boundaries
+Runtime probe payloads should keep the following semantics aligned with `docs/contracts/shared/runtime-health.md`:
+- `/healthz`
+  - primary fields: `status`, `service`, optional `runtime_mode`, optional `degraded_components`, optional `runtime`
+  - `status` uses `ok` / `degraded`
+- `/readyz`
+  - primary fields: `status`, `service`, optional `runtime_mode`, `not_ready_components`, `runtime`
+  - `status` uses `ready` / `not_ready`
+- downstream probe sections should use nested `dependencyReadiness` objects with `ready`, `status`, `mode`, `service`, optional `httpStatus`, optional `notReadyComponents`, optional `error`
+- gateway readiness aggregation may wrap its probe result in the external canonical envelope, but owner-service `/readyz` routes may return direct JSON readiness bodies
+
 ## Canonical user-facing SSE
 Canonical user-facing event names are:
 - `message.started`
@@ -90,7 +102,7 @@ Canonical user-facing event names are:
 - `message.error`
 - `heartbeat`
 
-Current legacy/mock aliases may continue behind owned apps or mock layers, but they should normalize as follows before becoming public contract:
+Legacy or internal orchestrator event names may continue to exist on service-local streaming routes, but public gateway/user surfaces should normalize them before treating them as stable external contract:
 - `meta` -> `message.started`
 - `route` -> `agent.routed`
 - `tool_call` -> `tool.started`
@@ -101,14 +113,30 @@ Current legacy/mock aliases may continue behind owned apps or mock layers, but t
 - `error` -> `message.error`
 - `ping` -> `heartbeat`
 
+### Retrieval and citation boundaries
+The current streaming baseline distinguishes internal retrieval evidence from public citation rendering:
+- `retrieval`
+  - currently a real internal event in orchestrator streaming
+  - should represent retrieval execution state and sources derived from actual retrieval results, not placeholder success markers
+  - may include fields such as `query`, `top_k`, `degraded`, `backend_used`, and `sources[]`
+  - remains primarily an internal/service-level event unless a gateway explicitly projects it into a public event family
+- `citation` / `citation.delta`
+  - citation payloads should be derived from real retrieval sources or tool-backed evidence, not synthetic success placeholders
+  - compatibility `citations[]` summaries may remain additive, but source-of-truth evidence should come from structured retrieval sources where available
+  - gateway citation caching should only treat citation events backed by actual source entries as successful citation material
+- `message.error`
+  - the canonical streaming failure event for user-facing consumers
+  - should carry structured fields such as `code`, `message`, optional `retryable`, and optional `details`
+  - should be used when orchestration or downstream retrieval fails in-stream instead of implying success through empty or synthetic citation output
+
 `reasoning` remains an internal/debug event today. It is not part of the canonical public SSE contract and must not be required for stable user-facing integrations.
 
-Current orchestrator-service baseline note:
-- `POST /api/v1/sessions/{conversation_id}/messages/stream` currently emits the pre-gateway sequence `meta`, `reasoning`, `retrieval`, `tool_call`, `tool_result`, `delta`, `citation`, `done`
-- that route is frozen as the service-level streaming contract for current downstream integration
-- public gateway/user surfaces should normalize those events to the canonical family above before treating them as stable external contract
-- `POST /api/v1/chat/completions` reuses the same event sequence when `stream=true`; when `stream=false` it returns an internal `ApiEnvelope<ChatCompletionResponse>`
-- `POST /api/v1/chat/completions` additionally accepts additive compatibility fields `context`, `options`, `context_control`, and `client_meta`; non-stream responses may also expose top-level summary aliases `answer`, `citations`, `tool_calls`, `usage`, and `finish_reason` alongside the nested `response`
+## Current orchestrator streaming baseline
+- orchestrator service-level streaming still emits the internal sequence `meta`, `reasoning`, `retrieval`, `tool_call`, `tool_result`, `delta`, `citation`, `done`, with `message.error` used for structured in-stream failures when needed
+- this service-level sequence is a real current implementation detail and may be consumed by trusted internal integrations
+- gateway or frontend public contracts should depend on the canonical family, not on raw internal names, unless an owner explicitly freezes a lower-level route contract
+- `retrieval` is now expected to reflect real retrieval results and degraded state where applicable; it must not be documented as if placeholder retrieval sources were equivalent to verified retrieval evidence
+- `POST /api/v1/chat/completions` may reuse the same stream sequence when `stream=true`; when `stream=false` it returns a non-stream response instead
 
 ## Current orchestrator session lifecycle baseline
 - `POST /api/v1/chat/sessions` plus `GET/PATCH /api/v1/chat/sessions/{conversation_id}` are now frozen as the current service-level session management surface for gateway or web alignment
@@ -128,60 +156,8 @@ Current orchestrator-service baseline note:
 - idempotency semantics must not be implied only by code comments
 - same `Idempotency-Key` plus the same normalized payload/context must replay the prior successful write result
 - same `Idempotency-Key` plus a different normalized payload/context must surface the shared conflict case `4090001` / `IDEMPOTENCY_CONFLICT`
-- retry-aware tool-call responses may include `attempts` so gateways and audit consumers can distinguish first-pass success from replay/retry paths
-- async task creation routes such as poster generation and research task creation should return the first accepted task status on duplicate idempotent submissions
-
-## Query replay and audit tags
-- successful read/query tool responses may replay a prior successful result from a local or process-local cache during the current baseline phase
-- shared tool contracts should surface replay annotations through `audit_tags`
-- the current frozen replay tag is `cache-hit`
-- `audit_tags` are additive execution hints for debugging, observability, and admin inspection; they must not be treated as authorization signals
-
-## Tool-call result fidelity
-- internal tool-hub direct tool-call responses may now surface additive `status`, `summary`, `result`, and `citations` fields alongside compatibility `message` and `data`
-- during the current additive phase, `result` and `data` should carry the same payload when both are present so legacy callers remain compatible
-- `summary` is the preferred human-readable execution text for trusted downstream consumers, while audit reads may persist additive `summary` and `citations` for debugging and admin inspection
-- direct tool invoke responses may also surface additive `downstream_target` and `auth_requirements` metadata so trusted callers can inspect where the request was dispatched and what auth context the tool expects
-
-## Tool-call audit status baseline
-- the current success-path persisted audit status is `completed`
-- legacy `success` remains an additive compatibility value in shared enums and filters while downstream readers normalize to the current `completed` baseline
-- malformed required-field tool failures continue to use the frozen `invalid-payload` status
-
-## Tool preflight / clarification baseline
-- canonical tool preflight now publishes at `POST /api/v1/tools/preflight`, with `/internal/v1/tools/preflight` documented as the current compatibility alias used by orchestrator HTTP clients
-- preflight returns a non-audited readiness model that can expose `missing_payload_fields`, `missing_payload_hints`, `missing_auth_context`, `required_permissions`, `requires_account_context`, `confirmation_required`, surfaced `session_context_bindings`, additive `user_action_hint`, and additive execution-policy metadata (`tool_mode`, `timeout_ms`, `idempotent`, `cache_ttl_seconds`)
-- shared tool definitions may publish additive `input_field_hints` so orchestrator and trusted debug/admin consumers can turn missing-field checks into meaningful clarification prompts
-- preflight validates readiness only: it must not execute the downstream tool and must not create a tool-call audit record
-
-## Tool continuation hint baseline
-- shared business-tools, tool-hub, and orchestrator contracts may expose additive `user_action_hint` metadata when a tool step needs caller follow-up
-- the current frozen action families are `clarify-tool-input`, `collect-auth-context`, and `user-confirmation`
-- auth-required hints may additionally expose `user_profile_bindings` so trusted continuation clients can map missing auth context onto `/continue.user_profile_patch`
-- tool-hub audit reads may persist the same hint object so trusted debugging/admin consumers can reconstruct continuation instructions without scraping human-readable summaries
-
-## Provider-backed tool discovery
-- when tool-hub or orchestrator is configured for HTTP transport, descriptor and readiness metadata may be sourced from downstream internal providers instead of local starter metadata only
-- the current provider-facing business-tools discovery baseline includes `GET /internal/v1/tools/{tool_name}` and `POST /internal/v1/preflight/{tool_name}`
-- the current structured internal-caller baseline also applies to `tool-hub-service` and `business-tools-service` internal aliases/routes that reuse `ALLOWED_INTERNAL_CALLERS`
-- deployed transport overrides should use `BUSINESS_TOOLS_INTERNAL_API_PREFIX` and `TOOL_HUB_INTERNAL_API_PREFIX` instead of hardcoding alternate internal prefixes in app-local code
 
 ## Error codes
 - all shared or cross-service internal error codes must be registered in `packages/common-schemas/errors/error_codes.yaml`
-- current baseline uses stable internal string codes with numeric mappings for future alignment
-- `@smartcloud-x/common-schemas` also exports `FoundationErrorCode` and `foundationErrorCodes`; foundation validation now keeps those TypeScript exports aligned with the frozen YAML catalog so frontend/backend consumers can rely on one typed shared registry
 - external/public numeric codes follow the primary spec ranges and may remain owner-documented in OpenAPI until a dedicated frozen public error catalog is promoted
 - service-specific additions remain downstream until promoted
-
-## Versioning
-- shared path baselines should use explicit version segments such as `/v1`
-- when a service keeps a legacy or internal compatibility alias, OpenAPI should document the canonical path and record aliases in descriptions or vendor extensions instead of treating all paths as equal primaries
-- breaking contract changes must publish a new versioned schema or path instead of silently changing field meaning
-- OpenAPI operations must declare `x-owner-service`, `x-error-codes`, `x-idempotency-required`, and `x-rate-limit-scope`
-
-## Admin write/audit baseline
-- external admin surfaces must publish under `/api/v1/admin/**`; current placeholder routes live in `openapi/admin-api.openapi.yaml`
-- admin write routes should declare `x-audit-log-required` and `x-operator-reason-required`
-- high-risk admin routes must also declare `x-confirm-token-required: true` and require a `confirm_token` request field
-- the minimum audit field set remains `audit_id, operator_type, operator_id, resource_type, resource_id, action, reason, before_json, after_json, operator_ip, created_at`
-- temporary gateway proxying to internal owner routes is allowed only when the admin OpenAPI description explicitly records the internal owner route used during the baseline phase

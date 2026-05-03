@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import build_trace_context
 from app.api.routes.admin import router as admin_router
+from app.api.routes.dify import router as dify_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge import router as knowledge_router
 from app.core.config import get_settings
@@ -90,5 +91,6 @@ async def handle_request_validation_error(request: Request, exc: RequestValidati
 
 
 app.include_router(health_router)
+app.include_router(dify_router)
 app.include_router(knowledge_router, prefix=settings.api_prefix)
 app.include_router(admin_router, prefix="/api/v1/admin")

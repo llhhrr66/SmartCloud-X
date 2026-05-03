@@ -14,7 +14,11 @@ from app.models.knowledge import (
     KnowledgeSource,
     SourceSeed,
 )
-from app.services.metadata_backend import KnowledgeMetadataState, MySQLKnowledgeMetadataBackend
+from app.services.metadata_backend import (
+    KnowledgeMetadataState,
+    KnowledgeRuntimeState,
+    MySQLKnowledgeRuntimeBackend,
+)
 
 
 class StoreState(BaseModel):
@@ -63,6 +67,7 @@ class KnowledgeStoreRepository:
         self._state = self._load()
         self._metadata_backend = self._build_metadata_backend()
         self._metadata_backend_error: str | None = None
+        self._prime_runtime_backend()
         self._prime_metadata_backend()
 
     def _load(self) -> StoreState:
@@ -79,13 +84,24 @@ class KnowledgeStoreRepository:
         )
         tmp_path.replace(self.path)
 
-    def _build_metadata_backend(self) -> MySQLKnowledgeMetadataBackend | None:
+    def _build_metadata_backend(self) -> MySQLKnowledgeRuntimeBackend | None:
         if not self.settings.mysql_dsn:
             return None
         try:
-            return MySQLKnowledgeMetadataBackend(self.settings.mysql_dsn)
+            return MySQLKnowledgeRuntimeBackend(self.settings.mysql_dsn)
         except Exception:
             return None
+
+    def _prime_runtime_backend(self) -> None:
+        if self._metadata_backend is None:
+            return
+        try:
+            changed = self._refresh_runtime_state_locked(seed_missing_remote=True)
+            self._metadata_backend_error = None
+            if changed:
+                self._persist()
+        except Exception as exc:
+            self._metadata_backend_error = str(exc)
 
     def _prime_metadata_backend(self) -> None:
         if self._metadata_backend is None:
@@ -113,6 +129,79 @@ class KnowledgeStoreRepository:
             document_profiles=list(self._state.document_profiles.values()),
             admin_jobs=list(self._state.admin_jobs.values()),
         )
+
+    def _local_runtime_state(self) -> KnowledgeRuntimeState:
+        return KnowledgeRuntimeState(
+            sources=list(self._state.sources.values()),
+            documents=list(self._state.documents.values()),
+            chunks=list(self._state.chunks.values()),
+            ingestions=list(self._state.ingestions.values()),
+        )
+
+    def _apply_runtime_state_locked(self, state: KnowledgeRuntimeState) -> bool:
+        next_sources = {source.id: source for source in state.sources}
+        next_documents = {document.id: document for document in state.documents}
+        next_chunks = {chunk.id: chunk for chunk in state.chunks}
+        next_ingestions = {job.id: job for job in state.ingestions}
+        changed = (
+            next_sources != self._state.sources
+            or next_documents != self._state.documents
+            or next_chunks != self._state.chunks
+            or next_ingestions != self._state.ingestions
+        )
+        if changed:
+            self._state.sources = next_sources
+            self._state.documents = next_documents
+            self._state.chunks = next_chunks
+            self._state.ingestions = next_ingestions
+        return changed
+
+    def _refresh_runtime_state_locked(self, *, seed_missing_remote: bool) -> bool:
+        if self._metadata_backend is None:
+            return False
+        local_state = self._local_runtime_state()
+        remote_state = self._metadata_backend.load_runtime_state()
+        if seed_missing_remote:
+            seed_state = KnowledgeRuntimeState(
+                sources=[] if remote_state.sources else local_state.sources,
+                documents=[] if remote_state.documents else local_state.documents,
+                chunks=[] if remote_state.chunks else local_state.chunks,
+                ingestions=[] if remote_state.ingestions else local_state.ingestions,
+            )
+            if (
+                seed_state.sources
+                or seed_state.documents
+                or seed_state.chunks
+                or seed_state.ingestions
+            ):
+                self._metadata_backend.sync_runtime_from_local(
+                    sources=seed_state.sources,
+                    documents=seed_state.documents,
+                    chunks=seed_state.chunks,
+                    ingestions=seed_state.ingestions,
+                )
+                remote_state = self._metadata_backend.load_runtime_state()
+        resolved_state = KnowledgeRuntimeState(
+            sources=remote_state.sources if remote_state.sources else local_state.sources,
+            documents=remote_state.documents if remote_state.documents else local_state.documents,
+            chunks=remote_state.chunks if remote_state.chunks else local_state.chunks,
+            ingestions=remote_state.ingestions if remote_state.ingestions else local_state.ingestions,
+        )
+        return self._apply_runtime_state_locked(resolved_state)
+
+    def refresh_runtime_state(self) -> bool:
+        with self._lock:
+            if self._metadata_backend is None:
+                return False
+            try:
+                changed = self._refresh_runtime_state_locked(seed_missing_remote=False)
+                self._metadata_backend_error = None
+                if changed:
+                    self._persist()
+                return changed
+            except Exception as exc:
+                self._metadata_backend_error = str(exc)
+                return False
 
     def _apply_metadata_state_locked(self, state: KnowledgeMetadataState) -> bool:
         next_knowledge_base_profiles = {
@@ -289,6 +378,7 @@ class KnowledgeStoreRepository:
         with self._lock:
             self._state.sources[source.id] = source
             self._persist()
+            self._sync_metadata_backend(lambda backend: backend.upsert_source(source))
             return source
 
     def reconcile_runtime_state(self) -> dict[str, int]:
@@ -579,6 +669,14 @@ class KnowledgeStoreRepository:
             for chunk in chunks:
                 self._state.chunks[chunk.id] = chunk
             self._persist()
+            self._sync_metadata_backend(
+                lambda backend: (
+                    backend.upsert_source(source),
+                    backend.upsert_document(document),
+                    backend.replace_document_chunks(document.id, chunks),
+                    backend.upsert_ingestion_job(job),
+                )
+            )
 
     def replace_document_chunks(
         self,
@@ -598,11 +696,20 @@ class KnowledgeStoreRepository:
             for chunk in chunks:
                 self._state.chunks[chunk.id] = chunk
             self._persist()
+            self._sync_metadata_backend(
+                lambda backend: (
+                    backend.upsert_source(source),
+                    backend.upsert_document(document),
+                    backend.replace_document_chunks(document.id, chunks),
+                    backend.upsert_ingestion_job(job),
+                )
+            )
 
     def save_ingestion_job(self, job: IngestionJob) -> None:
         with self._lock:
             self._state.ingestions[job.id] = job
             self._persist()
+            self._sync_metadata_backend(lambda backend: backend.upsert_ingestion_job(job))
 
     def find_document(self, source_id: str, checksum: str, title: str) -> KnowledgeDocument | None:
         normalized_title = title.strip()

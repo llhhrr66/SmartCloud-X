@@ -1,4 +1,3 @@
-import hashlib
 import math
 import re
 from collections import Counter
@@ -19,10 +18,13 @@ from app.models.knowledge import (
     SearchResult,
     SearchSourceBreakdown,
 )
+from app.services.embeddings import build_embedding_provider
+from app.services.index_targets import KnowledgeIndexTargetResolver
 from app.services.store import KnowledgeStoreRepository
 from app.services.store_provider import get_repository
+from app.services.text_processing import estimate_tokens
 
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]{2,}")
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+")
 
 
 def _normalize_text(value: str) -> str:
@@ -42,32 +44,12 @@ def _tokenize(value: str) -> list[str]:
     return list(dict.fromkeys(tokens))
 
 
-def _tokenize_embedding_text(value: str) -> list[str]:
-    return TOKEN_PATTERN.findall(value.lower())
-
-
-def _build_embedding(text: str, dimensions: int) -> list[float]:
-    vector = [0.0] * max(dimensions, 4)
-    tokens = _tokenize_embedding_text(text)
-    if not tokens:
-        return vector
-
-    for token in tokens:
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        for index in range(len(vector)):
-            bucket = digest[index % len(digest)]
-            vector[index] += (bucket / 255.0) - 0.5
-
-    magnitude = math.sqrt(sum(component * component for component in vector))
-    if magnitude <= 0:
-        return vector
-    return [round(component / magnitude, 6) for component in vector]
-
-
 class SearchService:
     def __init__(self, repository: KnowledgeStoreRepository) -> None:
         self.repository = repository
         self.settings = get_settings()
+        self.embedding_provider = build_embedding_provider(self.settings)
+        self.target_resolver = KnowledgeIndexTargetResolver(self.settings)
 
     def search(self, request: SearchRequest) -> SearchResponse:
         with start_span(
@@ -137,6 +119,7 @@ class SearchService:
                 appliedFilters=SearchAppliedFilters(sourceIds=request.source_ids, tags=request.tags),
                 sourceBreakdown=source_breakdown,
                 tagBreakdown=tag_breakdown,
+                backendUsed=backend_used,
                 results=results,
             )
 
@@ -148,19 +131,29 @@ class SearchService:
     ) -> tuple[list[SearchResult], str, int]:
         local_candidates = self.repository.list_chunks(source_ids=request.source_ids, tags=request.tags)
         local_scored = self._score_local_candidates(local_candidates, query_tokens, query_text)
-        remote_scored, remote_error_count = self._search_remote_candidates(request, query_tokens, query_text)
+        domain = self._resolve_request_domain(request, local_candidates)
+        remote_scored, remote_backend_label, remote_error_count = self._search_remote_candidates(
+            request,
+            query_tokens,
+            query_text,
+            domain=domain,
+        )
 
         if not remote_scored:
             return local_scored, "local-keyword", remote_error_count
+        if not local_scored:
+            return self._normalize_scores(remote_scored), remote_backend_label, remote_error_count
 
         merged: dict[str, SearchResult] = {item.chunk.id: item for item in remote_scored}
         for item in local_scored:
             existing = merged.get(item.chunk.id)
             if existing is None or item.score > existing.score:
                 merged[item.chunk.id] = item
+        filtered = [item for item in merged.values() if item.score >= self.settings.search_min_score]
+        backend_used = remote_backend_label if remote_backend_label != "local-keyword" else "hybrid-live-backends"
         return (
-            sorted(merged.values(), key=lambda item: item.score, reverse=True),
-            "hybrid-live-backends",
+            self._normalize_scores(sorted(filtered, key=lambda item: item.score, reverse=True)),
+            backend_used,
             remote_error_count,
         )
 
@@ -173,7 +166,7 @@ class SearchService:
         scored: list[SearchResult] = []
         for chunk in candidates:
             score, reason = self._score_chunk(chunk, query_tokens, query_text)
-            if score <= 0:
+            if score < self.settings.search_min_score:
                 continue
             source = self.repository.get_source(chunk.source_id)
             if source is None:
@@ -194,33 +187,80 @@ class SearchService:
         request: SearchRequest,
         query_tokens: list[str],
         query_text: str,
-    ) -> tuple[list[SearchResult], int]:
+        *,
+        domain: str | None,
+    ) -> tuple[list[SearchResult], str, int]:
         remote_error_count = 0
         merged: dict[str, SearchResult] = {}
+        used_backends: list[str] = []
+        target_resolutions = self.target_resolver.search_targets(domain=domain)
 
         if self.settings.opensearch_url:
-            try:
-                for result in self._search_opensearch(request, query_tokens, query_text):
-                    merged[result.chunk.id] = result
-            except Exception:
-                remote_error_count += 1
+            for targets in target_resolutions:
+                try:
+                    results = self._search_opensearch(
+                        request,
+                        query_tokens,
+                        query_text,
+                        target_index=targets.opensearch_index,
+                    )
+                    if results:
+                        label = "opensearch" if not targets.used_fallback else "opensearch-fallback"
+                        if label not in used_backends:
+                            used_backends.append(label)
+                    for result in results:
+                        existing = merged.get(result.chunk.id)
+                        if existing is None or result.score > existing.score:
+                            merged[result.chunk.id] = result
+                except Exception:
+                    remote_error_count += 1
 
         if self.settings.qdrant_url:
-            try:
-                for result in self._search_qdrant(request, query_tokens, query_text):
-                    existing = merged.get(result.chunk.id)
-                    if existing is None or result.score > existing.score:
-                        merged[result.chunk.id] = result
-            except Exception:
-                remote_error_count += 1
+            for targets in target_resolutions:
+                try:
+                    results = self._search_qdrant(
+                        request,
+                        query_tokens,
+                        query_text,
+                        target_collection=targets.qdrant_collection,
+                    )
+                    if results:
+                        label = "qdrant" if not targets.used_fallback else "qdrant-fallback"
+                        if label not in used_backends:
+                            used_backends.append(label)
+                    for result in results:
+                        existing = merged.get(result.chunk.id)
+                        if existing is None or result.score > existing.score:
+                            merged[result.chunk.id] = result
+                except Exception:
+                    remote_error_count += 1
 
-        return sorted(merged.values(), key=lambda item: item.score, reverse=True), remote_error_count
+        backend_label = "hybrid-live-backends"
+        if used_backends == ["opensearch"]:
+            backend_label = "opensearch-only"
+        elif used_backends == ["qdrant"]:
+            backend_label = "qdrant-only"
+        elif used_backends:
+            backend_label = "hybrid-live-backends"
+        return (
+            self._normalize_scores(
+                sorted(
+                    [item for item in merged.values() if item.score >= self.settings.search_min_score],
+                    key=lambda item: item.score,
+                    reverse=True,
+                )
+            ),
+            backend_label,
+            remote_error_count,
+        )
 
     def _search_opensearch(
         self,
         request: SearchRequest,
         query_tokens: list[str],
         query_text: str,
+        *,
+        target_index: str,
     ) -> list[SearchResult]:
         base_url = self._normalized_endpoint(self.settings.opensearch_url)
         filters: list[dict[str, object]] = []
@@ -236,11 +276,7 @@ class SearchService:
                         {
                             "multi_match": {
                                 "query": request.query,
-                                "fields": [
-                                    "document_title^2",
-                                    "content",
-                                    "keywords^1.5",
-                                ],
+                                "fields": ["document_title^2", "content", "keywords^1.5"],
                             }
                         }
                     ],
@@ -259,13 +295,11 @@ class SearchService:
                 "tags",
                 "ordinal",
                 "created_at",
+                "metadata",
             ],
         }
-        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000) as client:
-            response = client.post(
-                f"{base_url}/{self.settings.opensearch_index}/_search",
-                json=payload,
-            )
+        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000, trust_env=False) as client:
+            response = client.post(f"{base_url}/{target_index}/_search", json=payload)
             response.raise_for_status()
             data = response.json()
         results: list[SearchResult] = []
@@ -288,6 +322,8 @@ class SearchService:
         request: SearchRequest,
         query_tokens: list[str],
         query_text: str,
+        *,
+        target_collection: str,
     ) -> list[SearchResult]:
         base_url = self._normalized_endpoint(self.settings.qdrant_url)
         must_filters: list[dict[str, object]] = []
@@ -295,16 +331,17 @@ class SearchService:
             must_filters.append({"key": "source_id", "match": {"any": request.source_ids}})
         if request.tags:
             must_filters.append({"key": "tags", "match": {"any": [tag.lower() for tag in request.tags]}})
+        vector = self.embedding_provider.embed([request.query])[0]
         payload: dict[str, object] = {
-            "vector": _build_embedding(request.query, self.settings.qdrant_vector_size),
+            "vector": vector,
             "limit": max(request.top_k * 4, request.top_k),
             "with_payload": True,
         }
         if must_filters:
             payload["filter"] = {"must": must_filters}
-        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000) as client:
+        with httpx.Client(timeout=self.settings.connector_timeout_ms / 1000, trust_env=False) as client:
             response = client.post(
-                f"{base_url}/collections/{self.settings.qdrant_collection}/points/search",
+                f"{base_url}/collections/{target_collection}/points/search",
                 json=payload,
             )
             response.raise_for_status()
@@ -324,6 +361,35 @@ class SearchService:
                 results.append(result)
         return results
 
+    def _resolve_request_domain(
+        self,
+        request: SearchRequest,
+        local_candidates: list[KnowledgeChunk],
+    ) -> str | None:
+        for tag in request.tags:
+            normalized = tag.strip().lower()
+            if normalized.startswith("domain:"):
+                derived = normalized.split(":", 1)[1].strip().replace("-", "_")
+                return derived or None
+        for chunk in local_candidates:
+            payload = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+            domain_hints = payload.get("domainHints")
+            if isinstance(domain_hints, list):
+                for item in domain_hints:
+                    if isinstance(item, str) and item.strip():
+                        return item.strip().lower().replace("-", "_")
+            domain = payload.get("domain")
+            if isinstance(domain, str) and domain.strip():
+                return domain.strip().lower().replace("-", "_")
+        return None
+
+    @staticmethod
+    def _normalize_scores(results: list[SearchResult]) -> list[SearchResult]:
+        normalized: list[SearchResult] = []
+        for item in results:
+            normalized.append(item.model_copy(update={"score": round(max(0.0, min(item.score, 1.0)), 4)}))
+        return normalized
+
     def _build_remote_result(
         self,
         payload: dict[str, object],
@@ -336,17 +402,19 @@ class SearchService:
         chunk_id = str(payload.get("chunk_id") or payload.get("chunkId") or "").strip()
         if not chunk_id:
             return None
-        fallback_chunk = next(
-            (chunk for chunk in self.repository.list_chunks() if chunk.id == chunk_id),
-            None,
-        )
+        fallback_chunk = next((chunk for chunk in self.repository.list_chunks() if chunk.id == chunk_id), None)
         chunk = self._coerce_chunk(payload, fallback_chunk)
         if chunk is None:
             return None
         lexical_score, lexical_reason = self._score_chunk(chunk, query_tokens, query_text)
         normalized_remote_score = self._normalize_remote_score(raw_score)
-        score = max(lexical_score, (normalized_remote_score * 0.62) + (lexical_score * 0.38))
-        if score <= 0:
+        score = max(
+            lexical_score,
+            (normalized_remote_score * self.settings.search_remote_weight)
+            + (lexical_score * self.settings.search_lexical_weight),
+        )
+        score = min(1.0, score)
+        if score < self.settings.search_min_score:
             return None
         source = self.repository.get_source(chunk.source_id)
         source_name = str(
@@ -368,15 +436,16 @@ class SearchService:
     ) -> KnowledgeChunk | None:
         if fallback_chunk is not None:
             return fallback_chunk
-        content = str(payload.get("content") or "").strip()
+        content = str(payload.get("content") or payload.get("text") or "").strip()
         source_id = str(payload.get("source_id") or payload.get("sourceId") or "").strip()
         document_id = str(payload.get("document_id") or payload.get("documentId") or "").strip()
-        document_title = str(payload.get("document_title") or payload.get("documentTitle") or "").strip()
-        chunk_id = str(payload.get("chunk_id") or payload.get("chunkId") or "").strip()
+        document_title = str(payload.get("document_title") or payload.get("documentTitle") or payload.get("title") or "").strip()
+        chunk_id = str(payload.get("chunk_id") or payload.get("chunkId") or payload.get("id") or "").strip()
         if not (content and source_id and document_id and document_title and chunk_id):
             return None
         keywords = payload.get("keywords") if isinstance(payload.get("keywords"), list) else []
         tags = payload.get("tags") if isinstance(payload.get("tags"), list) else []
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         return KnowledgeChunk(
             id=chunk_id,
             sourceId=source_id,
@@ -384,9 +453,10 @@ class SearchService:
             documentTitle=document_title,
             ordinal=int(payload.get("ordinal") or 1),
             content=content,
-            tokenEstimate=max(1, len(content) // 4),
+            tokenEstimate=int(payload.get("token_estimate") or payload.get("tokenEstimate") or estimate_tokens(content)),
             keywords=[str(item).lower() for item in keywords],
             tags=[str(item) for item in tags],
+            metadata=metadata,
             createdAt=str(payload.get("created_at") or payload.get("createdAt") or "1970-01-01T00:00:00+00:00"),
         )
 
@@ -396,7 +466,7 @@ class SearchService:
             return 0.0
         if value <= 1:
             return value
-        return min(1.0, 0.35 + (math.log1p(value) / 5.0))
+        return min(1.0, math.log1p(value) / math.log1p(100.0))
 
     @staticmethod
     def _normalized_endpoint(endpoint: str | None) -> str:

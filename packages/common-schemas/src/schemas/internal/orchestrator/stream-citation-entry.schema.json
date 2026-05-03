@@ -6,9 +6,7 @@
   "required": [
     "id",
     "title",
-    "source_type",
-    "doc_id",
-    "chunk_id"
+    "source_type"
   ],
   "properties": {
     "id": {
@@ -23,17 +21,24 @@
       "type": "string",
       "enum": [
         "knowledge_base",
-        "tool"
+        "tool",
+        "mixed"
       ]
     },
     "doc_id": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 1
     },
     "chunk_id": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "minLength": 1
     }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }

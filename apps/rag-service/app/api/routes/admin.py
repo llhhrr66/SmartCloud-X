@@ -44,15 +44,7 @@ def _success(request: Request, data, *, status_code: int = 200, message: str = "
     )
 
 
-def _error(
-    request: Request,
-    *,
-    status_code: int,
-    code: int,
-    message: str,
-    error_type: str,
-    field: str | None = None,
-) -> JSONResponse:
+def _error(request: Request, *, status_code: int, code: int, message: str, error_type: str, field: str | None = None) -> JSONResponse:
     trace = build_trace_context(request)
     return JSONResponse(
         status_code=status_code,
@@ -61,11 +53,7 @@ def _error(
             message=message,
             request_id=trace.request_id or "",
             timestamp=_timestamp_ms(),
-            error=CanonicalErrorDetail(
-                type=error_type,
-                field=field,
-                reason=message,
-            ),
+            error=CanonicalErrorDetail(type=error_type, field=field, reason=message),
         ).model_dump(mode="json"),
     )
 
@@ -77,11 +65,7 @@ async def retrieval_diagnostics(payload: AdminRetrievalDiagnosticsRequest, reque
     filters = {"sourceIds": [payload.kb_id] if payload.kb_id else [], "tags": []}
     upstream_headers = build_upstream_headers(trace)
 
-    request_model = RetrieveRequest(
-        query=payload.query,
-        topK=payload.top_k,
-        filters=filters,
-    )
+    request_model = RetrieveRequest(query=payload.query, topK=payload.top_k, filters=filters)
     try:
         rewrite, candidates = await retrieval_service.search_candidates(
             request_model,
@@ -92,7 +76,7 @@ async def retrieval_diagnostics(payload: AdminRetrievalDiagnosticsRequest, reque
         diagnostic = retrieval_service.build_diagnostic(request_model, candidates, rewrite)
     except (httpx.HTTPError, KnowledgeServiceProtocolError) as exc:
         UPSTREAM_ERRORS_TOTAL.inc()
-        rewrite = retrieval_service.rewrite_query(payload.query)
+        rewrite = retrieval_service.rewrite_query(request_model)
         diagnostic = retrieval_service.build_diagnostic(
             request_model,
             [],
@@ -130,10 +114,14 @@ async def retrieval_diagnostics(payload: AdminRetrievalDiagnosticsRequest, reque
             "query_terms": diagnostic.query_terms,
             "applied_filters": diagnostic.applied_filters.model_dump(mode="json", by_alias=True),
             "strategy": diagnostic.strategy,
-            "citations": [citation.model_dump(mode="json", by_alias=True) for citation in diagnostic.citations]
-            if payload.include_citations
-            else [],
+            "citations": [citation.model_dump(mode="json", by_alias=True) for citation in diagnostic.citations] if payload.include_citations else [],
         },
         "notes": diagnostic.coverage_notes,
     }
     return _success(request, data)
+
+
+@router.post("/cache/clear")
+async def clear_cache(request: Request) -> JSONResponse:
+    cleared = get_retrieval_cache().clear_prefix()
+    return _success(request, {"clearedEntries": cleared})

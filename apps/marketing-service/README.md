@@ -1,9 +1,12 @@
 # SmartCloud-X Marketing Service
 
-FastAPI baseline for user-facing campaign browsing, copy generation, poster task polling, and promotion-link placeholder generation.
+FastAPI marketing service for campaign browsing, copy generation, promotion links, poster tasks, admin campaign CRUD, tracing, and metrics.
 
 ## Implemented routes
 - `GET /healthz`
+- `GET /readyz`
+- `GET /metrics`
+- `GET /api/v1/marketing/capabilities`
 - `GET /api/v1/marketing/campaigns`
 - `POST /api/v1/marketing/copy/generate`
 - `GET /api/v1/marketing/copies`
@@ -15,17 +18,53 @@ FastAPI baseline for user-facing campaign browsing, copy generation, poster task
 - `POST /api/v1/marketing/posters`
 - `GET /api/v1/marketing/posters/{task_id}`
 - `GET /api/v1/marketing/posters/{task_id}/result`
+- `GET /api/v1/marketing/admin/campaigns`
+- `POST /api/v1/marketing/admin/campaigns`
+- `PUT /api/v1/marketing/admin/campaigns/{campaign_id}`
+- `DELETE /api/v1/marketing/admin/campaigns/{campaign_id}`
 
-## Runtime notes
-- Primary runtime persistence now uses `MARKETING_SERVICE_DATABASE_URL` with shared `SMARTCLOUD_MYSQL_DSN` fallback; local/test runs may still point that setting at SQLite.
-- `MARKETING_SERVICE_BOOTSTRAP_PATH` (legacy alias: `MARKETING_SERVICE_DATA_PATH`) is now migration/bootstrap input only, not the authoritative runtime store.
-- Uses the shared `SMARTCLOUD_JWT_SECRET`, `SMARTCLOUD_AUTH_ISSUER`, and `SMARTCLOUD_AUTH_AUDIENCE` values so access tokens from `auth-user-service` are accepted here; internal-audience service tokens are not accepted on public user routes.
-- Optional strict current-state validation is available via `MARKETING_SERVICE_AUTH_VALIDATION_MODE=strict` plus `MARKETING_SERVICE_AUTH_VALIDATE_TOKEN_URL`; when enabled, the service calls `auth-user-service` `GET /internal/v1/auth/validate-token` as `marketing-service` so logout/password-rotation invalidation propagates before token expiry.
-- User-facing campaign reads and generation flows operate on currently active published campaigns only; draft, expired, or not-yet-started campaign IDs are not exposed in listings and are rejected by the write endpoints.
-- Generated copy, promotion-link, and poster-task records are now persisted in database tables and can be listed or fetched later through read routes scoped to the authenticated `(tenant_id, user_id)`.
-- Copy generation now falls back to the selected campaign highlights when callers omit `keywords`, which makes the starter payloads more useful for local demos without requiring prompt tuning on every request.
-- Poster task creation requires `Idempotency-Key`; duplicate submissions replay the original accepted task id/status while conflicting payload reuse returns `4090001`.
-- `MARKETING_SERVICE_AUTO_COMPLETE_SECONDS=0` keeps the starter poster flow in instant-complete mode for smoke tests; any positive value now exposes a more realistic `queued -> running -> completed` lifecycle before the placeholder asset URL appears.
-- Poster task visibility and idempotency replay are scoped by authenticated `(tenant_id, user_id)` so the same account id can generate isolated assets in different tenants without leaking task state.
-- Poster completion now prefers `MARKETING_SERVICE_MINIO_*` / shared `SMARTCLOUD_MINIO_*` settings for placeholder asset upload and falls back to the configured public poster URL root when object storage is unavailable.
-- `copy/generate`, `promotion-links/generate`, and the poster result helper route now align with the promoted frozen contract and appear in the live FastAPI schema.
+## Tracing
+- Enable with `SMARTCLOUD_TRACE_ENABLED=true`
+- OTLP exporter endpoint: `OTEL_EXPORTER_OTLP_ENDPOINT`
+- Incoming `traceparent` and `X-Trace-Id` are propagated into request tracing
+- `/healthz`, `/readyz`, `/metrics` are excluded from tracing
+
+## Metrics
+- `marketing_requests_total{operation,status,resource_type}`
+- `marketing_request_duration_seconds{operation}`
+- `marketing_posters_created_total`
+- `marketing_posters_completed_total`
+- `marketing_copies_generated_total`
+- `marketing_links_generated_total`
+- `marketing_idempotency_replays_total`
+- `marketing_upstream_errors_total{backend,error_type}`
+- `marketing_minio_operations_total{operation,status}`
+- `marketing_mongodb_operations_total{operation,status}`
+- `marketing_celery_operations_total{operation,status}`
+- `marketing_auth_validation_total{status}`
+- `marketing_readiness_state`
+
+## Provider configuration
+- Copy provider: `MARKETING_COPY_GENERATOR_PROVIDER=template|llm`
+- LLM settings: `MARKETING_LLM_API_URL`, `MARKETING_LLM_API_KEY`, `MARKETING_LLM_MODEL`
+- Poster provider: `MARKETING_POSTER_GENERATOR_PROVIDER=placeholder|image-service`
+- Image settings: `MARKETING_IMAGE_API_URL`, `MARKETING_IMAGE_API_KEY`
+- `GET /api/v1/marketing/capabilities` returns active provider information
+
+## Admin vs user routes
+- User routes keep published + active campaign visibility only
+- Admin routes require `admin:marketing.read` / `admin:marketing.write` and admin subject tokens
+- Admin delete is soft-delete via `deleted_at`
+
+## Known limitations
+- Template copy remains the default and fallback when LLM config is absent
+- Placeholder poster remains the default and fallback when image API config is absent
+- `/readyz` now performs live probes for database, MinIO bucket access, MongoDB ping, and Celery broker connectivity; unconfigured backends are reported as disabled and configured-but-unreachable backends degrade readiness with HTTP 503
+- Existing architecture still uses a simple store layer and not a scalable query/index redesign
+
+## Validation commands
+```bash
+PYTHONPATH="/home/ljr/SmartCloud-X/apps/marketing-service:/home/ljr/SmartCloud-X/apps:/home/ljr/SmartCloud-X/packages" /home/ljr/SmartCloud-X/.venv/bin/pytest /home/ljr/SmartCloud-X/apps/marketing-service/tests -q
+
+cd /home/ljr/SmartCloud-X && /home/ljr/SmartCloud-X/.venv/bin/python -m compileall apps/marketing-service/app
+```

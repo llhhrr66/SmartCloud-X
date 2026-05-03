@@ -1,0 +1,172 @@
+{
+  "users": {
+    "default:u_10001": {
+      "orders": [],
+      "refunds": [],
+      "tickets": [
+        {
+          "ticket_no": "tk_u_10001",
+          "subject": "gateway probe",
+          "status": "processing",
+          "category": "customer_service",
+          "priority": "medium",
+          "content": "请协助确认网关联调",
+          "created_at": "2026-04-24T10:42:52Z",
+          "updated_at": "2026-04-24T10:42:52Z",
+          "sla_minutes": 30,
+          "attachments": []
+        },
+        {
+          "ticket_no": "tk_u_10001",
+          "subject": "gateway probe",
+          "status": "processing",
+          "category": "customer_service",
+          "priority": "medium",
+          "content": "请协助确认网关联调",
+          "created_at": "2026-04-24T10:21:11Z",
+          "updated_at": "2026-04-24T10:42:52Z",
+          "sla_minutes": 30,
+          "attachments": []
+        },
+        {
+          "ticket_no": "tk_u_10001",
+          "subject": "gateway probe",
+          "status": "processing",
+          "category": "customer_service",
+          "priority": "medium",
+          "content": "请协助确认网关联调",
+          "created_at": "2026-04-24T08:42:45Z",
+          "updated_at": "2026-04-24T10:42:52Z",
+          "sla_minutes": 30,
+          "attachments": []
+        },
+        {
+          "ticket_no": "tk_u_10001",
+          "subject": "联调测试工单",
+          "status": "processing",
+          "category": "technical_support",
+          "priority": "medium",
+          "content": "用于验证工单创建与回复链路",
+          "created_at": "2026-04-19T03:54:40Z",
+          "updated_at": "2026-04-24T10:42:52Z",
+          "sla_minutes": 30,
+          "attachments": []
+        }
+      ],
+      "ticket_replies": {
+        "tk_u_10001": [
+          {
+            "reply_no": "reply_tk_u_10001_001",
+            "content": "补充说明",
+            "created_at": "2026-04-24T10:42:52Z",
+            "operator_type": "user",
+            "attachments": [],
+            "status": "processing"
+          }
+        ]
+      },
+      "icp_applications": [
+        {
+          "application_no": "icp_u_10001",
+          "status": "submitted",
+          "current_step": "provider_review",
+          "domain": "probe.smartcloud.local",
+          "website_name": "Gateway Probe",
+          "subject_type": "enterprise",
+          "contacts": [
+            "李雷 138****0001"
+          ],
+          "materials": [],
+          "submitted_at": "2026-04-24T10:42:52Z"
+        },
+        {
+          "application_no": "icp_u_10001",
+          "status": "submitted",
+          "current_step": "provider_review",
+          "domain": "probe.smartcloud.local",
+          "website_name": "Gateway Probe",
+          "subject_type": "enterprise",
+          "contacts": [
+            "李雷 138****0001"
+          ],
+          "materials": [],
+          "submitted_at": "2026-04-24T10:21:11Z"
+        },
+        {
+          "application_no": "icp_u_10001",
+          "status": "submitted",
+          "current_step": "provider_review",
+          "domain": "probe.smartcloud.local",
+          "website_name": "Gateway Probe",
+          "subject_type": "enterprise",
+          "contacts": [
+            "李雷 138****0001"
+          ],
+          "materials": [],
+          "submitted_at": "2026-04-24T08:42:45Z"
+        },
+        {
+          "application_no": "icp_u_10001",
+          "status": "submitted",
+          "current_step": "provider_review",
+          "domain": "test-smartcloud.example.com",
+          "website_name": "SmartCloud 联调测试站",
+          "subject_type": "enterprise",
+          "contacts": [
+            "联调联系人 张三"
+          ],
+          "materials": [
+            {
+              "name": "营业执照",
+              "file_id": "file_license"
+            },
+            {
+              "name": "负责人身份证",
+              "file_id": "file_owner"
+            }
+          ],
+          "submitted_at": "2026-04-19T03:54:43Z"
+        }
+      ],
+      "invoices": [],
+      "pending_uploads": {},
+      "files": {
+        "file_1bfa39db8864": {
+          "file_id": "file_1bfa39db8864",
+          "file_name": "probe.txt",
+          "size": 16,
+          "mime_type": "text/plain",
+          "download_url": "http://localhost:8000/downloads/file_1bfa39db8864",
+          "expires_at": "2026-04-24T08:52:45.551061Z",
+          "status": "ready",
+          "scan_status": "passed"
+        },
+        "file_63076bd6f81b": {
+          "file_id": "file_63076bd6f81b",
+          "file_name": "probe.txt",
+          "size": 16,
+          "mime_type": "text/plain",
+          "download_url": "http://localhost:8000/downloads/file_63076bd6f81b",
+          "expires_at": "2026-04-24T10:31:11.640975Z",
+          "status": "ready",
+          "scan_status": "passed"
+        },
+        "file_d55585cea31c": {
+          "file_id": "file_d55585cea31c",
+          "file_name": "probe.txt",
+          "size": 16,
+          "mime_type": "text/plain",
+          "download_url": "http://localhost:8000/downloads/file_d55585cea31c",
+          "expires_at": "2026-04-24T10:52:52.455019Z",
+          "status": "ready",
+          "scan_status": "passed"
+        }
+      },
+      "citations": {},
+      "metadata": {
+        "created_at": "2026-04-19T03:54:38Z",
+        "updated_at": "2026-04-24T10:42:52Z"
+      }
+    }
+  }
+}

@@ -17,3 +17,9 @@ def activate_service_imports() -> None:
 
 
 activate_service_imports()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    for module_name in list(sys.modules):
+        if module_name == "app" or module_name.startswith("app."):
+            sys.modules.pop(module_name, None)

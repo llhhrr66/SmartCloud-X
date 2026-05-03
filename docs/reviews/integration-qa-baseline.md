@@ -15,38 +15,30 @@ This baseline stays inside QA-owned paths and validates current SmartCloud-X rea
 ## Current Coverage
 
 - key service file and directory presence across auth, orchestrator, knowledge, rag, web-user, web-admin, business-tools, tool-hub, and frontend-sdk surfaces
-- status-doc and QA-owned artifact presence checks
-- database-backed restart persistence smoke for auth refresh sessions, marketing copy/link/poster records, and research tasks
-- isolated `knowledge-rag-admin` subprocess smoke that restarts `knowledge-service` and `rag-service`, then revalidates admin document detail, snapshot retention, search, and diagnostics after restart
-- live shared-backend evidence through `SMARTCLOUD_QA_USE_LIVE_INFRA` for auth/marketing/research, `business-tools-tool-hub`, `orchestrator-billing`, and now `knowledge-rag-admin`
-- structured recorded runtime proof in `logs/supervisor-integration-qa/state.json` for local smoke, repo browser, knowledge/rag restart, live knowledge/rag shared connectors, live auth/tooling/orchestrator MySQL/Redis landing, and the local/live orchestrator timeout chain
-- release readiness blocking on the runtime-backend capability matrix from `scripts/qa/infra_persistence_matrix.py`, QA reporting consistency, and the new live knowledge/rag shared-connector evidence
-- compose-backed shared-backend defaults plus the MinIO `19000/19001` host-port override are now explicitly guarded from owned QA paths by checks on `deploy/docker-compose/docker-compose.yml`, `scripts/qa/qa_env.sh`, and `docs/runbooks/local-validation.md`
-- repo browser smoke covering dashboard bootstrap, billing citation happy path, reload persistence in marketing/research, reload-safe billing `401` refresh recovery, route/citation `403`, SSE reconnect, `429`, and research report gaps
-- a separate non-blocking live probe now records the stronger MinIO-enabled marketing artifact gap instead of hiding it behind the older knowledge/rag blocker narrative
+- status-doc and QA-owned artifact presence checks, including `logs/supervisor-integration-qa/*`
+- local restart persistence smoke for auth, marketing, research, knowledge, rag, tool-hub/business-tools, and orchestrator timeout-chain behavior
+- repo-root browser smoke covering dashboard bootstrap, billing citation happy path, reload persistence in marketing/research, reload-safe billing `401` refresh recovery, route/citation `403`, SSE reconnect, `429`, and research report gaps
+- cross-platform repo-root browser startup on Windows via QA-owned Node wrappers plus loopback `NO_PROXY/no_proxy` handling
+- shell-only live override evidence refresh against `45.207.220.216` without changing repo defaults; `SMARTCLOUD_QA_USE_LIVE_INFRA=1` remains the contract switch
+- runtime backend helper and matrix coverage through `scripts/qa/infra_persistence_matrix.py`
 
 ## Latest Validation
 
-- `2026-04-17T00:16:53+08:00`: final self-review for the owned QA diff passed `14` targeted tests across `tests/integration/test_contract_presence.py` and `tests/e2e/test_ui_smoke.py`; `scripts/qa/check_release_readiness.py` stayed green at `120/120`, the status-report wording fix did not change the blocker set, and `git diff --check` stayed clean.
-- `2026-04-17T00:13:15+08:00`: `scripts/qa/run_smoke.sh` passed with `34` focused pytest tests, readiness `120/120`, infra persistence `26/26`, and a green default targeted `auth-marketing-research` plus `orchestrator-billing` service-process baseline.
-- `2026-04-16T23:49:25+08:00`: targeted self-review rerun passed `13` tests across `tests/integration/test_contract_presence.py` and `tests/e2e/test_ui_smoke.py`; `scripts/qa/check_release_readiness.py` stayed green at `118/118` blocking path/content/package checks, and `git diff --check` stayed clean for the owned QA diff.
-- `2026-04-16T23:37:38+08:00`: `scripts/qa/run_smoke.sh` passed with `33` focused pytest tests, readiness `118/118`, infra persistence `26/26`, and a green default targeted service-process baseline.
-- `2026-04-16T23:39:19+08:00`: `SMARTCLOUD_QA_USE_LIVE_INFRA=1 "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario knowledge-rag-admin` passed and recorded shared-connector evidence for MinIO raw storage, MySQL metadata, Qdrant vectors, OpenSearch BM25, Redis cache/task queue, and restart retention.
-- `2026-04-16T23:40:00+08:00`: the stronger MinIO-enabled `SMARTCLOUD_QA_USE_LIVE_INFRA=1 "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario auth-marketing-research --scenario business-tools-tool-hub --scenario orchestrator-billing` rerun failed on `marketingPosterObjectStored`; the bucket stayed reachable at `http://127.0.0.1:19000`, but the expected poster object still did not land.
+- `2026-04-17T16:28:28+08:00`: `scripts/qa/infra_persistence_matrix.py` passed `26/26`
+- `2026-04-17T16:27:53+08:00`: repo-root Playwright passed `10/10`
+- `2026-04-17T16:27:05+08:00`: local `orchestrator-billing` subprocess smoke passed
+- `2026-04-17T16:25:30+08:00`: local `business-tools-tool-hub` subprocess smoke passed
+- `2026-04-17T16:24:02+08:00`: local `knowledge-rag-admin` subprocess smoke passed
+- `2026-04-17T16:23:47+08:00`: local `auth-marketing-research` subprocess smoke passed
+- `2026-04-17T16:28:28+08:00` to `2026-04-17T16:31:44+08:00`: shell-only live override `auth-marketing-research`, `knowledge-rag-admin`, `business-tools-tool-hub`, and `orchestrator-billing` all passed against `45.207.220.216`
 
 ## Current Gaps
 
-- live knowledge/rag connector proof through MySQL/Redis/MinIO/Qdrant/OpenSearch is now green, but the stronger marketing MinIO artifact landing proof is still open
-- `auth-user-service`, `marketing-service`, and `research-service` still do not expose a frozen runtime backend evidence surface on health or snapshot endpoints
-- tool-hub still relies on `/internal/v1/tools/call` for the subprocess smoke because the frozen public `POST /api/v1/tools/call` route returns `405`
-- the repo-root browser package still depends on `apps/web-user` dependencies and Playwright browsers being provisioned on the runner
-- the new compose/runbook/qa_env alignment guard reduces drift around localhost live-backend defaults, but it does not replace the need for the live reruns already recorded in `state.json`
-- `docs/reviews/known-issues.md` remains the source of truth for unresolved QA scope and release risks
+- no active repo-root browser gap remains in the current baseline; both `web-user` and `web-admin` now have repo-level Playwright entry coverage
 
 ## Intended Use
 
 - use `scripts/qa/run_smoke.sh` for the fast baseline
-- use `SMARTCLOUD_QA_USE_LIVE_INFRA=1 "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario knowledge-rag-admin` when MySQL/Redis/MinIO/Qdrant/OpenSearch-backed knowledge/rag proof is the priority
-- use `SMARTCLOUD_QA_USE_LIVE_INFRA=1 "${QA_PYTHON[@]}" scripts/qa/project_smoke.py --scenario auth-marketing-research --scenario business-tools-tool-hub --scenario orchestrator-billing` when MySQL/Redis landing is the priority and to recheck whether the MinIO-backed marketing poster artifact gap has been fixed
-- use `scripts/qa/project_smoke.py --scenario orchestrator-billing` when a change touches orchestrator/tool-hub/business-tools happy-path or timeout-chain behavior
-- use `scripts/qa/infra_persistence_matrix.py` and `scripts/qa/check_release_readiness.py` when deciding whether a build is ready to move beyond QA
+- use `scripts/qa/project_smoke.py --scenario auth-marketing-research`, `--scenario knowledge-rag-admin`, `--scenario business-tools-tool-hub`, and `--scenario orchestrator-billing` for current local subprocess proof
+- use shell-only live overrides when localhost compose-backed infra is unavailable but you need to refresh current live evidence without changing repo defaults
+- use `scripts/qa/infra_persistence_matrix.py` and `scripts/qa/check_release_readiness.py` when deciding whether the current build is ready to move beyond QA

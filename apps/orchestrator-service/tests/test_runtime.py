@@ -32,6 +32,50 @@ class _SlowToolHubClient:
         return self._client.invoke_plan(*args, **kwargs)
 
 
+class _CountingToolHubClient:
+    def __init__(self) -> None:
+        from app.services.tool_hub_client import ToolHubClient
+
+        self._client = ToolHubClient()
+        self.invoked_tool_call_ids: list[str] = []
+
+    def preflight(self, *args, **kwargs):
+        return self._client.preflight(*args, **kwargs)
+
+    def invoke_plan(self, plan, *args, **kwargs):
+        self.invoked_tool_call_ids.extend(item.tool_call_id for item in plan)
+        return self._client.invoke_plan(plan, *args, **kwargs)
+
+
+class _FakeAgentAnswerGenerator:
+    def __init__(self, should_raise: bool = False) -> None:
+        self.calls: list[dict[str, str | None]] = []
+        self._should_raise = should_raise
+
+    def generate(
+        self,
+        *,
+        agent: str,
+        user_query: str,
+        status: str,
+        next_agent: str | None,
+        fallback_answer: str | None,
+        tool_calls,
+    ) -> str | None:
+        self.calls.append(
+            {
+                "agent": agent,
+                "user_query": user_query,
+                "status": status,
+                "next_agent": next_agent,
+                "fallback_answer": fallback_answer,
+            }
+        )
+        if self._should_raise:
+            raise RuntimeError("llm unavailable")
+        return f"LLM::{agent}::{status}"
+
+
 
 def test_runtime_executes_query_tool_and_returns_summary() -> None:
     router = AgentRouter()
@@ -58,6 +102,158 @@ def test_runtime_executes_query_tool_and_returns_summary() -> None:
     assert executions[0].tool_calls
     assert executions[0].tool_calls[0].status == "completed"
     assert "账单周期" in (executions[0].final_answer or "")
+
+
+def test_runtime_uses_agent_answer_generator_for_all_five_agents() -> None:
+    cases = [
+        {
+            "query": "帮我查下这个月账单",
+            "scene": "billing",
+            "profile": UserProfile(user_id="u-1", account_id="acct-1", permissions=["user:billing.read"]),
+            "session_context": {},
+            "expected_agent": "finance_order_agent",
+        },
+        {
+            "query": "我准备部署 32B 大模型推理服务，帮我推荐 GPU 实例规格",
+            "scene": "technical_support",
+            "profile": UserProfile(user_id="u-1"),
+            "session_context": {},
+            "expected_agent": "product_tech_agent",
+        },
+        {
+            "query": "请帮我核验备案实名认证",
+            "scene": "icp",
+            "profile": UserProfile(user_id="u-1", permissions=["user:icp.read"]),
+            "session_context": {
+                "attributes": {
+                    "subject_type": "enterprise",
+                    "subject_name": "上海示例科技有限公司",
+                    "certificate_no": "91310000MA1CTEST88",
+                    "contact_name": "张三",
+                    "contact_phone": "13800138000",
+                }
+            },
+            "expected_agent": "icp_service_agent",
+        },
+        {
+            "query": "帮我生成 GPU 活动海报",
+            "scene": "marketing",
+            "profile": UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+            "session_context": {},
+            "expected_agent": "ops_marketing_agent",
+        },
+        {
+            "query": "帮我做一份 LangGraph 和 CrewAI 的对比研究",
+            "scene": "research",
+            "profile": UserProfile(user_id="u-1", permissions=["user:research.write"]),
+            "session_context": {},
+            "expected_agent": "deep_research_agent",
+        },
+    ]
+
+    generator = _FakeAgentAnswerGenerator()
+
+    for index, case in enumerate(cases, start=1):
+        router = AgentRouter()
+        route = router.route(
+            RouteRequest(
+                user_query=case["query"],
+                conversation_id=f"conv-llm-{index}",
+                scene=case["scene"],
+                user_profile=case["profile"],
+                session_context=case["session_context"],
+            )
+        )
+        runtime = AgentRuntime(agent_answer_generator=generator)
+        executions = runtime.execute(
+            route,
+            MessageRequest(
+                user_query=case["query"],
+                scene=case["scene"],
+                user_profile=case["profile"],
+                session_context=case["session_context"],
+            ),
+            TraceContext(
+                requestId=f"req-llm-{index}",
+                conversationId=f"conv-llm-{index}",
+                traceId=f"trace-llm-{index}",
+            ),
+        )
+
+        assert executions[0].agent == case["expected_agent"]
+        assert executions[0].final_answer == f"LLM::{case['expected_agent']}::{executions[0].status}"
+
+    assert [call["agent"] for call in generator.calls] == [
+        "finance_order_agent",
+        "product_tech_agent",
+        "icp_service_agent",
+        "ops_marketing_agent",
+        "deep_research_agent",
+    ]
+
+
+def test_runtime_falls_back_to_template_answer_when_agent_answer_generator_errors() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="帮我查下这个月账单",
+            conversation_id="conv-runtime-fallback",
+            scene="billing",
+            user_profile=UserProfile(user_id="u-1", account_id="acct-1", permissions=["user:billing.read"]),
+        )
+    )
+    runtime = AgentRuntime(agent_answer_generator=_FakeAgentAnswerGenerator(should_raise=True))
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="帮我查下这个月账单",
+            scene="billing",
+            user_profile=UserProfile(user_id="u-1", account_id="acct-1", permissions=["user:billing.read"]),
+        ),
+        TraceContext(requestId="req-runtime-fallback", conversationId="conv-runtime-fallback", traceId="trace-runtime-fallback"),
+    )
+
+    assert "账单周期" in (executions[0].final_answer or "")
+
+
+def test_runtime_returns_human_friendly_greeting_for_marketing_agent_without_tools() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="你好",
+            conversation_id="conv-marketing-greeting-friendly",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+        )
+    )
+    runtime = AgentRuntime()
+    executions = runtime.execute(
+        route,
+        MessageRequest(
+            user_query="你好",
+            scene="marketing",
+            user_profile=UserProfile(
+                user_id="u-1",
+                permissions=["user:marketing.read", "user:marketing.write"],
+            ),
+        ),
+        TraceContext(
+            requestId="req-marketing-greeting-friendly",
+            conversationId="conv-marketing-greeting-friendly",
+            traceId="trace-marketing-greeting-friendly",
+        ),
+    )
+
+    assert executions[0].tool_calls == []
+    assert executions[0].final_answer == (
+        "你好，我是营销专员。我可以帮你策划营销活动、生成文案、制作海报和生成推广链接。"
+    )
 
 
 def test_runtime_executes_instance_cost_query_from_session_context() -> None:
@@ -142,6 +338,59 @@ def test_runtime_executes_product_recommendation_and_returns_summary() -> None:
     ]
     assert "gi4.2xlarge" in (executions[0].final_answer or "")
     assert "NVIDIA L40S" in (executions[0].final_answer or "")
+
+
+def test_runtime_pauses_and_resumes_multi_agent_handoff_without_replaying_completed_tools() -> None:
+    router = AgentRouter()
+    route = router.route(
+        RouteRequest(
+            user_query="有没有 GPU 活动，我要部署大模型",
+            conversation_id="conv-runtime-handoff",
+            scene="technical_support",
+            user_profile=UserProfile(user_id="u-1", permissions=["user:marketing.read"]),
+        )
+    )
+    tool_hub_client = _CountingToolHubClient()
+    runtime = AgentRuntime(tool_hub_client=tool_hub_client)
+    request = MessageRequest(
+        user_query="有没有 GPU 活动，我要部署大模型",
+        scene="technical_support",
+        user_profile=UserProfile(user_id="u-1", permissions=["user:marketing.read"]),
+    )
+    trace = TraceContext(
+        requestId="req-runtime-handoff",
+        conversationId="conv-runtime-handoff",
+        traceId="trace-runtime-handoff",
+    )
+
+    first_leg = runtime.execute(
+        route,
+        request,
+        trace,
+        pause_on_agent_handoff=True,
+    )
+
+    assert len(first_leg) == 1
+    assert first_leg[0].agent == "product_tech_agent"
+    assert first_leg[0].status == "handoff"
+    assert first_leg[0].next_agent == "ops_marketing_agent"
+
+    resumed_leg = runtime.execute(
+        route,
+        request,
+        trace,
+        start_task_index=1,
+        pause_on_agent_handoff=True,
+        incoming_handoff_from=first_leg[0].agent,
+    )
+
+    assert len(resumed_leg) == 1
+    assert resumed_leg[0].agent == "ops_marketing_agent"
+    assert resumed_leg[0].handoff_received_from == "product_tech_agent"
+    assert resumed_leg[0].status == "success"
+    assert set(tool_hub_client.invoked_tool_call_ids) == {"tc-product_tech_agent-1", "tc-product_tech_agent-2", "tc-ops_marketing_agent-1"}
+    assert tool_hub_client.invoked_tool_call_ids.count("tc-product_tech_agent-1") == 1
+    assert tool_hub_client.invoked_tool_call_ids.count("tc-product_tech_agent-2") == 1
 
 
 def test_runtime_executes_service_status_query_from_session_context() -> None:

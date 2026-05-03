@@ -1,4 +1,238 @@
 services:
+  auth-user-service:
+    build:
+      context: ../../apps/auth-user-service
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3100,http://127.0.0.1:3100}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      AUTH_USER_SERVICE_DATABASE_URL: ${AUTH_USER_SERVICE_DATABASE_URL:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_JWT_SECRET: ${SMARTCLOUD_JWT_SECRET:-replace-me}
+      ALLOWED_INTERNAL_CALLERS: ${AUTH_ALLOWED_INTERNAL_CALLERS:-gateway-service,marketing-service,research-service}
+    ports:
+      - "8001:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8001/readyz')); raise SystemExit(0 if payload.get('status') == 'ready' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  marketing-service:
+    build:
+      context: ../../apps/marketing-service
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3100,http://127.0.0.1:3100}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_MONGODB_URI: ${SMARTCLOUD_MONGODB_URI:-mongodb://mongo:27017}
+      SMARTCLOUD_MONGODB_DATABASE: ${SMARTCLOUD_MONGODB_DATABASE:-smartcloud}
+      MARKETING_SERVICE_DATABASE_URL: ${MARKETING_SERVICE_DATABASE_URL:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_JWT_SECRET: ${SMARTCLOUD_JWT_SECRET:-replace-me}
+      MARKETING_SERVICE_AUTH_VALIDATE_TOKEN_URL: ${MARKETING_SERVICE_AUTH_VALIDATE_TOKEN_URL:-http://auth-user-service:8001/internal/v1/auth/validate-token}
+      MARKETING_SERVICE_AUTH_VALIDATION_MODE: ${MARKETING_SERVICE_AUTH_VALIDATION_MODE:-strict}
+      SMARTCLOUD_MINIO_ENDPOINT: ${SMARTCLOUD_MINIO_ENDPOINT:-http://minio:9000}
+      SMARTCLOUD_MINIO_BUCKET: ${SMARTCLOUD_MINIO_BUCKET:-knowledge-raw}
+      SMARTCLOUD_MINIO_ACCESS_KEY: ${SMARTCLOUD_MINIO_ACCESS_KEY:-smartcloud}
+      SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_BROKER_URL: ${MARKETING_SERVICE_CELERY_BROKER_URL:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_RESULT_BACKEND: ${MARKETING_SERVICE_CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_QUEUE: ${MARKETING_SERVICE_CELERY_QUEUE:-marketing.poster}
+    ports:
+      - "8002:8002"
+    depends_on:
+      auth-user-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8002/readyz')); raise SystemExit(0 if payload.get('ready') is True or payload.get('status') == 'ready' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  marketing-worker:
+    build:
+      context: ../../apps/marketing-service
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--pool=solo", "-Q", "marketing.poster"]
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_MONGODB_URI: ${SMARTCLOUD_MONGODB_URI:-mongodb://mongo:27017}
+      SMARTCLOUD_MONGODB_DATABASE: ${SMARTCLOUD_MONGODB_DATABASE:-smartcloud}
+      SMARTCLOUD_MINIO_ENDPOINT: ${SMARTCLOUD_MINIO_ENDPOINT:-http://minio:9000}
+      SMARTCLOUD_MINIO_BUCKET: ${SMARTCLOUD_MINIO_BUCKET:-knowledge-raw}
+      SMARTCLOUD_MINIO_ACCESS_KEY: ${SMARTCLOUD_MINIO_ACCESS_KEY:-smartcloud}
+      SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_BROKER_URL: ${MARKETING_SERVICE_CELERY_BROKER_URL:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_RESULT_BACKEND: ${MARKETING_SERVICE_CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      MARKETING_SERVICE_CELERY_QUEUE: ${MARKETING_SERVICE_CELERY_QUEUE:-marketing.poster}
+    depends_on:
+      marketing-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  research-service:
+    build:
+      context: ../../apps/research-service
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3100,http://127.0.0.1:3100}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_MONGODB_URI: ${SMARTCLOUD_MONGODB_URI:-mongodb://mongo:27017}
+      SMARTCLOUD_MONGODB_DATABASE: ${SMARTCLOUD_MONGODB_DATABASE:-smartcloud}
+      RESEARCH_SERVICE_DATABASE_URL: ${RESEARCH_SERVICE_DATABASE_URL:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_JWT_SECRET: ${SMARTCLOUD_JWT_SECRET:-replace-me}
+      RESEARCH_SERVICE_AUTH_VALIDATE_TOKEN_URL: ${RESEARCH_SERVICE_AUTH_VALIDATE_TOKEN_URL:-http://auth-user-service:8001/internal/v1/auth/validate-token}
+      RESEARCH_SERVICE_AUTH_VALIDATION_MODE: ${RESEARCH_SERVICE_AUTH_VALIDATION_MODE:-strict}
+      RESEARCH_AGENT_PROVIDER: ${RESEARCH_AGENT_PROVIDER:-pipeline}
+      RESEARCH_EXTERNAL_SEARCH_PROVIDER: ${RESEARCH_EXTERNAL_SEARCH_PROVIDER:-disabled}
+      OTEL_SERVICE_NAME: smartcloud-x-research-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x-local}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+    ports:
+      - "8003:8003"
+    depends_on:
+      auth-user-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8003/readyz')); raise SystemExit(0 if payload.get('ready') is True or payload.get('status') == 'ready' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  business-tools-service:
+    build:
+      context: ../../apps/business-tools
+      dockerfile: Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/2}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud?charset=utf8mb4}
+      ALLOWED_INTERNAL_CALLERS: ${BUSINESS_TOOLS_ALLOWED_INTERNAL_CALLERS:-tool-hub-service,gateway-service}
+    ports:
+      - "8030:8030"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; raise SystemExit(0 if urllib.request.urlopen('http://127.0.0.1:8030/readyz').status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  tool-hub-service:
+    build:
+      context: ../../
+      dockerfile: apps/tool-hub-service/Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/3}
+      BUSINESS_TOOLS_TRANSPORT: ${BUSINESS_TOOLS_TRANSPORT:-http}
+      BUSINESS_TOOLS_URL: ${BUSINESS_TOOLS_URL:-http://business-tools-service:8030}
+      BUSINESS_TOOLS_INTERNAL_API_PREFIX: ${BUSINESS_TOOLS_INTERNAL_API_PREFIX:-/internal/v1}
+      ALLOWED_INTERNAL_CALLERS: ${TOOL_HUB_ALLOWED_INTERNAL_CALLERS:-gateway-service,orchestrator-service}
+    ports:
+      - "8020:8020"
+    depends_on:
+      business-tools-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; raise SystemExit(0 if urllib.request.urlopen('http://127.0.0.1:8020/readyz').status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  orchestrator-service:
+    build:
+      context: ../../
+      dockerfile: apps/orchestrator-service/Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
+      SMARTCLOUD_MONGODB_URI: ${SMARTCLOUD_MONGODB_URI:-mongodb://mongo:27017}
+      SMARTCLOUD_MONGODB_DATABASE: ${SMARTCLOUD_MONGODB_DATABASE:-smartcloud}
+      SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/4}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      OTEL_SERVICE_NAME: smartcloud-x-orchestrator-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      TOOL_HUB_TRANSPORT: ${TOOL_HUB_TRANSPORT:-http}
+      MCP_GATEWAY_URL: ${MCP_GATEWAY_URL:-http://tool-hub-service:8020}
+      SMARTCLOUD_RAG_SERVICE_BASE_URL: ${SMARTCLOUD_RAG_SERVICE_BASE_URL:-http://127.0.0.1:8040}
+      RAG_SERVICE_BASE_URL: ${RAG_SERVICE_BASE_URL:-http://127.0.0.1:8040}
+      TOOL_HUB_INTERNAL_API_PREFIX: ${TOOL_HUB_INTERNAL_API_PREFIX:-/internal/v1}
+      SMARTCLOUD_LLM_API_KEY: ${SMARTCLOUD_LLM_API_KEY:-}
+      SMARTCLOUD_LLM_BASE_URL: ${SMARTCLOUD_LLM_BASE_URL:-}
+      SMARTCLOUD_LLM_MODEL: ${SMARTCLOUD_LLM_MODEL:-}
+      SMARTCLOUD_LLM_TIMEOUT_SECONDS: ${SMARTCLOUD_LLM_TIMEOUT_SECONDS:-20}
+      ALLOWED_INTERNAL_CALLERS: ${ORCHESTRATOR_ALLOWED_INTERNAL_CALLERS:-gateway-service}
+    ports:
+      - "8010:8010"
+    depends_on:
+      tool-hub-service:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; raise SystemExit(0 if urllib.request.urlopen('http://127.0.0.1:8010/readyz').status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   knowledge-service:
     build:
       context: ../../apps/knowledge-service
@@ -17,11 +251,17 @@ services:
       SMARTCLOUD_MINIO_BUCKET: ${SMARTCLOUD_MINIO_BUCKET:-knowledge-raw}
       SMARTCLOUD_MINIO_ACCESS_KEY: ${SMARTCLOUD_MINIO_ACCESS_KEY:-smartcloud}
       SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
+      SMARTCLOUD_DIFY_EXTERNAL_KNOWLEDGE_API_KEY: ${SMARTCLOUD_DIFY_EXTERNAL_KNOWLEDGE_API_KEY:-smartcloud-dify-local}
       SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
       SMARTCLOUD_QDRANT_URL: ${SMARTCLOUD_QDRANT_URL:-http://qdrant:6333}
+      SMARTCLOUD_QDRANT_COLLECTION: ${SMARTCLOUD_QDRANT_COLLECTION:-knowledge_chunks}
       SMARTCLOUD_QDRANT_VECTOR_SIZE: ${SMARTCLOUD_QDRANT_VECTOR_SIZE:-32}
       SMARTCLOUD_OPENSEARCH_URL: ${SMARTCLOUD_OPENSEARCH_URL:-http://opensearch:9200}
       SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      SMARTCLOUD_EMBEDDING_PROVIDER: ${SMARTCLOUD_EMBEDDING_PROVIDER:-hash-baseline}
+      SMARTCLOUD_EMBEDDING_API_URL: ${SMARTCLOUD_EMBEDDING_API_URL:-}
+      SMARTCLOUD_EMBEDDING_API_KEY: ${SMARTCLOUD_EMBEDDING_API_KEY:-}
+      SMARTCLOUD_EMBEDDING_MODEL: ${SMARTCLOUD_EMBEDDING_MODEL:-}
       SMARTCLOUD_CONNECTOR_TIMEOUT_MS: ${SMARTCLOUD_CONNECTOR_TIMEOUT_MS:-5000}
       SMARTCLOUD_INDEX_WORKER_POLL_SECONDS: ${SMARTCLOUD_INDEX_WORKER_POLL_SECONDS:-2}
       SMARTCLOUD_INDEX_WORKER_BATCH_SIZE: ${SMARTCLOUD_INDEX_WORKER_BATCH_SIZE:-10}
@@ -34,7 +274,18 @@ services:
       LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-smartcloud-x-local}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
     ports:
-      - "8030:8030"
+      - "8031:8030"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     volumes:
       - knowledge_runtime:/app/runtime
       - ../../apps/knowledge-service/data/imports:/app/imports:ro
@@ -44,7 +295,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8030/healthz')); raise SystemExit(0 if payload.get('data', {}).get('ready') else 1)",
+          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8030/readyz')); raise SystemExit(0 if payload.get('status') == 'ready' else 1)",
         ]
       interval: 15s
       timeout: 5s
@@ -71,9 +322,14 @@ services:
       SMARTCLOUD_MINIO_SECRET_KEY: ${SMARTCLOUD_MINIO_SECRET_KEY:-smartcloud123}
       SMARTCLOUD_MYSQL_DSN: ${SMARTCLOUD_MYSQL_DSN:-mysql+pymysql://smartcloud:smartcloud@mysql:3306/smartcloud}
       SMARTCLOUD_QDRANT_URL: ${SMARTCLOUD_QDRANT_URL:-http://qdrant:6333}
+      SMARTCLOUD_QDRANT_COLLECTION: ${SMARTCLOUD_QDRANT_COLLECTION:-knowledge_chunks}
       SMARTCLOUD_QDRANT_VECTOR_SIZE: ${SMARTCLOUD_QDRANT_VECTOR_SIZE:-32}
       SMARTCLOUD_OPENSEARCH_URL: ${SMARTCLOUD_OPENSEARCH_URL:-http://opensearch:9200}
       SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_REDIS_URL:-redis://redis:6379/0}
+      SMARTCLOUD_EMBEDDING_PROVIDER: ${SMARTCLOUD_EMBEDDING_PROVIDER:-hash-baseline}
+      SMARTCLOUD_EMBEDDING_API_URL: ${SMARTCLOUD_EMBEDDING_API_URL:-}
+      SMARTCLOUD_EMBEDDING_API_KEY: ${SMARTCLOUD_EMBEDDING_API_KEY:-}
+      SMARTCLOUD_EMBEDDING_MODEL: ${SMARTCLOUD_EMBEDDING_MODEL:-}
       SMARTCLOUD_CONNECTOR_TIMEOUT_MS: ${SMARTCLOUD_CONNECTOR_TIMEOUT_MS:-5000}
       SMARTCLOUD_INDEX_WORKER_POLL_SECONDS: ${SMARTCLOUD_INDEX_WORKER_POLL_SECONDS:-2}
       SMARTCLOUD_INDEX_WORKER_BATCH_SIZE: ${SMARTCLOUD_INDEX_WORKER_BATCH_SIZE:-10}
@@ -91,13 +347,13 @@ services:
       mysql:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       opensearch:
-        condition: service_started
+        condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - knowledge_runtime:/app/runtime
       - ../../apps/knowledge-service/data/imports:/app/imports:ro
@@ -114,7 +370,7 @@ services:
       SMARTCLOUD_REQUEST_TIMEOUT_MS: ${SMARTCLOUD_REQUEST_TIMEOUT_MS:-10000}
       SMARTCLOUD_REDIS_URL: ${SMARTCLOUD_RAG_REDIS_URL:-redis://redis:6379/1}
       SMARTCLOUD_RAG_CACHE_ENABLED: ${SMARTCLOUD_RAG_CACHE_ENABLED:-true}
-      KNOWLEDGE_SERVICE_BASE_URL: http://knowledge-service:8030
+      KNOWLEDGE_SERVICE_BASE_URL: ${KNOWLEDGE_SERVICE_BASE_URL:-http://knowledge-service:8030}
       SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT: ${SMARTCLOUD_PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:4317}
       OTEL_SERVICE_NAME: smartcloud-x-rag-service
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:4317}
@@ -128,17 +384,81 @@ services:
     depends_on:
       knowledge-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8040/healthz')); raise SystemExit(0 if payload.get('data', {}).get('ready') else 1)",
+          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8040/readyz')); raise SystemExit(0 if payload.get('status') == 'ready' else 1)",
         ]
       interval: 15s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  gateway-service:
+    build:
+      context: ../../apps/gateway-service
+      dockerfile: Dockerfile
+    environment:
+      SMARTCLOUD_LOG_LEVEL: ${SMARTCLOUD_LOG_LEVEL:-INFO}
+      SMARTCLOUD_CORS_ALLOWED_ORIGINS: ${SMARTCLOUD_CORS_ALLOWED_ORIGINS:-http://localhost:8050,http://127.0.0.1:8050,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3100,http://127.0.0.1:3100}
+      SMARTCLOUD_REQUEST_TIMEOUT_MS: ${SMARTCLOUD_REQUEST_TIMEOUT_MS:-10000}
+      SMARTCLOUD_JWT_SECRET: ${SMARTCLOUD_JWT_SECRET:-replace-me}
+      AUTH_USER_SERVICE_BASE_URL: ${AUTH_USER_SERVICE_BASE_URL:-http://auth-user-service:8001}
+      MARKETING_SERVICE_BASE_URL: ${MARKETING_SERVICE_BASE_URL:-http://marketing-service:8002}
+      RESEARCH_SERVICE_BASE_URL: ${RESEARCH_SERVICE_BASE_URL:-http://research-service:8003}
+      ORCHESTRATOR_SERVICE_BASE_URL: ${ORCHESTRATOR_SERVICE_BASE_URL:-http://orchestrator-service:8010}
+      TOOL_HUB_SERVICE_BASE_URL: ${TOOL_HUB_SERVICE_BASE_URL:-http://tool-hub-service:8020}
+      BUSINESS_TOOLS_SERVICE_BASE_URL: ${BUSINESS_TOOLS_SERVICE_BASE_URL:-http://business-tools-service:8030}
+      KNOWLEDGE_SERVICE_BASE_URL: ${KNOWLEDGE_SERVICE_BASE_URL:-http://knowledge-service:8030}
+      RAG_SERVICE_BASE_URL: ${RAG_SERVICE_BASE_URL:-http://rag-service:8040}
+      GATEWAY_STORE_PATH: ${GATEWAY_STORE_PATH:-/app/runtime/gateway-store.json}
+    ports:
+      - "8000:8000"
+    volumes:
+      - gateway_runtime:/app/runtime
+    depends_on:
+      auth-user-service:
+        condition: service_healthy
+      marketing-service:
+        condition: service_healthy
+      research-service:
+        condition: service_healthy
+      orchestrator-service:
+        condition: service_healthy
+      tool-hub-service:
+        condition: service_healthy
+      business-tools-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8000/readyz')); raise SystemExit(0 if payload.get('data', {}).get('status') == 'ready' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web-user:
+    build:
+      context: ../../
+      dockerfile: apps/web-user/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_USE_MOCK_API: ${VITE_USE_MOCK_API:-false}
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-SmartCloud-X User Console}
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-0.1.0}
+    ports:
+      - "3100:80"
+    depends_on:
+      gateway-service:
+        condition: service_healthy
     restart: unless-stopped
 
   web-admin:
@@ -146,7 +466,7 @@ services:
       context: ../../apps/web-admin
       dockerfile: Dockerfile
       args:
-        VITE_KNOWLEDGE_SERVICE_BASE_URL: ${VITE_KNOWLEDGE_SERVICE_BASE_URL:-http://localhost:8030/api/knowledge/v1}
+        VITE_KNOWLEDGE_SERVICE_BASE_URL: ${VITE_KNOWLEDGE_SERVICE_BASE_URL:-http://localhost:8031/api/knowledge/v1}
         VITE_RAG_SERVICE_BASE_URL: ${VITE_RAG_SERVICE_BASE_URL:-http://localhost:8040/api/rag/v1}
         VITE_OPERATOR_REASON_HEADER: ${VITE_OPERATOR_REASON_HEADER:-X-Operator-Reason}
     ports:
@@ -162,6 +482,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   mysql:
@@ -182,12 +507,37 @@ services:
       retries: 10
     restart: unless-stopped
 
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-lc",
+          "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /collections HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"ok\"' <&3",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   opensearch:
@@ -205,6 +555,17 @@ services:
       - "9200:9200"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-lc",
+          "curl -fsS http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 15
     restart: unless-stopped
 
   minio:
@@ -218,6 +579,11 @@ services:
       - "${SMARTCLOUD_MINIO_CONSOLE_HOST_PORT:-19001}:9001"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   phoenix:
@@ -270,9 +636,11 @@ services:
     restart: unless-stopped
 
 volumes:
+  gateway_runtime:
   knowledge_runtime:
   prometheus_data:
   grafana_data:
+  mongo_data:
   qdrant_data:
   minio_data:
   mysql_data:

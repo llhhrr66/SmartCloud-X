@@ -5,7 +5,6 @@
   "type": "object",
   "required": [
     "query",
-    "top_k",
     "sources"
   ],
   "properties": {
@@ -17,6 +16,13 @@
       "type": "integer",
       "minimum": 0
     },
+    "degraded": {
+      "type": "boolean"
+    },
+    "backend_used": {
+      "type": "string",
+      "minLength": 1
+    },
     "sources": {
       "type": "array",
       "items": {
@@ -24,5 +30,5 @@
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }

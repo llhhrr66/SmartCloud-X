@@ -17,6 +17,8 @@ from app.services.ingestion import get_ingestion_service
 from app.services.search import get_search_service
 from app.services.snapshot import get_snapshot_service
 from app.services.store_provider import get_repository
+from app.core.config import EmbeddingConfigurationError, get_settings
+from app.services.embeddings import FallbackEmbeddingProvider, build_embedding_provider
 
 router = APIRouter()
 
@@ -174,3 +176,35 @@ def search(payload: SearchRequest, request: Request) -> ApiEnvelope[dict]:
     trace = build_trace_context(request)
     result = get_search_service().search(payload)
     return ApiEnvelope(data=result, requestId=trace.request_id, trace=trace)
+
+
+@router.get("/embedding:test", response_model=ApiEnvelope)
+def embedding_test(
+    request: Request,
+    text: str = Query(..., min_length=1),
+) -> ApiEnvelope[dict] | JSONResponse:
+    trace = build_trace_context(request)
+    try:
+        settings = get_settings()
+        provider = build_embedding_provider(settings)
+        vector = provider.embed([text])[0]
+    except EmbeddingConfigurationError as exc:
+        return error_response(trace, 500, "knowledge.embedding_configuration_invalid", str(exc))
+    except ValueError as exc:
+        return error_response(trace, 500, "knowledge.embedding_provider_failed", str(exc))
+    data = {
+        "provider": provider.__class__.__name__,
+        "configuredProvider": settings.embedding_provider,
+        "sample": vector[:8],
+        "dimensions": len(vector),
+    }
+    if isinstance(provider, FallbackEmbeddingProvider):
+        data["provider"] = provider.last_provider_name
+        data["fallbackActive"] = provider.last_provider_name != provider.primary.__class__.__name__
+        if provider.last_error:
+            data["providerError"] = provider.last_error
+    return ApiEnvelope(
+        data=data,
+        requestId=trace.request_id,
+        trace=trace,
+    )

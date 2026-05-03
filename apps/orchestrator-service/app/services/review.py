@@ -22,7 +22,7 @@ class ResponseReviewService:
         final_summary: str,
     ) -> ResponseReview:
         if not self._settings.response_review_enabled:
-            return ResponseReview(status="skipped", summary="已跳过响应复核。", requires_escalation=False)
+            return ResponseReview(status="warning", summary="已跳过响应复核。", requires_escalation=False)
 
         issues: list[ResponseReviewIssue] = []
         suggested_tools_by_agent = {
@@ -53,6 +53,9 @@ class ResponseReviewService:
                 )
 
             allowed_tools = suggested_tools_by_agent.get(execution.agent, set())
+            if not allowed_tools:
+                from .agent_registry import allowed_tools_for
+                allowed_tools = set(allowed_tools_for(execution.agent))
             unauthorized_tools = [
                 tool_call.tool_name
                 for tool_call in execution.tool_calls
@@ -106,14 +109,14 @@ class ResponseReviewService:
             return ResponseReview(
                 status="blocked",
                 summary="响应复核未通过，需重试或升级处理。",
-                issues=issues,
+                issues=[item.model_copy(deep=True) for item in issues],
                 requires_escalation=True,
             )
         if has_warning:
             return ResponseReview(
                 status="warning",
                 summary="响应复核通过，但存在告警项。",
-                issues=issues,
+                issues=[item.model_copy(deep=True) for item in issues],
                 requires_escalation=False,
             )
         return ResponseReview(

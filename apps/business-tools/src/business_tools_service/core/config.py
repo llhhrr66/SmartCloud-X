@@ -20,6 +20,10 @@ ENV_ALIASES = {
 }
 
 
+RELEASE_ENVS = {"staging", "prod"}
+LOCAL_FALLBACK_ENVS = {"local", "dev", "test"}
+
+
 def _coerce_value(raw: str) -> Any:
     value = raw.strip()
     lower = value.lower()
@@ -88,10 +92,14 @@ class Settings(BaseModel):
     runtime_data_dir: str | None = Field(default=None, alias="BUSINESS_TOOLS_RUNTIME_DIR")
     redis_url: str | None = Field(default=None, alias="SMARTCLOUD_REDIS_URL")
     redis_namespace: str = Field(default="smartcloud:business-tools", alias="BUSINESS_TOOLS_REDIS_NAMESPACE")
+    database_url: str | None = Field(default=None, alias="SMARTCLOUD_MYSQL_DSN")
     tool_query_cache_enabled: bool = Field(default=True, alias="TOOL_QUERY_CACHE_ENABLED")
     tool_query_cache_ttl_cap_seconds: int = Field(default=300, alias="TOOL_QUERY_CACHE_TTL_CAP_SECONDS")
     idempotency_store_path: str | None = Field(default=None, alias="BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH")
     query_cache_store_path: str | None = Field(default=None, alias="BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH")
+    runtime_mode: Literal["shared-backend", "mixed", "local-fallback"] = "local-fallback"
+    release_readiness_required_components: list[str] = Field(default_factory=list)
+    local_fallback_components: list[str] = Field(default_factory=list)
 
     @field_validator("api_prefix", "internal_api_prefix")
     @classmethod
@@ -138,10 +146,22 @@ class Settings(BaseModel):
     def _validate_prod(self) -> "Settings":
         if self.app_env == "prod" and self.log_level == "DEBUG":
             raise ValueError("DEBUG logging is not allowed in prod.")
-        if self.app_env in {"staging", "prod"} and not self.redis_url:
+        if self.app_env in RELEASE_ENVS and not self.redis_url:
             raise ValueError(
                 f"{self.app_env} requires middleware-backed business-tools runtime config: SMARTCLOUD_REDIS_URL."
             )
+        if self.app_env in RELEASE_ENVS:
+            self.release_readiness_required_components = ["redis"]
+            self.local_fallback_components = []
+            self.runtime_mode = "shared-backend"
+            return self
+
+        fallback_components: list[str] = []
+        if self.redis_url and (self.idempotency_store_path or self.query_cache_store_path):
+            fallback_components.extend(["idempotency_store", "query_cache_store"])
+        self.release_readiness_required_components = ["redis"]
+        self.local_fallback_components = fallback_components
+        self.runtime_mode = "mixed" if fallback_components else "local-fallback"
         return self
 
 
@@ -180,6 +200,7 @@ def build_settings(service_root: Path | None = None, environ: dict[str, str] | N
         "TOOL_QUERY_CACHE_TTL_CAP_SECONDS",
         "BUSINESS_TOOLS_RUNTIME_DIR",
         "SMARTCLOUD_REDIS_URL",
+        "SMARTCLOUD_MYSQL_DSN",
         "BUSINESS_TOOLS_REDIS_NAMESPACE",
         "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
         "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
@@ -190,7 +211,7 @@ def build_settings(service_root: Path | None = None, environ: dict[str, str] | N
 
     runtime_dir = Path(str(merged.get("BUSINESS_TOOLS_RUNTIME_DIR") or (root / ".tmp" / "business-tools-service"))).expanduser()
     merged.setdefault("BUSINESS_TOOLS_RUNTIME_DIR", str(runtime_dir))
-    if merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
+    if app_env in LOCAL_FALLBACK_ENVS and merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
         merged.setdefault(
             "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
             str(runtime_dir / "degraded-idempotency-store.json"),

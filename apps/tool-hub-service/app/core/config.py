@@ -20,7 +20,12 @@ ENV_ALIASES = {
     "TOOL_HUB_RUNTIME_DIR": ("TOOL_HUB_RUNTIME_DIR",),
     "SMARTCLOUD_MYSQL_DSN": ("SMARTCLOUD_MYSQL_DSN",),
     "SMARTCLOUD_REDIS_URL": ("SMARTCLOUD_REDIS_URL",),
+    "OTEL_EXPORTER_OTLP_ENDPOINT": ("OTEL_EXPORTER_OTLP_ENDPOINT",),
 }
+
+
+RELEASE_ENVS = {"staging", "prod"}
+LOCAL_FALLBACK_ENVS = {"local", "dev", "test"}
 
 
 def _coerce_value(raw: str) -> Any:
@@ -87,6 +92,7 @@ class Settings(BaseModel):
     tool_call_id_header: str = Field(default="X-Tool-Call-Id", alias="SMARTCLOUD_TOOL_CALL_ID_HEADER")
     idempotency_key_header: str = Field(default="Idempotency-Key", alias="SMARTCLOUD_IDEMPOTENCY_KEY_HEADER")
     trace_enabled: bool = Field(default=True, alias="SMARTCLOUD_TRACE_ENABLED")
+    otel_exporter_otlp_endpoint: str | None = Field(default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     allowed_internal_callers: list[str] = Field(
         default_factory=lambda: ["orchestrator-service"],
         alias="ALLOWED_INTERNAL_CALLERS",
@@ -94,6 +100,7 @@ class Settings(BaseModel):
     business_tools_transport: Literal["local", "http"] = Field(default="local", alias="BUSINESS_TOOLS_TRANSPORT")
     business_tools_base_url: str = Field(default="http://localhost:8030", alias="BUSINESS_TOOLS_URL")
     business_tools_internal_api_prefix: str = Field(default="/internal/v1", alias="BUSINESS_TOOLS_INTERNAL_API_PREFIX")
+    business_tools_discovery_strict: bool = Field(default=False, alias="BUSINESS_TOOLS_DISCOVERY_STRICT")
     tool_retry_attempts: int = Field(default=1, alias="TOOL_RETRY_ATTEMPTS")
     tool_query_cache_enabled: bool = Field(default=True, alias="TOOL_QUERY_CACHE_ENABLED")
     tool_query_cache_ttl_cap_seconds: int = Field(default=300, alias="TOOL_QUERY_CACHE_TTL_CAP_SECONDS")
@@ -114,6 +121,9 @@ class Settings(BaseModel):
         default="smartcloud:business-tools",
         alias="BUSINESS_TOOLS_REDIS_NAMESPACE",
     )
+    runtime_mode: Literal["shared-backend", "mixed", "local-fallback"] = "local-fallback"
+    release_readiness_required_components: list[str] = Field(default_factory=list)
+    local_fallback_components: list[str] = Field(default_factory=list)
 
     @field_validator(
         "api_prefix",
@@ -188,12 +198,29 @@ class Settings(BaseModel):
     def _validate_prod(self) -> "Settings":
         if self.app_env == "prod" and self.log_level == "DEBUG":
             raise ValueError("DEBUG logging is not allowed in prod.")
-        if self.app_env in {"staging", "prod"} and not self.mysql_dsn:
+        if self.app_env in RELEASE_ENVS and not self.mysql_dsn:
             raise ValueError(f"{self.app_env} requires middleware-backed tool-hub audit storage: SMARTCLOUD_MYSQL_DSN.")
-        if self.app_env in {"staging", "prod"} and self.business_tools_transport != "http":
+        if self.app_env in RELEASE_ENVS and self.business_tools_transport != "http":
             raise ValueError(
                 f"{self.app_env} requires BUSINESS_TOOLS_TRANSPORT=http for service-to-service tool dispatch."
             )
+        if self.app_env in RELEASE_ENVS:
+            self.business_tools_discovery_strict = True
+            self.release_readiness_required_components = ["mysql", "business_tools_http_transport"]
+            self.local_fallback_components = []
+            self.runtime_mode = "shared-backend"
+            return self
+
+        fallback_components: list[str] = []
+        if self.mysql_dsn and self.audit_store_path:
+            fallback_components.append("audit_store")
+        if self.redis_url and (
+            self.business_tools_idempotency_store_path or self.business_tools_query_cache_store_path
+        ):
+            fallback_components.extend(["business_tools_idempotency_store", "business_tools_query_cache_store"])
+        self.release_readiness_required_components = ["mysql", "business_tools_http_transport"]
+        self.local_fallback_components = fallback_components
+        self.runtime_mode = "mixed" if fallback_components else "local-fallback"
         return self
 
 
@@ -231,9 +258,11 @@ def build_settings(
         "SMARTCLOUD_TOOL_CALL_ID_HEADER",
         "SMARTCLOUD_IDEMPOTENCY_KEY_HEADER",
         "SMARTCLOUD_TRACE_ENABLED",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
         "ALLOWED_INTERNAL_CALLERS",
         "BUSINESS_TOOLS_TRANSPORT",
         "BUSINESS_TOOLS_INTERNAL_API_PREFIX",
+        "BUSINESS_TOOLS_DISCOVERY_STRICT",
         "TOOL_RETRY_ATTEMPTS",
         "TOOL_QUERY_CACHE_ENABLED",
         "TOOL_QUERY_CACHE_TTL_CAP_SECONDS",
@@ -252,9 +281,9 @@ def build_settings(
 
     runtime_dir = Path(str(merged.get("TOOL_HUB_RUNTIME_DIR") or (root / ".tmp" / "tool-hub-service"))).expanduser()
     merged.setdefault("TOOL_HUB_RUNTIME_DIR", str(runtime_dir))
-    if merged.get("SMARTCLOUD_MYSQL_DSN") not in {None, ""}:
+    if app_env in LOCAL_FALLBACK_ENVS and merged.get("SMARTCLOUD_MYSQL_DSN") not in {None, ""}:
         merged.setdefault("AUDIT_STORE_PATH", str(runtime_dir / "degraded-audit-store.json"))
-    if merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
+    if app_env in LOCAL_FALLBACK_ENVS and merged.get("SMARTCLOUD_REDIS_URL") not in {None, ""}:
         merged.setdefault(
             "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
             str(runtime_dir / "degraded-business-tools-idempotency.json"),

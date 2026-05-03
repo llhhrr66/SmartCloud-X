@@ -7,14 +7,21 @@ import sys
 from pathlib import Path
 
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from scripts.qa.check_release_readiness import build_report as build_focused_readiness_report
-from scripts.qa.verify_openapi_contracts import build_summary
-
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+def _import_focused_builder():
+    from scripts.qa.check_release_readiness import build_report
+
+    return build_report
+
+
+def _import_openapi_builder():
+    from scripts.qa.verify_openapi_contracts import build_summary
+
+    return build_summary
 
 
 REQUIRED_ARTIFACTS = (
@@ -86,6 +93,22 @@ def parse_known_issues(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def _safe_call(name: str, builder) -> dict[str, object]:
+    try:
+        return builder()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{name} crashed: {exc.__class__.__name__}: {exc}",
+            "failures": [
+                {
+                    "type": "exception",
+                    "detail": f"{exc.__class__.__name__}: {exc}",
+                }
+            ],
+        }
+
+
 def build_readiness_report() -> dict[str, object]:
     artifact_report = []
     missing = []
@@ -96,14 +119,16 @@ def build_readiness_report() -> dict[str, object]:
             missing.append(rel_path)
 
     known_issues = parse_known_issues(REPO_ROOT / "docs" / "reviews" / "known-issues.md")
-    focused_readiness = build_focused_readiness_report()
+    focused_readiness = _safe_call("focusedReadiness", lambda: _import_focused_builder()())
+    openapi = _safe_call("openapi", lambda: _import_openapi_builder()())
+    ok = not missing and bool(focused_readiness.get("ok")) and bool(openapi.get("ok"))
     return {
-        "ok": not missing,
+        "ok": ok,
         "missingArtifacts": missing,
         "artifacts": artifact_report,
         "focusedReadiness": focused_readiness,
         "infraPersistence": focused_readiness.get("focusAreas", {}).get("infraPersistence"),
-        "openapi": build_summary(),
+        "openapi": openapi,
         "knownIssues": known_issues,
     }
 
@@ -120,7 +145,8 @@ def main() -> int:
     report["blockingKnownIssues"] = blocking_known_issues
     report["ok"] = (
         bool(report["ok"])
-        and bool(report["focusedReadiness"]["ok"])
+        and bool(report["focusedReadiness"].get("ok"))
+        and bool(report["openapi"].get("ok"))
         and (not args.strict or not blocking_known_issues)
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

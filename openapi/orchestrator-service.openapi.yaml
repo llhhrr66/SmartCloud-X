@@ -535,7 +535,7 @@ paths:
       tags: [chat]
       operationId: orchestrator_replayMessageStreamEvents
       summary: Replay stored SSE events for one chat message as `text/event-stream`.
-      description: Additive SSE replay route backed by the persisted orchestrator event store. The request may resume from `after_event_id` or the standard `Last-Event-ID` header. Missing replay state uses the same non-retryable `CHAT_STREAM_EVENTS_NOT_FOUND` baseline as the list route.
+      description: Additive SSE replay route backed by the persisted orchestrator event store. The request may resume from `after_event_id` or the standard `Last-Event-ID` header. Missing replay state uses the same non-retryable `CHAT_STREAM_EVENTS_NOT_FOUND` baseline as the list route. Current code emits retrieval and citation events from real retrieval results when available; however, this baseline only freezes the shared event families and schema references already present in `components`, and does not claim that every event payload field is finalized for all future orchestrator strategies.
       x-owner-service: orchestrator-service
       x-permission-code: service:internal.call
       x-error-codes: [CHAT_STREAM_EVENTS_NOT_FOUND]
@@ -1184,7 +1184,7 @@ paths:
               $ref: ./components.openapi.yaml#/components/schemas/InternalChatRequest
       responses:
         '200':
-          description: Internal chat orchestration result.
+          description: Internal chat orchestration result. The response DTO remains primarily owner-defined, but current code now carries real retrieval-driven fields in the shared `InternalChatResponse` schema. In particular, retrieval summaries and compatibility citations may be present when orchestrator executes the RAG-backed path; consumers should not treat absent optional fields as proof that retrieval was not attempted.
           content:
             application/json:
               schema:

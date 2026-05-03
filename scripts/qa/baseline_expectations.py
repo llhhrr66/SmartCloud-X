@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from scripts.qa.infra_persistence_matrix import build_report as build_infra_persistence_report
 
@@ -16,6 +16,18 @@ class PathExpectation:
     category: str
     rel_path: str
     note: str
+
+
+@dataclass(frozen=True)
+class CheckFailure:
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SafeResult:
+    value: Any = None
+    failures: tuple[CheckFailure, ...] = ()
 
 
 KEY_SERVICE_EXPECTATIONS: tuple[PathExpectation, ...] = (
@@ -552,6 +564,68 @@ def load_json(rel_path: str) -> dict[str, Any]:
     return json.loads(repo_path(rel_path).read_text(encoding="utf-8"))
 
 
+def safe_load_json(rel_path: str) -> SafeResult:
+    path = repo_path(rel_path)
+    if not path.exists():
+        return SafeResult(failures=(CheckFailure(rel_path, f"missing {rel_path}"),))
+    try:
+        return SafeResult(value=json.loads(path.read_text(encoding="utf-8")))
+    except json.JSONDecodeError as exc:
+        return SafeResult(
+            failures=(CheckFailure(rel_path, f"invalid JSON in {rel_path}: {exc}"),)
+        )
+
+
+def safe_read_text(rel_path: str) -> SafeResult:
+    path = repo_path(rel_path)
+    if not path.exists():
+        return SafeResult(failures=(CheckFailure(rel_path, f"missing {rel_path}"),))
+    try:
+        return SafeResult(value=path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return SafeResult(failures=(CheckFailure(rel_path, f"unable to read {rel_path}: {exc}"),))
+
+
+def _failure_check(category: str, failure: CheckFailure) -> dict[str, Any]:
+    return {
+        "name": f"{category}:{failure.path}",
+        "category": category,
+        "path": failure.path,
+        "passed": False,
+        "detail": failure.reason,
+    }
+
+
+def _append_safe_content_check(
+    checks: list[dict[str, Any]],
+    *,
+    category: str,
+    rel_path: str,
+    name: str,
+    detail_when_ok: str,
+    missing_markers: tuple[str, ...] | list[str],
+    missing_detail_prefix: str,
+) -> None:
+    read_result = safe_read_text(rel_path)
+    if read_result.failures:
+        checks.extend(_failure_check(category, failure) for failure in read_result.failures)
+        return
+
+    checks.append(
+        {
+            "name": name,
+            "category": category,
+            "path": rel_path,
+            "passed": not missing_markers,
+            "detail": (
+                detail_when_ok
+                if not missing_markers
+                else f"{missing_detail_prefix}{', '.join(missing_markers)}"
+            ),
+        }
+    )
+
+
 def _prefixed_line(text: str, prefix: str) -> str:
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -561,7 +635,10 @@ def _prefixed_line(text: str, prefix: str) -> str:
 
 
 def _knowledge_rag_live_connector_state() -> str:
-    qa_state = load_json("logs/supervisor-integration-qa/state.json")
+    qa_state_result = safe_load_json("logs/supervisor-integration-qa/state.json")
+    if qa_state_result.failures:
+        return "missing"
+    qa_state = qa_state_result.value
     validation = qa_state.get("validation", {})
     if not isinstance(validation, dict):
         return "missing"
@@ -595,124 +672,152 @@ def collect_path_checks() -> list[dict[str, Any]]:
 def collect_package_checks() -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
 
-    web_user_package = load_json("apps/web-user/package.json")
-    web_user_scripts = web_user_package.get("scripts", {})
-    missing_web_user_scripts = sorted(set(WEB_USER_REQUIRED_SCRIPTS) - set(web_user_scripts))
-    checks.append(
-        {
-            "name": "web-user:package-scripts",
-            "category": "web-user",
-            "path": "apps/web-user/package.json",
-            "passed": not missing_web_user_scripts,
-            "detail": (
-                f"web-user scripts present: {', '.join(WEB_USER_REQUIRED_SCRIPTS)}"
-                if not missing_web_user_scripts
-                else f"missing web-user scripts: {', '.join(missing_web_user_scripts)}"
-            ),
-        }
-    )
+    web_user_package_result = safe_load_json("apps/web-user/package.json")
+    if web_user_package_result.failures:
+        checks.extend(_failure_check("web-user", failure) for failure in web_user_package_result.failures)
+    else:
+        web_user_package = web_user_package_result.value
+        web_user_scripts = web_user_package.get("scripts", {})
+        missing_web_user_scripts = sorted(set(WEB_USER_REQUIRED_SCRIPTS) - set(web_user_scripts))
+        checks.append(
+            {
+                "name": "web-user:package-scripts",
+                "category": "web-user",
+                "path": "apps/web-user/package.json",
+                "passed": not missing_web_user_scripts,
+                "detail": (
+                    f"web-user scripts present: {', '.join(WEB_USER_REQUIRED_SCRIPTS)}"
+                    if not missing_web_user_scripts
+                    else f"missing web-user scripts: {', '.join(missing_web_user_scripts)}"
+                ),
+            }
+        )
 
-    web_admin_package = load_json("apps/web-admin/package.json")
-    web_admin_scripts = web_admin_package.get("scripts", {})
-    missing_web_admin_scripts = sorted(set(WEB_ADMIN_REQUIRED_SCRIPTS) - set(web_admin_scripts))
-    checks.append(
-        {
-            "name": "web-admin:package-scripts",
-            "category": "web-admin",
-            "path": "apps/web-admin/package.json",
-            "passed": not missing_web_admin_scripts,
-            "detail": (
-                f"web-admin scripts present: {', '.join(WEB_ADMIN_REQUIRED_SCRIPTS)}"
-                if not missing_web_admin_scripts
-                else f"missing web-admin scripts: {', '.join(missing_web_admin_scripts)}"
-            ),
-        }
-    )
+    web_admin_package_result = safe_load_json("apps/web-admin/package.json")
+    if web_admin_package_result.failures:
+        checks.extend(_failure_check("web-admin", failure) for failure in web_admin_package_result.failures)
+    else:
+        web_admin_package = web_admin_package_result.value
+        web_admin_scripts = web_admin_package.get("scripts", {})
+        missing_web_admin_scripts = sorted(set(WEB_ADMIN_REQUIRED_SCRIPTS) - set(web_admin_scripts))
+        checks.append(
+            {
+                "name": "web-admin:package-scripts",
+                "category": "web-admin",
+                "path": "apps/web-admin/package.json",
+                "passed": not missing_web_admin_scripts,
+                "detail": (
+                    f"web-admin scripts present: {', '.join(WEB_ADMIN_REQUIRED_SCRIPTS)}"
+                    if not missing_web_admin_scripts
+                    else f"missing web-admin scripts: {', '.join(missing_web_admin_scripts)}"
+                ),
+            }
+        )
 
-    frontend_sdk_package = load_json("packages/frontend-sdk/package.json")
-    frontend_sdk_exports = frontend_sdk_package.get("exports", {})
-    missing_frontend_sdk_exports = sorted(
-        set(FRONTEND_SDK_REQUIRED_EXPORTS) - set(frontend_sdk_exports)
-    )
-    checks.append(
-        {
-            "name": "frontend-sdk:package-exports",
-            "category": "frontend-sdk",
-            "path": "packages/frontend-sdk/package.json",
-            "passed": not missing_frontend_sdk_exports,
-            "detail": (
-                f"frontend-sdk exports present: {', '.join(FRONTEND_SDK_REQUIRED_EXPORTS)}"
-                if not missing_frontend_sdk_exports
-                else f"missing frontend-sdk exports: {', '.join(missing_frontend_sdk_exports)}"
-            ),
-        }
-    )
+    frontend_sdk_package_result = safe_load_json("packages/frontend-sdk/package.json")
+    if frontend_sdk_package_result.failures:
+        checks.extend(_failure_check("frontend-sdk", failure) for failure in frontend_sdk_package_result.failures)
+    else:
+        frontend_sdk_package = frontend_sdk_package_result.value
+        frontend_sdk_exports = frontend_sdk_package.get("exports", {})
+        missing_frontend_sdk_exports = sorted(
+            set(FRONTEND_SDK_REQUIRED_EXPORTS) - set(frontend_sdk_exports)
+        )
+        checks.append(
+            {
+                "name": "frontend-sdk:package-exports",
+                "category": "frontend-sdk",
+                "path": "packages/frontend-sdk/package.json",
+                "passed": not missing_frontend_sdk_exports,
+                "detail": (
+                    f"frontend-sdk exports present: {', '.join(FRONTEND_SDK_REQUIRED_EXPORTS)}"
+                    if not missing_frontend_sdk_exports
+                    else f"missing frontend-sdk exports: {', '.join(missing_frontend_sdk_exports)}"
+                ),
+            }
+        )
 
-    repo_e2e_package = load_json("tests/e2e/package.json")
-    repo_e2e_scripts = repo_e2e_package.get("scripts", {})
-    missing_repo_e2e_scripts = sorted(set(REPO_E2E_REQUIRED_SCRIPTS) - set(repo_e2e_scripts))
-    checks.append(
-        {
-            "name": "repo-e2e:package-scripts",
-            "category": "qa",
-            "path": "tests/e2e/package.json",
-            "passed": not missing_repo_e2e_scripts,
-            "detail": (
-                f"repo e2e scripts present: {', '.join(REPO_E2E_REQUIRED_SCRIPTS)}"
-                if not missing_repo_e2e_scripts
-                else f"missing repo e2e scripts: {', '.join(missing_repo_e2e_scripts)}"
-            ),
-        }
-    )
+    repo_e2e_package_result = safe_load_json("tests/e2e/package.json")
+    if repo_e2e_package_result.failures:
+        checks.extend(_failure_check("qa", failure) for failure in repo_e2e_package_result.failures)
+    else:
+        repo_e2e_package = repo_e2e_package_result.value
+        repo_e2e_scripts = repo_e2e_package.get("scripts", {})
+        missing_repo_e2e_scripts = sorted(set(REPO_E2E_REQUIRED_SCRIPTS) - set(repo_e2e_scripts))
+        checks.append(
+            {
+                "name": "repo-e2e:package-scripts",
+                "category": "qa",
+                "path": "tests/e2e/package.json",
+                "passed": not missing_repo_e2e_scripts,
+                "detail": (
+                    f"repo e2e scripts present: {', '.join(REPO_E2E_REQUIRED_SCRIPTS)}"
+                    if not missing_repo_e2e_scripts
+                    else f"missing repo e2e scripts: {', '.join(missing_repo_e2e_scripts)}"
+                ),
+            }
+        )
 
-    web_user_shared_sdk_source = repo_path("apps/web-user/src/shared-sdk.ts").read_text(encoding="utf-8")
-    shared_sdk_uses_frontend_sdk = (
-        "packages/frontend-sdk/src/core" in web_user_shared_sdk_source
-        and "packages/frontend-sdk/src/web-user" in web_user_shared_sdk_source
-    )
-    checks.append(
-        {
-            "name": "web-user:shared-sdk-bridge",
-            "category": "web-user",
-            "path": "apps/web-user/src/shared-sdk.ts",
-            "passed": shared_sdk_uses_frontend_sdk,
-            "detail": (
-                "web-user shared SDK shim re-exports frontend-sdk core and web-user surfaces"
-                if shared_sdk_uses_frontend_sdk
-                else "web-user shared SDK shim no longer points at packages/frontend-sdk"
-            ),
-        }
-    )
+    web_user_shared_sdk_source_result = safe_read_text("apps/web-user/src/shared-sdk.ts")
+    if web_user_shared_sdk_source_result.failures:
+        checks.extend(_failure_check("web-user", failure) for failure in web_user_shared_sdk_source_result.failures)
+    else:
+        web_user_shared_sdk_source = web_user_shared_sdk_source_result.value
+        shared_sdk_uses_frontend_sdk = (
+            "packages/frontend-sdk/src/core" in web_user_shared_sdk_source
+            and "packages/frontend-sdk/src/web-user" in web_user_shared_sdk_source
+        )
+        checks.append(
+            {
+                "name": "web-user:shared-sdk-bridge",
+                "category": "web-user",
+                "path": "apps/web-user/src/shared-sdk.ts",
+                "passed": shared_sdk_uses_frontend_sdk,
+                "detail": (
+                    "web-user shared SDK shim re-exports frontend-sdk core and web-user surfaces"
+                    if shared_sdk_uses_frontend_sdk
+                    else "web-user shared SDK shim no longer points at packages/frontend-sdk"
+                ),
+            }
+        )
 
-    web_admin_shared_sdk_source = repo_path("apps/web-admin/src/shared-sdk.ts").read_text(encoding="utf-8")
-    web_admin_uses_frontend_sdk = (
-        "packages/frontend-sdk/src/core" in web_admin_shared_sdk_source
-        and "packages/frontend-sdk/src/web-admin" in web_admin_shared_sdk_source
-    )
-    checks.append(
-        {
-            "name": "web-admin:shared-sdk-bridge",
-            "category": "web-admin",
-            "path": "apps/web-admin/src/shared-sdk.ts",
-            "passed": web_admin_uses_frontend_sdk,
-            "detail": (
-                "web-admin shared SDK shim re-exports frontend-sdk core and web-admin surfaces"
-                if web_admin_uses_frontend_sdk
-                else "web-admin shared SDK shim no longer points at packages/frontend-sdk"
-            ),
-        }
-    )
+    web_admin_shared_sdk_source_result = safe_read_text("apps/web-admin/src/shared-sdk.ts")
+    if web_admin_shared_sdk_source_result.failures:
+        checks.extend(_failure_check("web-admin", failure) for failure in web_admin_shared_sdk_source_result.failures)
+    else:
+        web_admin_shared_sdk_source = web_admin_shared_sdk_source_result.value
+        web_admin_uses_frontend_sdk = (
+            "packages/frontend-sdk/src/core" in web_admin_shared_sdk_source
+            and "packages/frontend-sdk/src/web-admin" in web_admin_shared_sdk_source
+        )
+        checks.append(
+            {
+                "name": "web-admin:shared-sdk-bridge",
+                "category": "web-admin",
+                "path": "apps/web-admin/src/shared-sdk.ts",
+                "passed": web_admin_uses_frontend_sdk,
+                "detail": (
+                    "web-admin shared SDK shim re-exports frontend-sdk core and web-admin surfaces"
+                    if web_admin_uses_frontend_sdk
+                    else "web-admin shared SDK shim no longer points at packages/frontend-sdk"
+                ),
+            }
+        )
 
-    qa_state = load_json("logs/supervisor-integration-qa/state.json")
-    checks.append(
-        {
-            "name": "qa:state-owner",
-            "category": "qa",
-            "path": "logs/supervisor-integration-qa/state.json",
-            "passed": qa_state.get("owner") == "supervisor-integration-qa",
-            "detail": f"state owner={qa_state.get('owner')!r}",
-        }
-    )
+    qa_state_result = safe_load_json("logs/supervisor-integration-qa/state.json")
+    if qa_state_result.failures:
+        checks.extend(_failure_check("qa", failure) for failure in qa_state_result.failures)
+    else:
+        qa_state = qa_state_result.value
+        checks.append(
+            {
+                "name": "qa:state-owner",
+                "category": "qa",
+                "path": "logs/supervisor-integration-qa/state.json",
+                "passed": qa_state.get("owner") == "supervisor-integration-qa",
+                "detail": f"state owner={qa_state.get('owner')!r}",
+            }
+        )
 
     return checks
 

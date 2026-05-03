@@ -320,6 +320,36 @@ class AgentConfigStore:
             self._persist_unlocked()
             return override.model_copy(deep=True)
 
+    def update_by_code(self, agent_code: str, payload: Any) -> AgentConfigOverride:
+        self._maybe_restore_runtime_cache()
+        self._maybe_restore_backend()
+        existing: AgentConfigOverride | None = None
+        for override in self.list():
+            if override.agent_code == agent_code:
+                existing = override
+                break
+        if existing is None:
+            from fastapi import HTTPException
+            from app.models.common import ErrorInfo
+            raise HTTPException(
+                status_code=404,
+                detail=ErrorInfo(
+                    code="AGENT_CONFIG_NOT_FOUND",
+                    message=f"Agent override with code '{agent_code}' was not found.",
+                ).model_dump(),
+            )
+        if hasattr(payload, "model_dump"):
+            update_values = payload.model_dump(exclude_none=True)
+        elif isinstance(payload, dict):
+            update_values = {k: v for k, v in payload.items() if v is not None}
+        else:
+            update_values = {}
+        return self.upsert(
+            agent_name=existing.agent_name,
+            agent_code=existing.agent_code,
+            values=update_values,
+        )
+
     def describe_backend(self) -> dict[str, object]:
         self._maybe_restore_runtime_cache()
         self._maybe_restore_backend()

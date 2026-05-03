@@ -1,4 +1,112 @@
 groups:
+  - name: smartcloud-services
+    rules:
+      - alert: SmartCloudOrchestratorServiceDown
+        expr: up{job="orchestrator-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-orchestrator
+        annotations:
+          summary: orchestrator-service is unavailable
+          description: The orchestrator-service metrics endpoint has been down for more than 2 minutes.
+
+      - alert: SmartCloudResearchServiceDown
+        expr: up{job="research-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-research
+        annotations:
+          summary: research-service is unavailable
+          description: The research-service metrics endpoint has been down for more than 2 minutes.
+
+      - alert: SmartCloudMarketingServiceDown
+        expr: up{job="marketing-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-marketing
+        annotations:
+          summary: marketing-service is unavailable
+          description: The marketing-service metrics endpoint has been down for more than 2 minutes.
+
+      - alert: SmartCloudToolHubServiceDown
+        expr: up{job="tool-hub-service"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          owner: supervisor-tool-hub
+        annotations:
+          summary: tool-hub-service is unavailable
+          description: The tool-hub-service metrics endpoint has been down for more than 2 minutes.
+
+  - name: smartcloud-saga
+    rules:
+      - alert: SmartCloudSagaCompensationFailures
+        expr: increase(orchestrator_saga_compensations_total{result="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          owner: supervisor-orchestrator
+        annotations:
+          summary: Saga compensation failures detected
+          description: orchestrator-service recorded one or more failed saga compensation actions in the last 15 minutes.
+
+      - alert: SmartCloudSagaFailureRateHigh
+        expr: increase(orchestrator_saga_failures_total[30m]) / clamp_min(increase(orchestrator_saga_steps_total[30m]), 1) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          owner: supervisor-orchestrator
+        annotations:
+          summary: Saga step failure rate is high
+          description: More than 10% of saga steps have failed in the last 30 minutes.
+
+  - name: smartcloud-rag-cache
+    rules:
+      - alert: SmartCloudRagCacheHitRateLow
+        expr: rag_cache_hit_ratio < 0.2
+        for: 15m
+        labels:
+          severity: warning
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: RAG cache hit rate is low
+          description: RAG retrieval cache hit ratio has been below 20% for more than 15 minutes.
+
+      - alert: SmartCloudSmartCacheDisabled
+        expr: smart_cache_requests_total{layer="L1_FAQ", result="disabled"} > 0
+        for: 5m
+        labels:
+          severity: info
+          owner: supervisor-knowledge-rag
+        annotations:
+          summary: L1 FAQ cache is disabled
+          description: The L1 FAQ smart cache is receiving requests but is disabled.
+
+  - name: smartcloud-research
+    rules:
+      - alert: SmartCloudResearchPipelineFetchErrors
+        expr: increase(research_pipeline_fetch_errors_total[15m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+          owner: supervisor-research
+        annotations:
+          summary: Research pipeline web fetch errors are high
+          description: research-service recorded more than 5 web fetch errors in the last 15 minutes.
+
+      - alert: SmartCloudResearchUpstreamErrors
+        expr: increase(research_upstream_errors_total[15m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+          owner: supervisor-research
+        annotations:
+          summary: Research service upstream errors detected
+          description: research-service recorded more than 3 upstream errors in the last 15 minutes.
+
   - name: smartcloud-knowledge-rag
     rules:
       - alert: SmartCloudKnowledgeServiceDown

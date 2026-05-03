@@ -18,7 +18,7 @@ test('creates a research task, observes completion, and previews the generated r
   });
 
   await expect(taskCard.getByText('研究任务已创建，等待后端服务完成生成。')).toBeVisible();
-  await expect(taskCard.getByText('completed')).toBeVisible({ timeout: 12_000 });
+  await expect(taskCard.getByText('已完成', { exact: true })).toBeVisible({ timeout: 12_000 });
   await expect(taskCard.getByRole('button', { name: '查看报告文件' })).toBeVisible();
 
   await taskCard.getByRole('button', { name: '查看报告文件' }).click();
@@ -51,7 +51,7 @@ test('renders a file-preview error when the generated research report metadata i
     has: page.getByText('E2E 研究报告缺失', { exact: true })
   });
 
-  await expect(taskCard.getByText('completed')).toBeVisible({ timeout: 12_000 });
+  await expect(taskCard.getByText('已完成', { exact: true })).toBeVisible({ timeout: 12_000 });
   await taskCard.getByRole('button', { name: '查看报告文件' }).click();
 
   const reportPreview = page.locator('.card').filter({

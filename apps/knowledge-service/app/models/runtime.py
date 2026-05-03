@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class RuntimeConnectorStatus(BaseModel):
     backend: str
     configured: bool
+    status: str | None = None
     endpoint: str | None = None
     target: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -81,6 +82,8 @@ class KnowledgeRuntimeIntegrations(BaseModel):
     metadata_store: RuntimeConnectorStatus = Field(alias="metadataStore")
     vector_store: RuntimeConnectorStatus = Field(alias="vectorStore")
     bm25_store: RuntimeConnectorStatus = Field(alias="bm25Store")
+    dify_external_knowledge: RuntimeConnectorStatus = Field(alias="difyExternalKnowledge")
+    dify_dataset_sync: RuntimeConnectorStatus = Field(alias="difyDatasetSync")
     cache: RuntimeConnectorStatus
     task_queue: RuntimeConnectorStatus = Field(alias="taskQueue")
     outbox_path: str = Field(alias="outboxPath")

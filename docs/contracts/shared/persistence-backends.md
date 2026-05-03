@@ -1,10 +1,12 @@
 # Shared Persistence Backend Baseline
 
-This document freezes the current repo-wide persistence matrix used for infra migration, release decisions, and downstream QA reporting. It records repository reality first, including temporary local fallbacks.
+This document freezes the current repo-wide persistence matrix used for infra migration, release decisions, and downstream QA reporting. It records repository reality first, including temporary local fallbacks and migration-stage mixed modes.
 
 ## Shared connector-key status
 - frozen root connector keys:
   - `SMARTCLOUD_MYSQL_DSN`
+  - `SMARTCLOUD_MONGODB_URI`
+  - `SMARTCLOUD_MONGODB_DATABASE`
   - `SMARTCLOUD_REDIS_URL`
   - `SMARTCLOUD_MINIO_ENDPOINT`
   - `SMARTCLOUD_MINIO_BUCKET`
@@ -15,32 +17,56 @@ This document freezes the current repo-wide persistence matrix used for infra mi
 - documented owner-local retrieval/index connector keys:
   - `SMARTCLOUD_QDRANT_URL`
   - `SMARTCLOUD_OPENSEARCH_URL`
-- not yet a frozen release dependency in repo reality:
-  - MongoDB remains part of the primary target architecture, but no current repo-owned runtime path depends on it today
+- current repo-owned document-store and queue additions:
+  - `orchestrator-service` exposes MongoDB-backed document runtimes
+  - `knowledge-service` exposes Qdrant/OpenSearch-backed retrieval indexing with fallback-compatible target resolution
+  - `rag-service` exposes Redis-backed retrieval cache plus explicit knowledge-service dependency readiness
 
 ## Service matrix
 | Service | Authoritative mainline backend(s) | Allowed local/degraded fallback | Restart durability expectation | Canonical evidence today | Release guidance |
 | --- | --- | --- | --- | --- | --- |
-| `auth-user-service` | MySQL-backed account and refresh-session runtime via `SMARTCLOUD_MYSQL_DSN` | SQLite/local file only for local smoke and tests | auth/session state must survive restart outside local smoke | owner-local restart smoke in `tests/integration/test_service_smoke.py`; response-level backend proof still pending | release promotion should require DB-backed runtime, not bootstrap-only assumptions |
-| `orchestrator-service` | MySQL for conversation/session/config state; Redis for SSE replay, idempotency, and shared business-tools fallback cache alignment | JSON/file spools only for local smoke and degraded recovery | conversation state, continuation state, admin agent overrides, and replayable stream events should survive restart | current evidence is owner-local config/runtime tests plus frozen chat/session/event replay routes | release promotion should require both MySQL and Redis on the main path |
-| `tool-hub-service` | MySQL-backed tool-call audit persistence; Redis-backed shared business-tools cache alignment | local JSON/in-memory fallback only for local smoke and degraded recovery | audit records and idempotent local fallback behavior should survive restart | current evidence is owner-local config/runtime tests plus frozen tool-call audit read contracts | release promotion should require MySQL-backed audit persistence; Redis remains required when shared local business-tools fallback is enabled |
-| `business-tools-service` | Redis-backed idempotency and query-cache persistence via `SMARTCLOUD_REDIS_URL` | file-backed spools only for local smoke and degraded recovery | idempotency and cache namespaces should survive restart outside local smoke | current evidence is owner-local runtime tests and the published internal execute/preflight contracts | release promotion should require Redis-backed runtime state instead of file-only fallback |
-| `knowledge-service` | MySQL metadata, MinIO raw-object mirrors, Qdrant vector index, OpenSearch keyword index, Redis coordination/cache | local JSON mirror remains a migration-safety fallback | KB/document metadata, raw objects, and index handoff state should survive restart | `GET /api/knowledge/v1/snapshot`, bootstrap/ingestion routes, and compose smoke provide response-level/runtime evidence today | release promotion should require the real connector set, not JSON-only mirrors |
-| `rag-service` | Redis-backed retrieval cache; retrieval/index evidence comes from the knowledge/index stack it depends on | in-process cache only for local smoke or transient Redis failure | cache loss is tolerable, but retrieval dependency wiring must stay explicit | `POST /api/rag/v1/diagnose` plus owner-local retrieval smoke | release promotion should require the intended Redis/cache and retrieval dependency wiring for the target environment |
-| `marketing-service` | MySQL-backed campaign/artifact/task metadata; optional MinIO raw-object storage for poster artifacts | SQLite/public-URL fallback only for local smoke or no-object-storage mode | generated artifact metadata should survive restart; poster binary durability depends on whether object storage is enabled for the environment | owner-local restart smoke proves DB-backed persistence today; response-level backend proof is still pending | release promotion should require MySQL on the mainline path; MinIO should be required whenever poster/raw-object retention is part of the environment contract |
-| `research-service` | MySQL-backed task/result persistence | SQLite/local fallback only for local smoke and tests | task/result history should survive restart outside local smoke | owner-local restart smoke proves DB-backed persistence today; response-level backend proof is still pending | release promotion should require DB-backed runtime instead of local fallback |
+| `auth-user-service` | MySQL-backed account and refresh-session runtime via `SMARTCLOUD_MYSQL_DSN` | SQLite/local file only for local smoke and tests | auth/session state must survive restart outside local smoke | `/healthz` and `/readyz` now expose backend evidence and runtime mode; owner-local smoke still remains useful for restart validation | release promotion should require DB-backed runtime, not bootstrap-only assumptions |
+| `orchestrator-service` | MySQL for conversation/session/config state; MongoDB for `conversation_messages`, `agent_reasoning_logs`, `raw_tool_payloads`, and `session_snapshots`; Redis for SSE replay, idempotency, and shared business-tools fallback cache alignment | JSON/file spools only for local smoke and degraded recovery | conversation state, message history, retry snapshots, agent reasoning logs, raw tool payloads, admin agent overrides, and replayable stream events should survive restart | owner-local `tests/test_persistence.py` proves Mongo-backed message/snapshot preference and hard failure when the configured Mongo document store is unavailable; runtime health exposes document-store evidence | release promotion should require MySQL + MongoDB + Redis on the intended main path |
+| `knowledge-service` | MySQL metadata, MinIO raw-object mirrors, Qdrant vector index, OpenSearch keyword index, Redis coordination/cache | local JSON mirror and single-target baseline remain migration-safety fallbacks | KB/document metadata, raw objects, index handoff state, and search target configuration should survive restart | `/healthz`, `/readyz`, snapshot/admin diagnostics, and runtime payloads provide connector and readiness evidence; index-target runtime may expose `single-baseline`, `mixed`, or `per-domain` mode | release promotion should require the intended connector set; `single-baseline` may be reviewable baseline, while `mixed`/`per-domain` should be interpreted from runtime evidence rather than assumed from design goals |
+| `rag-service` | Redis-backed retrieval cache; retrieval/index evidence comes from knowledge-service and the retrieval stack it depends on | in-process cache only for local smoke or transient Redis failure | cache loss is tolerable, but retrieval dependency wiring must stay explicit | `/healthz`, `/readyz`, and `/api/rag/v1/diagnose` expose cache/backend evidence plus nested `knowledgeService.dependencyReadiness` | release promotion should require intended Redis/cache posture and explicit knowledge dependency wiring for the target environment |
 
-## Local fallback rules
-- JSON/file/memory fallbacks are acceptable for local bootstrap, isolated smoke, and degraded development recovery only
+## Local fallback and release semantics
+- JSON/file/memory/SQLite fallbacks are acceptable for local bootstrap, isolated smoke, and degraded development recovery only unless a service owner explicitly documents a stronger supported mode
 - once a service is marked release-promotable for an environment, its authoritative runtime path must use the mainline middleware/database backend listed above
 - degraded fallbacks must not silently become the only production durability path
+- `required_for_release=true` in runtime health is the field-level signal that a backend participates in that service's release gate
+- `runtime_mode=local-fallback` means the service can still be useful for local validation but should not be reported as shared-backend release proof
+- `runtime_mode=mixed` means part of the runtime uses aligned shared backends while another part remains fallback, compatibility, or migration-stage
+
+## Knowledge retrieval/index target modes
+The current knowledge indexing/search baseline recognizes these target modes:
+- `single-baseline`
+  - single collection/index baseline, typically equivalent to the repo-wide default target such as `knowledge_chunks`
+  - useful as a reviewable baseline or migration-safe fallback
+  - must not be misreported as completed per-domain isolation
+- `per-domain`
+  - domain-specific collection/index routing is active for the addressed documents/queries
+  - runtime evidence should identify the effective per-domain targets, not just the intended design
+- `mixed`
+  - both baseline and per-domain targets may be active during migration or partial rollout
+  - search/query diagnostics should make clear when fallback reads or writes still occur against baseline targets
+
+### Domain index backend evidence
+When knowledge-service exposes domain index evidence, QA and reviewers should look for:
+- active target mode: `single-baseline`, `mixed`, or `per-domain`
+- effective Qdrant collection names
+- effective OpenSearch index names
+- fallback target names, where applicable
+- connector evidence for vector and BM25 backends, such as `connector-ping`, health payload backend records, snapshot output, or diagnose/admin runtime output
+
+Important review rule:
+- the presence of domain-index code paths or design docs is not sufficient proof that `per-domain` is active in the running environment
+- runtime payloads, diagnose output, or verified tests must show the effective target mode before release reports claim domain isolation is live
 
 ## Canonical evidence rules
 - minimal `/healthz` routes are liveness checks, not proof of backend selection
 - when a service exposes backend-selection evidence in HTTP responses, it should follow `docs/contracts/shared/runtime-health.md`
+- `/readyz` is the stricter traffic gate and should be preferred over `/healthz` for release/readiness decisions
 - until a service exposes response-level backend evidence, QA should use the owner-published restart or compose smoke named in the matrix above
-
-## Current migration notes
-- `orchestrator-service`, `tool-hub-service`, and `business-tools-service` are the highest-priority migration surfaces for replacing JSON/file-backed state with MySQL/Redis mainline persistence
-- `knowledge-service` already establishes the strongest real-backend baseline in-repo and remains the reference for MinIO/raw-object plus retrieval/index contract expectations
-- `BUSINESS_TOOLS_REDIS_NAMESPACE` must stay aligned across business-tools, tool-hub, and orchestrator whenever local or degraded business-tools execution touches shared Redis keyspace
+- nested downstream readiness should use `dependencyReadiness` rather than ad-hoc booleans when effective readiness depends on another service
+- domain-index rollout claims should be backed by runtime target evidence, not only by static config or target-state prompts

@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 
 import jsonschema
-import yaml
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for QA helper
+    yaml = None
+else:
+    class _LenientYamlLoader(yaml.SafeLoader):
+        """YAML loader that ignores unknown custom tags used by some specs."""
+
+
+    def _construct_unknown_tag(loader: _LenientYamlLoader, tag_suffix: str, node: Any) -> Any:
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        raise TypeError(f"unsupported YAML node type: {node.__class__.__name__}")
+
+
+    _LenientYamlLoader.add_multi_constructor("!", _construct_unknown_tag)
 
 
 class ContractValidationError(ValueError):
@@ -29,8 +50,24 @@ class OpenApiContract:
     def _load_document(self, path: Path) -> dict[str, Any]:
         resolved = path.resolve()
         if resolved not in self._documents:
-            self._documents[resolved] = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+            self._documents[resolved] = self._parse_document(resolved)
         return self._documents[resolved]
+
+    def _parse_document(self, path: Path) -> dict[str, Any]:
+        text = path.read_text(encoding="utf-8")
+        if yaml is not None:
+            payload = yaml.load(text, Loader=_LenientYamlLoader)
+        else:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ContractValidationError(
+                    "PyYAML is not installed and the OpenAPI document is not valid JSON: "
+                    f"{path}"
+                ) from exc
+        if not isinstance(payload, dict):
+            raise ContractValidationError(f"OpenAPI document must decode to an object: {path}")
+        return payload
 
     def assert_required_operations(self, required_operations: dict[str, tuple[str, ...]]) -> None:
         for path, methods in required_operations.items():

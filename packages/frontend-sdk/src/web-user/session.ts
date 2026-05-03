@@ -48,7 +48,7 @@ export function buildWebUserHeaders(
     merged.set('Accept', expectsStream ? 'text/event-stream' : 'application/json');
   }
 
-  if (!merged.has('Content-Type') && !expectsStream && shouldDefaultJsonContentType(body)) {
+  if (!merged.has('Content-Type') && shouldDefaultJsonContentType(body)) {
     merged.set('Content-Type', 'application/json');
   }
 

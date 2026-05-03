@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -26,6 +27,7 @@ PYTHON_BIN = os.getenv("SMARTCLOUD_TRACE_SMOKE_PYTHON", sys.executable)
 REQUEST_TIMEOUT = float(os.getenv("SMARTCLOUD_TRACE_SMOKE_TIMEOUT_SECONDS", "5"))
 WAIT_SECONDS = float(os.getenv("SMARTCLOUD_TRACE_SMOKE_WAIT_SECONDS", "0.5"))
 WAIT_ATTEMPTS = int(os.getenv("SMARTCLOUD_TRACE_SMOKE_WAIT_ATTEMPTS", "30"))
+DIRECT_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class TraceCollectorHandler(BaseHTTPRequestHandler):
@@ -107,8 +109,15 @@ def request(method: str, url: str, payload: dict | None = None) -> dict:
             "X-Caller-Service": "smartcloud-trace-smoke",
         },
     )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+    with DIRECT_HTTP.open(req, timeout=REQUEST_TIMEOUT) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _is_ready_payload(payload: dict) -> bool:
+    if payload.get("status") == "ready":
+        return True
+    data = payload.get("data")
+    return isinstance(data, dict) and data.get("ready") is True
 
 
 def wait_for_ready(url: str, label: str) -> None:
@@ -116,7 +125,7 @@ def wait_for_ready(url: str, label: str) -> None:
     for _ in range(WAIT_ATTEMPTS):
         try:
             payload = request("GET", url)
-            if payload.get("data", {}).get("ready") is True:
+            if _is_ready_payload(payload):
                 return
             last_error = RuntimeError(f"{label} returned non-ready payload: {payload}")
         except Exception as exc:  # noqa: BLE001 - smoke retries on startup races
@@ -289,11 +298,10 @@ def main() -> int:
         knowledge_port = reserve_port()
         rag_port = reserve_port()
 
-        with tempfile.TemporaryDirectory(prefix="smartcloud-trace-smoke-") as temp_dir_name:
-            temp_dir = Path(temp_dir_name)
-            log_dir = temp_dir / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-
+        temp_dir = Path(tempfile.mkdtemp(prefix="smartcloud-trace-smoke-"))
+        log_dir = temp_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
             knowledge_runtime = temp_dir / "knowledge-runtime"
             knowledge_import_root = temp_dir / "imports"
             knowledge_import_root.mkdir(parents=True, exist_ok=True)
@@ -330,12 +338,12 @@ def main() -> int:
             managed_processes.append(
                 start_uvicorn("knowledge-service", KNOWLEDGE_ROOT, knowledge_port, knowledge_env, log_dir)
             )
-            wait_for_ready(f"http://127.0.0.1:{knowledge_port}/healthz", "knowledge-service")
+            wait_for_ready(f"http://127.0.0.1:{knowledge_port}/readyz", "knowledge-service")
 
             managed_processes.append(
                 start_uvicorn("rag-service", RAG_ROOT, rag_port, rag_env, log_dir)
             )
-            wait_for_ready(f"http://127.0.0.1:{rag_port}/healthz", "rag-service")
+            wait_for_ready(f"http://127.0.0.1:{rag_port}/readyz", "rag-service")
 
             ingest_payload = request(
                 "POST",
@@ -391,10 +399,21 @@ def main() -> int:
                 "traceBatches": len(TraceCollectorHandler.requests),
                 "traceServices": sorted(service_names),
                 "sharedTraceIds": shared_trace_ids[:3],
+                "spanCount": len(exported_spans),
                 "answerCitationCount": len(answer_payload.get("data", {}).get("citations", [])),
             }
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
+        finally:
+            for managed in reversed(managed_processes):
+                managed.stop()
+            managed_processes.clear()
+            for _attempt in range(5):
+                try:
+                    shutil.rmtree(temp_dir)
+                    break
+                except PermissionError:
+                    time.sleep(0.2)
     except Exception as exc:  # noqa: BLE001 - smoke should print useful diagnostics on failure
         print(f"trace smoke failed: {exc}", file=sys.stderr)
         for managed in managed_processes:
@@ -402,8 +421,6 @@ def main() -> int:
             print(managed.log_text(), file=sys.stderr)
         return 1
     finally:
-        for managed in reversed(managed_processes):
-            managed.stop()
         if collector_server is not None:
             collector_server.shutdown()
         if collector_thread is not None:

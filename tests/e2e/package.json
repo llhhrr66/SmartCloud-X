@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:browser": "../../apps/web-user/node_modules/.bin/playwright test -c playwright.root.config.ts",
-    "test:browser:headed": "../../apps/web-user/node_modules/.bin/playwright test -c playwright.root.config.ts --headed",
-    "install:browsers": "../../apps/web-user/node_modules/.bin/playwright install chromium"
+    "test:browser": "node ../../apps/web-user/node_modules/playwright/cli.js test -c playwright.root.config.ts",
+    "test:browser:headed": "node ../../apps/web-user/node_modules/playwright/cli.js test -c playwright.root.config.ts --headed",
+    "install:browsers": "node ../../apps/web-user/node_modules/playwright/cli.js install chromium"
   }
 }

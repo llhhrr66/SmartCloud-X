@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+from time import perf_counter
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -10,8 +11,11 @@ from urllib.request import urlopen
 from uuid import uuid4
 
 from fastapi import Request
+from opentelemetry import trace
 
 from app.core.config import get_settings
+from app.core.metrics import RESEARCH_UPSTREAM_ERRORS_TOTAL
+from app.core.tracing import annotate_current_span, extract_trace_headers, start_span
 from app.models import CurrentUserContext, ServiceError, TraceContext
 from app.security import TokenError, get_token_codec
 
@@ -22,15 +26,28 @@ def build_trace_context(request: Request) -> TraceContext:
         return existing
     settings = get_settings()
     request_id = request.headers.get(settings.request_id_header) or str(uuid4())
-    trace = TraceContext(
+    trace_id = request.headers.get(settings.trace_id_header)
+    if not trace_id:
+        traceparent = request.headers.get("traceparent", "")
+        parts = traceparent.split("-")
+        if len(parts) == 4 and len(parts[1]) == 32:
+            trace_id = parts[1]
+    if not trace_id:
+        current_span = trace.get_current_span()
+        span_context = current_span.get_span_context() if current_span is not None else None
+        if span_context is not None and span_context.is_valid:
+            trace_id = format(span_context.trace_id, "032x")
+    if not trace_id:
+        trace_id = request_id
+    trace_context = TraceContext(
         requestId=request_id,
-        traceId=request.headers.get(settings.trace_id_header) or request_id,
+        traceId=trace_id,
         conversationId=request.headers.get(settings.conversation_id_header),
         tenantId=request.headers.get(settings.tenant_id_header),
         callerService=request.headers.get(settings.caller_service_header),
     )
-    request.state.trace_context = trace
-    return trace
+    request.state.trace_context = trace_context
+    return trace_context
 
 
 def require_user_permissions(*required_permissions: str) -> Callable[[Request], CurrentUserContext]:
@@ -43,7 +60,8 @@ def require_user_permissions(*required_permissions: str) -> Callable[[Request], 
         if not token:
             raise ServiceError(401, 4010002, "user login required")
         try:
-            claims = get_token_codec().decode(token)
+            with start_span("research.auth.validate", operation="auth_validation"):
+                claims = get_token_codec().decode(token)
         except TokenError as exc:
             raise ServiceError(401, 4010002, str(exc)) from exc
         if claims.get("subject_type") != "user" or claims.get("token_type") != "access":
@@ -51,6 +69,12 @@ def require_user_permissions(*required_permissions: str) -> Callable[[Request], 
         current_state = _validate_token_current_state(request, token, claims, settings=settings)
         permissions = list(current_state.get("permissions") or [])
         missing = [permission for permission in required_permissions if permission not in permissions]
+        annotate_current_span(
+            operation="auth_validation",
+            user_id=current_state.get("subject_id") or current_state.get("sub") or "",
+            tenant_id=current_state.get("tenant_id"),
+            status="ok" if not missing else "forbidden",
+        )
         if missing:
             raise ServiceError(
                 403,
@@ -113,22 +137,25 @@ def _validate_token_with_auth_service(
             error_type="misconfiguration",
             details={"setting": "RESEARCH_SERVICE_AUTH_VALIDATE_TOKEN_URL"},
         )
-    trace = build_trace_context(request)
+    trace_context = build_trace_context(request)
     service_token = get_token_codec().issue_service_token(settings.internal_service_name).token
     headers = {
         "Authorization": f"Bearer {service_token}",
         settings.caller_service_header: settings.internal_service_name,
-        settings.request_id_header: trace.request_id or "",
-        settings.trace_id_header: trace.trace_id or "",
+        settings.request_id_header: trace_context.request_id or "",
+        settings.trace_id_header: trace_context.trace_id or "",
     }
-    if trace.tenant_id:
-        headers[settings.tenant_id_header] = trace.tenant_id
+    if trace_context.tenant_id:
+        headers[settings.tenant_id_header] = trace_context.tenant_id
+    extract_trace_headers(headers)
     url = f"{settings.auth_validate_token_url}?{urlencode({'token': token})}"
     upstream_request = UrlRequest(url, headers=headers, method="GET")
+    started = perf_counter()
     try:
         with urlopen(upstream_request, timeout=settings.auth_validate_timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
+        RESEARCH_UPSTREAM_ERRORS_TOTAL.labels(backend="auth-user-service", error_type="http_error").inc()
         error_payload = _read_upstream_error_payload(exc)
         if exc.code == 401:
             raise ServiceError(401, 4010002, "token is no longer valid") from exc
@@ -148,6 +175,7 @@ def _validate_token_with_auth_service(
             details={"status_code": exc.code, "upstream": error_payload},
         ) from exc
     except URLError as exc:
+        RESEARCH_UPSTREAM_ERRORS_TOTAL.labels(backend="auth-user-service", error_type="unavailable").inc()
         raise ServiceError(
             503,
             5030001,
@@ -156,7 +184,9 @@ def _validate_token_with_auth_service(
             details={"reason": str(exc.reason)},
         ) from exc
 
+    annotate_current_span(operation="auth_validation_upstream", status="ok", duration_ms=(perf_counter() - started) * 1000)
     if payload.get("success") is not True:
+        RESEARCH_UPSTREAM_ERRORS_TOTAL.labels(backend="auth-user-service", error_type="invalid_response").inc()
         raise ServiceError(
             503,
             5030001,
@@ -166,6 +196,7 @@ def _validate_token_with_auth_service(
         )
     data = payload.get("data")
     if not isinstance(data, dict):
+        RESEARCH_UPSTREAM_ERRORS_TOTAL.labels(backend="auth-user-service", error_type="invalid_response").inc()
         raise ServiceError(
             503,
             5030001,

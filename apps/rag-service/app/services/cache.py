@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from functools import lru_cache
@@ -12,12 +13,13 @@ from app.core.metrics import (
     CACHE_ENTRY_COUNT,
     CACHE_HITS_TOTAL,
     CACHE_MISSES_TOTAL,
+    update_cache_hit_ratio,
 )
 from app.models.rag import KnowledgeSearchCandidate, QueryRewriteResult, RetrieveRequest
 
 try:
     import redis
-except ImportError:  # pragma: no cover - exercised in integration environments
+except ImportError:  # pragma: no cover
     redis = None
 
 
@@ -34,19 +36,19 @@ class RetrievalCacheService:
         self._lock = RLock()
         self._entries: dict[str, CachedSearchResult] = {}
         self._redis_client = self._build_redis_client()
+        self._last_prune_time: float | None = None
 
-    def get(
-        self,
-        request: RetrieveRequest,
-    ) -> tuple[QueryRewriteResult, list[KnowledgeSearchCandidate]] | None:
+    def get(self, request: RetrieveRequest) -> tuple[QueryRewriteResult, list[KnowledgeSearchCandidate]] | None:
         if not self.settings.cache_enabled:
             CACHE_MISSES_TOTAL.inc()
+            self._refresh_hit_ratio()
             return None
 
         key = self._build_key(request)
         cached = self._get_from_redis(key)
         if cached is not None:
             CACHE_HITS_TOTAL.inc()
+            self._refresh_hit_ratio()
             return cached
 
         now = monotonic()
@@ -54,24 +56,22 @@ class RetrievalCacheService:
             entry = self._entries.get(key)
             if entry is None:
                 CACHE_MISSES_TOTAL.inc()
+                self._refresh_hit_ratio()
                 return None
             if entry.expires_at <= now:
                 self._entries.pop(key, None)
                 self._update_size_metric()
                 CACHE_MISSES_TOTAL.inc()
+                self._refresh_hit_ratio()
                 return None
             CACHE_HITS_TOTAL.inc()
+            self._refresh_hit_ratio()
             return (
                 entry.rewrite.model_copy(deep=True),
                 [candidate.model_copy(deep=True) for candidate in entry.candidates],
             )
 
-    def set(
-        self,
-        request: RetrieveRequest,
-        rewrite: QueryRewriteResult,
-        candidates: list[KnowledgeSearchCandidate],
-    ) -> None:
+    def set(self, request: RetrieveRequest, rewrite: QueryRewriteResult, candidates: list[KnowledgeSearchCandidate]) -> None:
         if not self.settings.cache_enabled:
             return
 
@@ -93,6 +93,15 @@ class RetrievalCacheService:
             self._entries.clear()
             self._update_size_metric()
 
+    def clear_prefix(self) -> int:
+        count = 0
+        self._clear_redis()
+        with self._lock:
+            count = len(self._entries)
+            self._entries.clear()
+            self._update_size_metric()
+        return count
+
     def describe(self) -> dict[str, object]:
         self._prune()
         return {
@@ -101,23 +110,27 @@ class RetrievalCacheService:
             "namespace": self.settings.cache_namespace,
             "ttlSeconds": self.settings.cache_ttl_seconds,
             "entries": len(self._entries),
+            "cacheSize": len(self._entries),
             "redisConfigured": bool(self.settings.redis_url),
             "redisConnected": self._redis_client is not None,
+            "cacheHitRate": self._hit_ratio(),
+            "lastPruneTime": self._last_prune_time,
         }
 
     def _build_key(self, request: RetrieveRequest) -> str:
         payload = json.dumps(
             {
-                "namespace": self.settings.cache_namespace,
                 "query": request.query,
                 "topK": request.top_k,
                 "sourceIds": sorted(request.filters.source_ids),
                 "tags": sorted(tag.lower() for tag in request.filters.tags),
+                "conversationContext": [message.model_dump() for message in request.conversation_context],
             },
             ensure_ascii=False,
             sort_keys=True,
         )
-        return f"{self.settings.cache_namespace}:{payload}"
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return f"{self.settings.cache_namespace}:{digest}"
 
     def _prune(self) -> None:
         with self._lock:
@@ -128,6 +141,7 @@ class RetrievalCacheService:
         expired = [key for key, value in self._entries.items() if value.expires_at <= now]
         for key in expired:
             self._entries.pop(key, None)
+        self._last_prune_time = now
 
     def _update_size_metric(self) -> None:
         CACHE_ENTRY_COUNT.set(len(self._entries))
@@ -136,7 +150,7 @@ class RetrievalCacheService:
         if not self.settings.redis_url or redis is None:
             return None
         try:
-            return redis.from_url(  # type: ignore[union-attr]
+            return redis.from_url(
                 self.settings.redis_url,
                 decode_responses=True,
                 socket_connect_timeout=1,
@@ -146,10 +160,7 @@ class RetrievalCacheService:
             CACHE_BACKEND_ERRORS_TOTAL.labels(operation="connect").inc()
             return None
 
-    def _get_from_redis(
-        self,
-        key: str,
-    ) -> tuple[QueryRewriteResult, list[KnowledgeSearchCandidate]] | None:
+    def _get_from_redis(self, key: str) -> tuple[QueryRewriteResult, list[KnowledgeSearchCandidate]] | None:
         if self._redis_client is None:
             return None
         try:
@@ -175,20 +186,13 @@ class RetrievalCacheService:
             return None
         return rewrite, candidates
 
-    def _set_in_redis(
-        self,
-        key: str,
-        rewrite: QueryRewriteResult,
-        candidates: list[KnowledgeSearchCandidate],
-    ) -> None:
+    def _set_in_redis(self, key: str, rewrite: QueryRewriteResult, candidates: list[KnowledgeSearchCandidate]) -> None:
         if self._redis_client is None:
             return
         payload = json.dumps(
             {
                 "rewrite": rewrite.model_dump(mode="json", by_alias=True),
-                "candidates": [
-                    candidate.model_dump(mode="json", by_alias=True) for candidate in candidates
-                ],
+                "candidates": [candidate.model_dump(mode="json", by_alias=True) for candidate in candidates],
             },
             ensure_ascii=False,
         )
@@ -205,6 +209,17 @@ class RetrievalCacheService:
                 self._redis_client.delete(key)
         except Exception:
             CACHE_BACKEND_ERRORS_TOTAL.labels(operation="clear").inc()
+
+    def _hit_ratio(self) -> float:
+        hits = sum(sample.value for metric in CACHE_HITS_TOTAL.collect() for sample in metric.samples if sample.name in {CACHE_HITS_TOTAL._name, f"{CACHE_HITS_TOTAL._name}_total"})
+        misses = sum(sample.value for metric in CACHE_MISSES_TOTAL.collect() for sample in metric.samples if sample.name in {CACHE_MISSES_TOTAL._name, f"{CACHE_MISSES_TOTAL._name}_total"})
+        total = hits + misses
+        return (hits / total) if total else 0.0
+
+    def _refresh_hit_ratio(self) -> None:
+        hits = sum(sample.value for metric in CACHE_HITS_TOTAL.collect() for sample in metric.samples if sample.name in {CACHE_HITS_TOTAL._name, f"{CACHE_HITS_TOTAL._name}_total"})
+        misses = sum(sample.value for metric in CACHE_MISSES_TOTAL.collect() for sample in metric.samples if sample.name in {CACHE_MISSES_TOTAL._name, f"{CACHE_MISSES_TOTAL._name}_total"})
+        update_cache_hit_ratio(hits, misses)
 
 
 @lru_cache(maxsize=1)

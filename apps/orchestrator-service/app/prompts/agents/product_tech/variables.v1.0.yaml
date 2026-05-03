@@ -1,0 +1,7 @@
+allowed_variables:
+  - user_query
+  - user_profile
+  - session_context
+  - retrieval_context
+  - tool_results
+  - policy_flags

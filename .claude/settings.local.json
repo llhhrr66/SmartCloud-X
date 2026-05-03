@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tailwindcss *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(kill 1471653)",
+      "Bash(kill 1815175)",
+      "Bash(netstat -tlnp)",
+      "Bash(docker restart docker-compose-orchestrator-service-1 *)",
+      "Bash(curl -s http://localhost:8010/api/v1/health)",
+      "Bash(curl -s http://localhost:8010/healthz)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:8000/api/v1/healthz)",
+      "Bash(curl -s http://localhost:8010/api/v1/chat/sessions?page=1)"
+    ]
+  }
+}

@@ -137,6 +137,9 @@ class Settings(BaseModel):
     admin_confirm_ttl_seconds: int = Field(
         default_factory=lambda: int(os.getenv("AUTH_USER_SERVICE_ADMIN_CONFIRM_TTL_SECONDS", "300"))
     )
+    prune_interval_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("AUTH_USER_SERVICE_PRUNE_INTERVAL_SECONDS", "60"))
+    )
     default_locale: str = Field(
         default_factory=lambda: os.getenv("SMARTCLOUD_DEFAULT_LOCALE", "zh-CN")
     )
@@ -164,6 +167,21 @@ class Settings(BaseModel):
         )
     )
 
+    seed_user_email: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_SEED_USER_EMAIL", "")
+    )
+    seed_user_mobile: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_SEED_USER_MOBILE", "")
+    )
+    seed_user_password: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_SEED_USER_PASSWORD", "")
+    )
+    seed_admin_username: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_SEED_ADMIN_USERNAME", "")
+    )
+    seed_admin_password: str = Field(
+        default_factory=lambda: os.getenv("AUTH_USER_SERVICE_SEED_ADMIN_PASSWORD", "")
+    )
     model_config = {"arbitrary_types_allowed": True}
 
 

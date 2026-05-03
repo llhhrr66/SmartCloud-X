@@ -5,6 +5,7 @@
 ## Coverage in the root Playwright entry
 
 - login, dashboard bootstrap, and seeded session-history rendering through the current `apps/web-user/` app
+- repo-root `web-admin` console shell bootstrap through the current `apps/web-admin/` app
 - marketing poster and research task cards surviving a reload in the repo-level browser entry
 - one-time `401` refresh recovery in the billing workspace, including a reload-safe billing follow-up
 - route-level permission denial when the user lacks `user:marketing.read`
@@ -33,6 +34,7 @@ If a fresh runner is missing browser dependencies, bootstrap them from `apps/web
 
 ```bash
 npm --prefix apps/web-user ci
+npm --prefix apps/web-admin ci
 npm --prefix tests/e2e run install:browsers
 ```
 

@@ -119,7 +119,74 @@ def test_build_settings_requires_http_business_tools_transport_in_prod(tmp_path:
             service_root=tmp_path,
             environ={
                 "APP_ENV": "prod",
-                "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:secret@mysql.test:3306/smartcloud",
+                "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
                 "BUSINESS_TOOLS_TRANSPORT": "local",
             },
+        )
+
+
+def test_build_settings_auto_enables_strict_business_tools_discovery_in_prod(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "prod.yaml").write_text("", encoding="utf-8")
+
+    settings = build_settings(
+        service_root=tmp_path,
+        environ={
+            "APP_ENV": "prod",
+            "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:***@mysql.test:3306/smartcloud",
+            "BUSINESS_TOOLS_TRANSPORT": "http",
+            "BUSINESS_TOOLS_URL": "http://example.local",
+        },
+    )
+
+    assert settings.business_tools_discovery_strict is True
+
+
+def test_build_settings_marks_local_runtime_mode_when_no_middleware_backends(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "dev.yaml").write_text("", encoding="utf-8")
+
+    settings = build_settings(
+        service_root=tmp_path,
+        environ={"APP_ENV": "dev"},
+    )
+
+    assert settings.runtime_mode == "local-fallback"
+    assert settings.release_readiness_required_components == ["mysql", "business_tools_http_transport"]
+    assert settings.local_fallback_components == []
+
+
+def test_build_settings_marks_mixed_runtime_mode_when_dev_uses_degraded_storage(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "dev.yaml").write_text("", encoding="utf-8")
+
+    settings = build_settings(
+        service_root=tmp_path,
+        environ={
+            "APP_ENV": "dev",
+            "SMARTCLOUD_MYSQL_DSN": "mysql+pymysql://smartcloud:secret@mysql.test:3306/smartcloud",
+            "SMARTCLOUD_REDIS_URL": "redis://redis.test:6379/0",
+        },
+    )
+
+    assert settings.runtime_mode == "mixed"
+    assert settings.local_fallback_components == [
+        "audit_store",
+        "business_tools_idempotency_store",
+        "business_tools_query_cache_store",
+    ]
+
+
+def test_build_settings_requires_mysql_in_staging(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config" / "settings"
+    config_dir.mkdir(parents=True)
+    (config_dir / "staging.yaml").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SMARTCLOUD_MYSQL_DSN"):
+        build_settings(
+            service_root=tmp_path,
+            environ={"APP_ENV": "staging", "BUSINESS_TOOLS_TRANSPORT": "http"},
         )

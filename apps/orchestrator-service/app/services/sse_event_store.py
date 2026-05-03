@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from threading import RLock
 
-from app.models.orchestration import StreamEventPage, StreamEventRecord
+from app.models.orchestration import MessageEventPage, StreamEventRecord
 from app.services.runtime_redis import build_redis_client, normalize_namespace
 
 RECOVERY_RETRY_SECONDS = 5.0
@@ -90,7 +90,7 @@ class SseEventStore:
         *,
         after_event_id: str | None = None,
         limit: int = 100,
-    ) -> StreamEventPage | None:
+    ) -> MessageEventPage | None:
         self._maybe_restore_backend()
         redis_page = self._get_page_from_redis(
             conversation_id,
@@ -109,7 +109,7 @@ class SseEventStore:
         page_items = events[start_index : start_index + limit]
         has_more = start_index + limit < len(events)
         next_event_id = page_items[-1].event_id if has_more and page_items else None
-        return StreamEventPage(
+        return MessageEventPage(
             conversation_id=conversation_id,
             message_id=message_id,
             items=page_items,
@@ -183,7 +183,7 @@ class SseEventStore:
         *,
         after_event_id: str | None,
         limit: int,
-    ) -> StreamEventPage | None:
+    ) -> MessageEventPage | None:
         client = self._redis_client
         if client is None:
             return None
@@ -217,7 +217,7 @@ class SseEventStore:
         page_items = events[start_index : start_index + limit]
         has_more = start_index + limit < len(events)
         next_event_id = page_items[-1].event_id if has_more and page_items else None
-        return StreamEventPage(
+        return MessageEventPage(
             conversation_id=conversation_id,
             message_id=message_id,
             items=page_items,
@@ -376,7 +376,7 @@ class SseEventStore:
         message_id: str,
         after_event_id: str | None,
         limit: int,
-    ) -> StreamEventPage | None:
+    ) -> MessageEventPage | None:
         lrange = getattr(client, "lrange", None)
         llen = getattr(client, "llen", None)
         if not callable(lrange) or not callable(llen):
@@ -389,7 +389,7 @@ class SseEventStore:
             return None
         payloads = lrange(key, start_index, start_index + max(limit, 1) - 1)
         if not payloads:
-            return StreamEventPage(
+            return MessageEventPage(
                 conversation_id=conversation_id,
                 message_id=message_id,
                 items=[],
@@ -399,7 +399,7 @@ class SseEventStore:
         events = [StreamEventRecord.model_validate(json.loads(payload)) for payload in payloads]
         has_more = start_index + len(events) < total_count
         next_event_id = events[-1].event_id if has_more and events else None
-        return StreamEventPage(
+        return MessageEventPage(
             conversation_id=conversation_id,
             message_id=message_id,
             items=events,

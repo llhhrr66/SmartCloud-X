@@ -17,6 +17,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+import requests
 
 from app.core.config import Settings, get_settings
 
@@ -38,7 +39,12 @@ def _build_exporter(settings: Settings):
 
     protocol = settings.otlp_protocol.strip().lower()
     if protocol == "http/protobuf":
-        return HttpOTLPSpanExporter(endpoint=endpoint.rstrip("/") + "/v1/traces")
+        session = requests.Session()
+        session.trust_env = False
+        return HttpOTLPSpanExporter(
+            endpoint=endpoint.rstrip("/") + "/v1/traces",
+            session=session,
+        )
     return GrpcOTLPSpanExporter(endpoint=endpoint, insecure=endpoint.startswith("http://"))
 
 

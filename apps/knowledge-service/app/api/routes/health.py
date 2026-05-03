@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.dependencies import build_trace_context
@@ -20,6 +20,13 @@ def healthz(request: Request) -> ApiEnvelope[dict]:
         requestId=trace.request_id,
         trace=trace,
     )
+
+
+@router.get("/readyz")
+def readyz(request: Request) -> JSONResponse:
+    _ = request.query_params
+    status_code, payload = get_health_service().build_readiness_payload()
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @router.get("/metrics")

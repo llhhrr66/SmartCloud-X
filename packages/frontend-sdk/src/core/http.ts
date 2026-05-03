@@ -59,7 +59,9 @@ export class FrontendApiClient {
   constructor(options: FrontendApiClientOptions) {
     this.baseUrl = options.baseUrl;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
-    this.fetchFn = options.fetchFn ?? fetch;
+    const resolvedFetch = options.fetchFn ?? globalThis.fetch;
+    this.fetchFn = ((input: RequestInfo | URL, init?: RequestInit) =>
+      resolvedFetch.call(globalThis, input, init)) as typeof fetch;
     this.buildHeadersHook = options.buildHeaders;
     this.shouldRefreshSession = options.shouldRefreshSession;
     this.refreshSessionHook = options.refreshSession;
@@ -73,7 +75,7 @@ export class FrontendApiClient {
       merged.set('Accept', expectsStream ? 'text/event-stream' : 'application/json');
     }
 
-    if (!merged.has('Content-Type') && !expectsStream && shouldDefaultJsonContentType(init.body)) {
+    if (!merged.has('Content-Type') && shouldDefaultJsonContentType(init.body)) {
       merged.set('Content-Type', 'application/json');
     }
 

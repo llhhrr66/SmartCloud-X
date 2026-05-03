@@ -85,8 +85,11 @@ def service_test_client(
     _reset_prometheus_registry()
     sys.path[:] = [*additions, *[path for path in sys.path if path not in additions]]
 
+    default_env = {"APP_ENV": "test"}
+    merged_env = {**default_env, **(env_overrides or {})}
+
     try:
-        with _patched_environ(env_overrides or {}):
+        with _patched_environ(merged_env):
             module = importlib.import_module(SERVICE_MODULES.get(service_name, "app.main"))
             app = getattr(module, "app")
             with TestClient(app) as client:

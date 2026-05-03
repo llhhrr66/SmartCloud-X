@@ -410,3 +410,82 @@ test('createChatApi preserves SSE retry hints on mapped chat events so reconnect
     }
   ]);
 });
+
+
+
+test('createChatApi getMessages handles backend SessionMessagesPage format with items array', async () => {
+  const api = createChatApi({
+    client: {
+      async request(path) {
+        if (path === '/api/v1/chat/sessions/conv_items/messages') {
+          return {
+            items: [
+              {
+                message_id: 'msg_010',
+                role: 'user',
+                message_type: 'user_input',
+                content: 'old conversation message',
+                status: 'completed',
+                created_at: '2026-04-01T00:00:00.000Z'
+              },
+              {
+                message_id: 'msg_011',
+                role: 'assistant',
+                message_type: 'assistant_response',
+                content: '{"final_answer": "reply to old message"}',
+                status: 'completed',
+                created_at: '2026-04-01T00:01:00.000Z'
+              }
+            ],
+            next_cursor: null,
+            has_more: false
+          };
+        }
+
+        throw new Error(`unexpected path: ${path}`);
+      }
+    },
+    createIdempotencyKey: () => 'unused'
+  });
+
+  const messages = await api.getMessages('conv_items');
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].messageId, 'msg_010');
+  assert.equal(messages[0].conversationId, 'conv_items');
+  assert.equal(messages[0].messageType, 'text');
+  assert.equal(messages[0].content, 'old conversation message');
+  assert.equal(messages[1].messageId, 'msg_011');
+  assert.equal(messages[1].messageType, 'markdown');
+  assert.equal(messages[1].content, 'reply to old message');
+});
+
+
+test('createChatApi getMessages returns empty list for messages key instead of items', async () => {
+  const api = createChatApi({
+    client: {
+      async request(path) {
+        if (path === '/api/v1/chat/sessions/conv_msg_key/messages') {
+          return {
+            messages: [
+              {
+                message_id: 'msg_020',
+                role: 'user',
+                message_type: 'user_input',
+                content: 'using messages key',
+                status: 'completed'
+              }
+            ]
+          };
+        }
+
+        throw new Error(`unexpected path: ${path}`);
+      }
+    },
+    createIdempotencyKey: () => 'unused'
+  });
+
+  const messages = await api.getMessages('conv_msg_key');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].messageId, 'msg_020');
+  assert.equal(messages[0].content, 'using messages key');
+});

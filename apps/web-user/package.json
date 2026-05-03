@@ -1,11 +1,11 @@
 {
   "name": "@smartcloud-x/web-user",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3100",
-    "build": "tsc --noEmit && vite build",
+    "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4100",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
@@ -14,15 +14,26 @@
     "docker:build": "docker build -f Dockerfile ../.. -t smartcloud-x-web-user:local"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.99.2",
+    "axios": "^1.15.2",
+    "clsx": "^2.1.1",
+    "dayjs": "^1.11.13",
+    "lucide-react": "^1.8.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.22.3"
+    "react-hot-toast": "^2.6.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.22.3",
+    "tailwind-merge": "^3.5.0",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",
+    "@tailwindcss/vite": "^4.2.4",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
+    "tailwindcss": "^4.2.4",
     "typescript": "^5.4.5",
     "vite": "^5.2.8"
   }

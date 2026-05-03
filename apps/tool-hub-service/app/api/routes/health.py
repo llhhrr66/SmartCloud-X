@@ -1,5 +1,8 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+
+from app.core.observability import metrics_content_type, metrics_payload, metric_snapshot, set_readiness_state
+from app.services.idempotency import coordinator as idempotency_coordinator
 
 router = APIRouter(tags=["health"])
 
@@ -24,6 +27,7 @@ def _runtime_snapshot() -> dict[str, object]:
 
     settings = get_settings()
     local_runtime = describe_local_runtime(settings=settings)
+    idempotency_stats = idempotency_coordinator.stats()
     return {
         "auditStore": _audit_store.describe_backend(),
         "businessToolsIdempotency": local_runtime["idempotency"],
@@ -33,8 +37,16 @@ def _runtime_snapshot() -> dict[str, object]:
             "baseUrl": settings.business_tools_base_url if settings.business_tools_transport == "http" else None,
             "internalApiPrefix": settings.business_tools_internal_api_prefix,
             "degradedLocalFallbackEnabled": settings.app_env in {"local", "dev", "test"},
+            "strictRemoteDiscoveryEnabled": bool(
+                settings.business_tools_transport == "http" and settings.business_tools_discovery_strict
+            ),
             "dependencyReadiness": _business_tools_client.dependency_readiness(),
         },
+        "toolHubIdempotency": {
+            "ttlSeconds": idempotency_coordinator.ttl_seconds,
+            **idempotency_stats,
+        },
+        "metrics": metric_snapshot(),
     }
 
 
@@ -50,6 +62,7 @@ def _degraded_components(runtime: dict[str, object]) -> list[str]:
 def healthz() -> dict[str, object]:
     runtime = _runtime_snapshot()
     degraded_components = _degraded_components(runtime)
+    set_readiness_state(not degraded_components)
     return {
         "status": "degraded" if degraded_components else "ok",
         "service": "tool-hub-service",
@@ -58,10 +71,16 @@ def healthz() -> dict[str, object]:
     }
 
 
+@router.get("/metrics")
+def metrics() -> Response:
+    return Response(content=metrics_payload(), media_type=metrics_content_type())
+
+
 @router.get("/readyz")
 def readyz() -> JSONResponse:
     runtime = _runtime_snapshot()
     not_ready_components = _degraded_components(runtime)
+    set_readiness_state(not not_ready_components)
     payload = {
         "status": "ready" if not not_ready_components else "not_ready",
         "service": "tool-hub-service",

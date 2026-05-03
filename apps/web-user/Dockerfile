@@ -18,6 +18,10 @@ ENV VITE_SSE_HEARTBEAT_SECONDS=${VITE_SSE_HEARTBEAT_SECONDS}
 
 COPY tsconfig.base.json /app/tsconfig.base.json
 COPY apps/web-user/package.json apps/web-user/package-lock.json apps/web-user/tsconfig.json apps/web-user/vite.config.ts apps/web-user/index.html ./
+COPY packages/frontend-sdk/src /app/packages/frontend-sdk/src
+COPY packages/common-schemas/src /app/packages/common-schemas/src
+COPY packages/common/src /app/packages/common/src
+COPY packages/common-auth/src /app/packages/common-auth/src
 COPY apps/web-user/public ./public
 COPY apps/web-user/src ./src
 

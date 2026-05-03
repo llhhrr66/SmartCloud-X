@@ -40,6 +40,61 @@ paths:
                     - http://localhost:5173
         '503':
           $ref: ./components.openapi.yaml#/components/responses/ServiceUnavailable
+  /readyz:
+    parameters:
+      - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
+    get:
+      tags: [health]
+      operationId: rag_readyz
+      summary: Check RAG runtime readiness for traffic.
+      description: Readiness route for the current RAG runtime. The top-level readiness shape is frozen through the shared schema, while nested cache, provider, and upstream knowledge dependency details remain additive owner evidence. This route must not be read as proof that every degraded upstream path has been eliminated; the service may still return in-band degraded retrieval results on business routes.
+      x-owner-service: rag-service
+      x-permission-code: service:internal.call
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      x-idempotency-required: false
+      x-rate-limit-scope: internal
+      responses:
+        '200':
+          description: RAG runtime is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: ready
+                service: rag-service
+                runtime_mode: shared-backend
+                not_ready_components: []
+                runtime:
+                  knowledgeService:
+                    dependencyReadiness:
+                      ready: true
+                      status: ready
+                      mode: http
+                      service: knowledge-service
+                      httpStatus: 200
+                      notReadyComponents: []
+        '503':
+          description: RAG runtime is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: ./components.openapi.yaml#/components/schemas/RuntimeReadinessStatus
+              example:
+                status: not_ready
+                service: rag-service
+                runtime_mode: mixed
+                not_ready_components: [knowledgeService]
+                runtime:
+                  knowledgeService:
+                    dependencyReadiness:
+                      ready: false
+                      status: not_ready
+                      mode: http
+                      service: knowledge-service
+                      httpStatus: 503
+                      notReadyComponents: [vectorStore]
+                      error: upstream not ready
   /metrics:
     parameters:
       - $ref: ./components.openapi.yaml#/components/parameters/XCallerServiceHeader
@@ -87,7 +142,7 @@ paths:
       tags: [retrieval]
       operationId: rag_retrieve
       summary: Execute the baseline retrieval flow and return citations.
-      description: Request and response DTO details remain downstream-owned, but the route, method, shared headers, and envelope shape are reserved here.
+      description: Current code has stabilized a minimal set of retrieval result fields for orchestrator/gateway integration. This OpenAPI baseline freezes only the shared request headers, envelope shape, and response keys `rewrittenQuery`, `degraded`, `degradationNote`, `backendUsed`, `sources`, and compatibility `citations`. Remaining request-body fields and any additive response metadata remain owner-defined and must not be interpreted as proof that every retrieval strategy or upstream topology is standardized.
       x-owner-service: rag-service
       x-permission-code: service:internal.call
       x-error-codes: [RAG_RETRIEVAL_UNAVAILABLE, VALIDATION_ERROR]
@@ -103,13 +158,50 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/OpaqueObject'
+            example:
+              query: 怎么排查 GPU 驱动异常？
+              conversationId: conv_001
+              tenantId: default
+              topK: 5
+              domainHints: [technical_support]
       responses:
         '200':
           description: Retrieval response envelope. The service may return degraded results in-band instead of surfacing transport failures.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ObjectEnvelope'
+                $ref: '#/components/schemas/RagRetrievalResultEnvelope'
+              example:
+                success: true
+                requestId: req_rag_001
+                trace:
+                  requestId: req_rag_001
+                  traceId: trace_rag_001
+                  conversationId: conv_001
+                  tenantId: default
+                  callerService: orchestrator-service
+                data:
+                  rewrittenQuery: GPU 驱动异常 排查 最佳实践
+                  degraded: false
+                  degradationNote: null
+                  backendUsed: knowledge-service-search
+                  sources:
+                    - sourceId: src_doc_001_chunk_003
+                      sourceType: knowledge_base
+                      title: gpu deployment guide
+                      docId: doc_001
+                      chunkId: chunk_003
+                      score: 0.92
+                      uri: kb://technical_support/doc_001#chunk_003
+                      snippet: 建议优先检查驱动版本和 CUDA 兼容性。
+                      backendUsed: knowledge-service-search
+                      domain: technical_support
+                  citations:
+                    - id: cite_001
+                      title: gpu deployment guide
+                      source_type: knowledge_base
+                      doc_id: doc_001
+                      chunk_id: chunk_003
         '400':
           $ref: ./components.openapi.yaml#/components/responses/ValidationError
   /api/rag/v1/diagnose:
@@ -184,3 +276,10 @@ components:
           properties:
             data:
               $ref: '#/components/schemas/OpaqueObject'
+    RagRetrievalResultEnvelope:
+      allOf:
+        - $ref: ./components.openapi.yaml#/components/schemas/ApiEnvelope
+        - type: object
+          properties:
+            data:
+              $ref: ./components.openapi.yaml#/components/schemas/RagRetrievalResult

@@ -13,8 +13,10 @@ from business_tools import (  # noqa: E402
     get_query_cache_store,
 )
 from app.core.business_tools_sdk import reset_local_runtime_state  # noqa: E402
+from app.core.observability import clear_in_memory_spans  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.api.routes.tools import _audit_store  # noqa: E402
+from app.services.idempotency import coordinator as idempotency_coordinator  # noqa: E402
 def _remove_degraded_spool(path_value: str | None) -> None:
     if not path_value:
         return
@@ -44,4 +46,6 @@ def pytest_runtest_setup(item) -> None:  # pragma: no cover - pytest hook
     configure_idempotency_store(persistence_path=None)
     configure_query_cache(enabled=True, ttl_cap_seconds=300, persistence_path=None)
     reset_local_runtime_state()
+    clear_in_memory_spans()
+    idempotency_coordinator.clear()
     _audit_store.clear()

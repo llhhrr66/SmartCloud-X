@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartcloud-x.local/schemas/internal/rag/retrieval-result.schema.json",
+  "title": "RagRetrievalResult",
+  "type": "object",
+  "required": [
+    "rewrittenQuery",
+    "degraded",
+    "backendUsed",
+    "sources"
+  ],
+  "properties": {
+    "rewrittenQuery": {
+      "type": "string",
+      "minLength": 1
+    },
+    "degraded": {
+      "type": "boolean"
+    },
+    "degradationNote": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "backendUsed": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceId",
+          "sourceType",
+          "title"
+        ],
+        "properties": {
+          "sourceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "knowledge_base",
+              "tool",
+              "mixed"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "docId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "chunkId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "snippet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "backendUsed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "source_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "knowledge_base",
+              "tool",
+              "mixed"
+            ]
+          },
+          "doc_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "chunk_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

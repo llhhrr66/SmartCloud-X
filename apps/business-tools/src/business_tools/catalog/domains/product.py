@@ -29,9 +29,38 @@ def _product_catalog_builder(request: ToolInvocationRequest) -> tuple[str, dict[
     )
     if rows:
         families = [r["product_family"] for r in rows]
+
+        # Enrich each family with instance specs from DB
+        family_details: list[dict[str, Any]] = []
+        for family in families:
+            specs = query_all(
+                "SELECT instance_type, vcpu, memory_gb, gpu_model, gpu_count, network_gbps "
+                "FROM product_instance_specs WHERE status = 'available' "
+                "AND product_id IN (SELECT product_id FROM product_catalog WHERE product_family = :fam AND status = 'active') "
+                "ORDER BY vcpu ASC",
+                {"fam": family},
+            )
+            if specs:
+                family_details.append({
+                    "product_family": family,
+                    "specs": [
+                        {
+                            "instance_type": s["instance_type"],
+                            "vcpu": s["vcpu"],
+                            "memory_gb": s["memory_gb"],
+                            "gpu_model": s.get("gpu_model"),
+                            "gpu_count": s.get("gpu_count", 0),
+                            "network_gbps": s.get("network_gbps", 0),
+                        }
+                        for s in specs
+                    ],
+                })
+            else:
+                family_details.append({"product_family": family, "specs": []})
+
         return _with_result(
-            "已整理产品族和部署选型建议。",
-            {"matched_query": query, "product_families": families, "next_step": "结合 RAG 文档补充规格建议"},
+            "已整理产品族和规格详情。",
+            {"matched_query": query, "product_families": families, "family_details": family_details},
             "db://product-catalog/families",
         )
 

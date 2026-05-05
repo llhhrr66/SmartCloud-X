@@ -482,18 +482,64 @@ def get_promotion_link(
 
 
 @router.post("/marketing/posters")
-def create_poster_task(
+async def create_poster_task(
     payload: CreatePosterTaskRequest,
     request: Request,
     user: CurrentUserContext = Depends(require_user_permissions("user:marketing.write")),
 ) -> JSONResponse:
-    return _timed_call(
-        request,
-        "poster_create",
-        "poster",
-        lambda trace: _create_poster_task_response(trace, user, payload),
-        attributes_factory=lambda _trace: {"user_id": user.user_id, "tenant_id": user.tenant_id, "campaign_id": payload.campaign_id},
-    )
+    trace = build_trace_context(request)
+    request_id = trace.request_id or ""
+    idempotency_key = trace.idempotency_key
+    started = perf_counter()
+    attributes = {"user_id": user.user_id, "tenant_id": user.tenant_id, "campaign_id": payload.campaign_id}
+    with start_span(
+        "marketing.poster_create",
+        attributes={"operation": "poster_create", "request_id": trace.request_id, "trace_id": trace.trace_id, **attributes},
+    ) as span:
+        response = get_marketing_store().create_poster_task(
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
+        mongo_runtime = get_marketing_mongo_runtime()
+        if getattr(mongo_runtime, "enabled", True) and response.status == "queued":
+            task_record = get_marketing_store().get_poster_task(user_id=user.user_id, tenant_id=user.tenant_id, task_id=response.task_id)
+            if task_record is not None:
+                try:
+                    await mongo_runtime.upsert_asset(task_record)
+                except Exception as exc:
+                    set_span_attributes(span, {"status": "error", "error_type": exc.__class__.__name__})
+                    marketing_mongodb_operations_total.labels(operation="upsert_asset", status="error").inc()
+                    marketing_upstream_errors_total.labels(backend="mongodb", error_type=exc.__class__.__name__).inc()
+                    get_marketing_store().delete_poster_task(response.task_id)
+                    raise ServiceError(503, 5030001, "poster asset document store unavailable", error_type=exc.__class__.__name__) from exc
+                marketing_mongodb_operations_total.labels(operation="upsert_asset", status="success").inc()
+        if response.status == "queued":
+            celery_enabled = bool(get_settings().celery_broker_url and get_settings().celery_result_backend)
+            if celery_enabled:
+                with start_span(
+                    "marketing.celery_enqueue",
+                    attributes={"operation": "celery_enqueue", "trace_id": trace.trace_id, "task_id": response.task_id},
+                ) as enqueue_span:
+                    try:
+                        generate_poster_task_job.apply_async(args=[response.task_id])
+                    except Exception as exc:
+                        set_span_attributes(enqueue_span, {"status": "error", "error_type": exc.__class__.__name__})
+                        marketing_celery_operations_total.labels(operation="enqueue", status="error").inc()
+                        marketing_upstream_errors_total.labels(backend="celery", error_type=exc.__class__.__name__).inc()
+                        raise ServiceError(503, 5030001, "poster task queue unavailable", error_type=exc.__class__.__name__) from exc
+                    set_span_attributes(enqueue_span, {"status": "ok"})
+                    marketing_celery_operations_total.labels(operation="enqueue", status="success").inc()
+            else:
+                try:
+                    get_marketing_store().process_poster_task(response.task_id)
+                except Exception:
+                    pass
+                marketing_celery_operations_total.labels(operation="poster_inline_complete", status="success").inc()
+    observe_duration("poster_create", perf_counter() - started)
+    record_request("poster_create", "success", "poster")
+    return _canonical_success(request_id, response.model_dump(mode="json"), status_code=202)
 
 
 @router.get("/marketing/posters")
@@ -567,7 +613,7 @@ def get_poster_result(
     )
 
 
-def _create_poster_task_response(trace, user: CurrentUserContext, payload: CreatePosterTaskRequest) -> JSONResponse:
+async def _create_poster_task_response(trace, user: CurrentUserContext, payload: CreatePosterTaskRequest) -> JSONResponse:
     request_id = trace.request_id or ""
     idempotency_key = trace.idempotency_key
     response = get_marketing_store().create_poster_task(
@@ -581,7 +627,7 @@ def _create_poster_task_response(trace, user: CurrentUserContext, payload: Creat
         task_record = get_marketing_store().get_poster_task(user_id=user.user_id, tenant_id=user.tenant_id, task_id=response.task_id)
         if task_record is not None:
             try:
-                _run_async(mongo_runtime.upsert_asset(task_record))
+                await mongo_runtime.upsert_asset(task_record)
             except Exception as exc:
                 marketing_mongodb_operations_total.labels(operation="upsert_asset", status="error").inc()
                 marketing_upstream_errors_total.labels(backend="mongodb", error_type=exc.__class__.__name__).inc()
@@ -666,10 +712,10 @@ def _timed_call(
     request: Request,
     operation: str,
     resource_type: str,
-    callback: Callable[[Any], JSONResponse],
+    callback: Callable[[Any], Any],
     *,
     attributes_factory: Callable[[Any], dict[str, Any]] | None = None,
-) -> JSONResponse:
+) -> Any:
     trace = build_trace_context(request)
     started = perf_counter()
     attributes = attributes_factory(trace) if attributes_factory else {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
+from typing import Literal
 
 from app.models.orchestration import AgentName, SceneName
 
@@ -35,13 +36,13 @@ AGENT_REGISTRY: dict[AgentName, dict[str, object]] = {
         "display_name": "Product_Tech_Agent",
         "description": "处理产品咨询、云服务器、GPU、部署与技术排障。",
         "supported_scenes": ["customer_service", "technical_support", "research"],
-        "allowed_tools": [
-            "product.catalog_lookup",
-            "product.recommend_instance",
-            "support.playbook_search",
-            "support.query_service_status",
-            "support.handoff_brief",
-        ],
+        "allowed_tools": {
+            "product.catalog_lookup": "allow",
+            "product.recommend_instance": "allow",
+            "support.playbook_search": "allow",
+            "support.query_service_status": "allow",
+            "support.handoff_brief": "allow",
+        },
         "fallback_agent": "orchestrator",
     },
     "finance_order_agent": {
@@ -49,18 +50,18 @@ AGENT_REGISTRY: dict[AgentName, dict[str, object]] = {
         "display_name": "Finance_Order_Agent",
         "description": "处理账单、订单、发票、退款和工单相关问题。",
         "supported_scenes": ["billing", "customer_service"],
-        "allowed_tools": [
-            "billing.query_statement",
-            "billing.query_instance_cost",
-            "order.query_order",
-            "billing.create_invoice",
-            "invoice.query_invoice",
-            "order.create_refund",
-            "ticket.create",
-            "ticket.reply",
-            "ticket.query_ticket",
-            "support.handoff_brief",
-        ],
+        "allowed_tools": {
+            "billing.query_statement": "allow",
+            "billing.query_instance_cost": "allow",
+            "order.query_order": "allow",
+            "billing.create_invoice": "ask",
+            "invoice.query_invoice": "allow",
+            "order.create_refund": "ask",
+            "ticket.create": "ask",
+            "ticket.reply": "ask",
+            "ticket.query_ticket": "allow",
+            "support.handoff_brief": "allow",
+        },
         "fallback_agent": "orchestrator",
     },
     "icp_service_agent": {
@@ -68,13 +69,13 @@ AGENT_REGISTRY: dict[AgentName, dict[str, object]] = {
         "display_name": "ICP_Service_Agent",
         "description": "处理备案材料检查、流程说明与备案申请。",
         "supported_scenes": ["icp", "customer_service"],
-        "allowed_tools": [
-            "icp.material_check",
-            "icp.verify_subject",
-            "icp.submit_application",
-            "icp.query_application",
-            "support.handoff_brief",
-        ],
+        "allowed_tools": {
+            "icp.material_check": "allow",
+            "icp.verify_subject": "allow",
+            "icp.submit_application": "ask",
+            "icp.query_application": "allow",
+            "support.handoff_brief": "allow",
+        },
         "fallback_agent": "orchestrator",
     },
     "ops_marketing_agent": {
@@ -82,14 +83,14 @@ AGENT_REGISTRY: dict[AgentName, dict[str, object]] = {
         "display_name": "Ops_Marketing_Agent",
         "description": "处理活动营销、海报 brief 与推广建议。",
         "supported_scenes": ["marketing", "customer_service"],
-        "allowed_tools": [
-            "marketing.campaign_lookup",
-            "marketing.poster_brief",
-            "marketing.generate_copy",
-            "marketing.generate_promotion_link",
-            "marketing.generate_poster",
-            "support.handoff_brief",
-        ],
+        "allowed_tools": {
+            "marketing.campaign_lookup": "allow",
+            "marketing.poster_brief": "allow",
+            "marketing.generate_copy": "ask",
+            "marketing.generate_promotion_link": "ask",
+            "marketing.generate_poster": "ask",
+            "support.handoff_brief": "allow",
+        },
         "fallback_agent": "orchestrator",
     },
     "deep_research_agent": {
@@ -97,12 +98,12 @@ AGENT_REGISTRY: dict[AgentName, dict[str, object]] = {
         "display_name": "Deep_Research_Agent",
         "description": "处理技术选型、行业调研与报告生成。",
         "supported_scenes": ["research", "technical_support"],
-        "allowed_tools": [
-            "research.generate_report",
-            "research.reference_search",
-            "research.export_report",
-            "support.handoff_brief",
-        ],
+        "allowed_tools": {
+            "research.generate_report": "ask",
+            "research.reference_search": "allow",
+            "research.export_report": "ask",
+            "support.handoff_brief": "allow",
+        },
         "fallback_agent": "orchestrator",
     },
 }
@@ -137,7 +138,35 @@ _PRIMARY_AGENT_TO_SCENE: dict[AgentName, SceneName] = {
 
 
 def allowed_tools_for(agent: AgentName) -> list[str]:
-    return list(AGENT_REGISTRY[agent]["allowed_tools"])
+    """Return the list of tool names an agent may use.
+
+    Backward-compatible: handles both new dict format (allow/ask/deny)
+    and legacy list format (all treated as allow).
+    """
+    raw = AGENT_REGISTRY[agent]["allowed_tools"]
+    if isinstance(raw, dict):
+        return [name for name, perm in raw.items() if perm != "deny"]
+    # Legacy list format — all treated as allow
+    return list(raw)
+
+
+ToolPermission = Literal["allow", "ask", "deny"]
+
+
+def tool_permission_for(agent: AgentName, tool_name: str) -> ToolPermission:
+    """Return the permission level for a specific agent+tool combination.
+
+    - "allow": tool may be called without confirmation
+    - "ask":   tool requires user confirmation (preview unless _confirmed)
+    - "deny":  tool is not available to this agent
+    """
+    raw = AGENT_REGISTRY[agent]["allowed_tools"]
+    if isinstance(raw, dict):
+        return raw.get(tool_name, "deny")  # type: ignore[return-value]
+    # Legacy list format — present = allow, absent = deny
+    if tool_name in raw:
+        return "allow"
+    return "deny"
 
 
 def agent_code_for(agent: AgentName) -> str:

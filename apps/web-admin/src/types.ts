@@ -220,3 +220,41 @@ export interface LegacySource {
   tags?: string[];
   [key: string]: unknown;
 }
+
+/** Full document content from knowledge-service, used by the document viewer. */
+export interface KnowledgeDocumentContent {
+  /** knowledge-service uses camelCase aliases: id, sourceId, createdAt, updatedAt */
+  id: string;
+  sourceId: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  language?: string;
+  checksum?: string;
+  chunkIds?: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  /** Alternate snake_case keys that may appear in some API versions */
+  doc_id?: string;
+  kb_id?: string;
+  source_type?: string | null;
+  source_uri?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** FAQ document reference from L1 cache hit. */
+export interface FaqDocumentRef {
+  docId: string;
+  title: string;
+}
+
+/** Structured FAQ metadata returned alongside an L1 FAQ cache hit. */
+export interface FaqMetadata {
+  category?: string | null;
+  prerequisites?: string[];
+  documentRefs?: FaqDocumentRef[];
+  relatedTopics?: string[];
+  matchReason?: string | null;
+  tokenSaved?: number;
+}

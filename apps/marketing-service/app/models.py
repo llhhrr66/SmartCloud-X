@@ -135,6 +135,8 @@ class CreatePosterTaskRequest(BaseModel):
 
 class PosterTask(BaseModel):
     task_id: str
+    user_id: str | None = None
+    tenant_id: str | None = None
     status: Literal["queued", "running", "completed", "failed"]
     campaign_id: str
     campaign_name: str | None = None
@@ -267,7 +269,7 @@ class PosterTaskRecord(BaseModel):
     updated_at: str | None = None
 
     def to_public(self) -> PosterTask:
-        return PosterTask(task_id=self.task_id, status=self.status, campaign_id=self.campaign_id, campaign_name=self.campaign_name, theme=self.theme, slogan=self.slogan, size=self.size, created_at=self.created_at, image_url=self.image_url, error_message=self.error_message, estimated_seconds=self.estimated_seconds, updated_at=self.updated_at)
+        return PosterTask(task_id=self.task_id, user_id=self.user_id, tenant_id=self.tenant_id, status=self.status, campaign_id=self.campaign_id, campaign_name=self.campaign_name, theme=self.theme, slogan=self.slogan, size=self.size, created_at=self.created_at, image_url=self.image_url, error_message=self.error_message, estimated_seconds=self.estimated_seconds, updated_at=self.updated_at)
 
 
 class PosterIdempotencyRecord(BaseModel):

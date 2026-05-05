@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -11,6 +12,8 @@ from app.core.business_tools_sdk import (
     is_missing_tool_value,
 )
 from app.models.tools import ToolInvokeRequest, ToolInvokeResponse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,6 +71,40 @@ class ToolDispatcher:
                 details={"missing_context": missing_auth},
             )
 
+        # ── PRE_TOOL_USE hook ──
+        from app.services.hooks import HookEvent, dispatch_hook
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        if settings.tool_hooks_enabled:
+            pre_decision = dispatch_hook(
+                HookEvent.PRE_TOOL_USE,
+                definition.name,
+                request.payload,
+            )
+            if pre_decision.action == "block":
+                return ToolInvokeResponse(
+                    tool_name=definition.name,
+                    operation=request.operation,
+                    status="hook-blocked",
+                    summary=f"工具 {definition.name} 被钩子拦截：{pre_decision.message}",
+                    result={},
+                    citations=[],
+                    audit_tags=["hook-blocked"],
+                    session_context_patch={},
+                    success=False,
+                    code=4990001,
+                    message=f"hook blocked: {pre_decision.message}",
+                    provider=definition.provider,
+                    downstream_target=definition.downstream_target,
+                    auth_requirements=definition.auth_requirements,
+                )
+            if pre_decision.action == "warn":
+                logger.info("PRE hook warning for %s: %s", definition.name, pre_decision.message)
+            # Apply modified payload if hook altered it
+            if pre_decision.modified_payload is not None:
+                request = request.model_copy(update={"payload": pre_decision.modified_payload})
+
         invocation = ToolInvocationRequest(
             tool_name=definition.name,
             operation=request.operation,
@@ -80,8 +117,40 @@ class ToolDispatcher:
             result = tool.invoke(invocation)
         else:
             raise ValueError(f"Tool '{definition.name}' requires an execution adapter.")
-        return ToolInvokeResponse(
+
+        response = ToolInvokeResponse(
             **result.model_dump(),
             downstream_target=definition.downstream_target,
             auth_requirements=definition.auth_requirements,
         )
+
+        # ── POST_TOOL_USE hook ──
+        if settings.tool_hooks_enabled:
+            result_payload = result.result if result.result else {}
+            post_decision = dispatch_hook(
+                HookEvent.POST_TOOL_USE,
+                definition.name,
+                result_payload,
+            )
+            if post_decision.action == "block":
+                logger.warning("POST hook blocked result for %s: %s", definition.name, post_decision.message)
+                return ToolInvokeResponse(
+                    tool_name=definition.name,
+                    operation=request.operation,
+                    status="hook-blocked-post",
+                    summary=f"工具 {definition.name} 结果被钩子拦截：{post_decision.message}",
+                    result={},
+                    citations=result.citations,
+                    audit_tags=[*result.audit_tags, "hook-blocked-post"],
+                    session_context_patch=result.session_context_patch,
+                    success=False,
+                    code=4990002,
+                    message=f"post-hook blocked: {post_decision.message}",
+                    provider=definition.provider,
+                    downstream_target=definition.downstream_target,
+                    auth_requirements=definition.auth_requirements,
+                )
+            if post_decision.action == "warn":
+                logger.info("POST hook warning for %s: %s", definition.name, post_decision.message)
+
+        return response

@@ -640,8 +640,8 @@ def build_tools() -> list[StaticBusinessTool]:
                 "attributes.last_marketing_product_summary",
             ],
             auth_requirements=ToolAuthRequirements(
-                require_user_id=True,
-                required_permissions=["user:marketing.read"],
+                require_user_id=False,
+                required_permissions=[],
             ),
             cache_ttl_seconds=120,
             preview_builder=_campaign_lookup_builder,

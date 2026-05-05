@@ -66,6 +66,7 @@ class GatewaySettings:
     knowledge_service_base_url: str = "http://localhost:8031"
     rag_service_base_url: str = "http://localhost:8040"
     object_storage_base_url: str = ""
+    redis_url: str | None = None  # SMARTCLOUD_REDIS_URL
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -113,4 +114,5 @@ class GatewaySettings:
                 os.getenv("RAG_SERVICE_BASE_URL", "http://localhost:8040")
             ),
             object_storage_base_url=os.getenv("OBJECT_STORAGE_BASE_URL", ""),
+            redis_url=os.getenv("SMARTCLOUD_REDIS_URL"),
         )

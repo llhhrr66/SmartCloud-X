@@ -49,6 +49,7 @@ class _ConversationExchangeMixin:
                 message_request,
                 response,
                 max_recent_messages=self._max_recent_messages,
+                compaction_summary=response.compaction_summary,
             )
         )
         backend = self._maybe_restore_backend()
@@ -179,6 +180,7 @@ class _ConversationExchangeMixin:
                 message_request,
                 response,
                 max_recent_messages=self._max_recent_messages,
+                compaction_summary=response.compaction_summary,
             )
         )
         backend = self._maybe_restore_backend()

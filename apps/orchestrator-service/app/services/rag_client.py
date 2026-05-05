@@ -107,6 +107,36 @@ class RagClient:
             timeout=timeout,
         )
 
+    def faq_match(
+        self,
+        query: str,
+        *,
+        trace: TraceContext | None = None,
+        tenant_id: str | None = None,
+        authorization: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Call rag-service /faq/match for L1 FAQ cache lookup.
+
+        Returns the ``data`` dict on hit (``matched=True``), or ``None``
+        on miss or when rag-service is unavailable (fail-open).
+        """
+        try:
+            result = self._post(
+                "/faq/match",
+                {"query": query},
+                trace=trace,
+                tenant_id=tenant_id,
+                authorization=authorization,
+                timeout=timeout,
+            )
+        except RagClientError:
+            logger.warning("faq/match request failed; treating as cache miss")
+            return None
+        if result.get("matched"):
+            return result
+        return None
+
     def build_context(
         self,
         payload: dict[str, Any],

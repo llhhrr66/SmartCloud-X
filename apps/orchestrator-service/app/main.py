@@ -11,6 +11,8 @@ from app.api.routes.admin import router as admin_router
 from app.api.routes.llm_providers import router as llm_providers_router
 from app.api.routes.health import router as health_router
 from app.api.routes.orchestration import internal_router, router as orchestration_router
+from app.api.routes.tools import router as tools_router
+from app.coordinator.routes import router as coordinator_router
 from app.core.config import get_settings
 from app.core.langsmith import configure_langsmith_env
 from app.core.logging import configure_logging
@@ -66,6 +68,8 @@ app.include_router(admin_router)
 app.include_router(a2a_router)
 app.include_router(a2a_jsonrpc_router, prefix=settings.api_prefix)
 app.include_router(orchestration_router, prefix=settings.api_prefix)
+app.include_router(tools_router, prefix=settings.api_prefix)
+app.include_router(coordinator_router, prefix=settings.api_prefix)
 app.include_router(orchestration_router, prefix=settings.legacy_api_prefix, include_in_schema=False)
 app.include_router(internal_router, prefix=settings.internal_api_prefix, include_in_schema=False)
 app.include_router(llm_providers_router, include_in_schema=False)

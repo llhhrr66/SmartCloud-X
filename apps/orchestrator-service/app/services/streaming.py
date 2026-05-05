@@ -111,7 +111,7 @@ def build_sse_event_records(
             "done",
             {
                 "finish_reason": _finish_reason(response.next_action),
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "usage": _extract_usage(response),
                 "next_action": response.next_action,
                 "pending_actions": response.pending_actions,
             },
@@ -294,3 +294,34 @@ def _finish_reason(next_action: str | None) -> str:
     if next_action == "retry-or-escalate":
         return "error"
     return next_action or "stop"
+
+
+def _extract_usage(response: OrchestratorResponse) -> dict[str, int]:
+    """Extract real token usage from execution results, or estimate from context."""
+    total_prompt = 0
+    total_completion = 0
+    for execution in response.executions:
+        # Check if execution carries token usage (from compact models)
+        pt = getattr(execution, "prompt_tokens", 0) or 0
+        ct = getattr(execution, "completion_tokens", 0) or 0
+        total_prompt += pt
+        total_completion += ct
+
+    # If no real usage reported, estimate from the conversation context
+    if total_prompt == 0 and total_completion == 0:
+        from app.services.token_counter import TokenCounter
+        counter = TokenCounter()
+        # Rough estimate: sum execution summaries as prompt, final answer as completion
+        prompt_parts = []
+        for execution in response.executions:
+            prompt_parts.append(execution.reasoning_summary or "")
+            prompt_parts.append(execution.final_answer or "")
+        completion_text = response.final_response_summary or ""
+        total_prompt = counter.estimate("\n".join(prompt_parts))
+        total_completion = counter.estimate(completion_text)
+
+    return {
+        "prompt_tokens": total_prompt,
+        "completion_tokens": total_completion,
+        "total_tokens": total_prompt + total_completion,
+    }

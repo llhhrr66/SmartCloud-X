@@ -73,6 +73,7 @@ class _FakeAnswerGenerator:
         agent: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        compacted_history: str | None = None,
     ) -> _FakeCompletion | None:
         self.calls.append({"agent": agent, "messages": messages, "tools": tools})
         if self._call_index >= len(self._responses):
@@ -145,6 +146,10 @@ class _FakeSettings:
     llm_model = "test-model"
     llm_base_url = "http://localhost:1234"
     llm_timeout_seconds = 20
+    # Compaction settings
+    compact_enabled = False
+    compact_strategy = "full"
+    micro_compact_enabled = False
 
 
 def _sample_catalog() -> dict[str, _FakeBusinessTool]:

@@ -38,6 +38,22 @@ ENV_ALIASES = {
     "SMARTCLOUD_LLM_TIMEOUT_SECONDS": ("SMARTCLOUD_LLM_TIMEOUT_SECONDS",),
     "TOOL_CALL_ENABLED": ("TOOL_CALL_ENABLED",),
     "MAX_TOOL_CALL_ROUNDS": ("MAX_TOOL_CALL_ROUNDS",),
+    # Compaction config
+    "COMPACT_ENABLED": ("COMPACT_ENABLED",),
+    "COMPACT_MODEL": ("COMPACT_MODEL",),
+    "COMPACT_MIN_THRESHOLD_TOKENS": ("COMPACT_MIN_THRESHOLD_TOKENS",),
+    "COMPACT_RETAIN_RECENT_ROUNDS": ("COMPACT_RETAIN_RECENT_ROUNDS",),
+    "COMPACT_MAX_OUTPUT_TOKENS": ("COMPACT_MAX_OUTPUT_TOKENS",),
+    "COMPACT_TIMEOUT_SECONDS": ("COMPACT_TIMEOUT_SECONDS",),
+    "COMPACT_STRATEGY": ("COMPACT_STRATEGY",),
+    "MICRO_COMPACT_ENABLED": ("MICRO_COMPACT_ENABLED",),
+    "MICRO_COMPACT_TIME_GAP_MINUTES": ("MICRO_COMPACT_TIME_GAP_MINUTES",),
+    "MICRO_COMPACT_SIZE_THRESHOLD_CHARS": ("MICRO_COMPACT_SIZE_THRESHOLD_CHARS",),
+    "SESSION_MEMORY_ENABLED": ("SESSION_MEMORY_ENABLED",),
+    "SESSION_MEMORY_MIN_TOKENS_TO_INIT": ("SESSION_MEMORY_MIN_TOKENS_TO_INIT",),
+    "SESSION_MEMORY_TOKENS_BETWEEN_UPDATES": ("SESSION_MEMORY_TOKENS_BETWEEN_UPDATES",),
+    "SESSION_MEMORY_MAX_TOKENS_PER_SECTION": ("SESSION_MEMORY_MAX_TOKENS_PER_SECTION",),
+    "SESSION_MEMORY_STORE_TTL_SECONDS": ("SESSION_MEMORY_STORE_TTL_SECONDS",),
 }
 
 
@@ -176,6 +192,23 @@ class Settings(BaseModel):
     release_readiness_required_components: list[str] = Field(default_factory=list)
     local_fallback_components: list[str] = Field(default_factory=list)
 
+    # --- Compaction settings ---
+    compact_enabled: bool = Field(default=True, alias="COMPACT_ENABLED")
+    compact_model: str | None = Field(default=None, alias="COMPACT_MODEL")
+    compact_min_threshold_tokens: int = Field(default=60000, alias="COMPACT_MIN_THRESHOLD_TOKENS")
+    compact_retain_recent_rounds: int = Field(default=3, alias="COMPACT_RETAIN_RECENT_ROUNDS")
+    compact_max_output_tokens: int = Field(default=4096, alias="COMPACT_MAX_OUTPUT_TOKENS")
+    compact_timeout_seconds: int = Field(default=30, alias="COMPACT_TIMEOUT_SECONDS")
+    compact_strategy: Literal["full", "partial", "up_to"] = Field(default="full", alias="COMPACT_STRATEGY")
+    micro_compact_enabled: bool = Field(default=True, alias="MICRO_COMPACT_ENABLED")
+    micro_compact_time_gap_minutes: int = Field(default=60, alias="MICRO_COMPACT_TIME_GAP_MINUTES")
+    micro_compact_size_threshold_chars: int = Field(default=3000, alias="MICRO_COMPACT_SIZE_THRESHOLD_CHARS")
+    session_memory_enabled: bool = Field(default=True, alias="SESSION_MEMORY_ENABLED")
+    session_memory_min_tokens_to_init: int = Field(default=8000, alias="SESSION_MEMORY_MIN_TOKENS_TO_INIT")
+    session_memory_tokens_between_updates: int = Field(default=4000, alias="SESSION_MEMORY_TOKENS_BETWEEN_UPDATES")
+    session_memory_max_tokens_per_section: int = Field(default=2000, alias="SESSION_MEMORY_MAX_TOKENS_PER_SECTION")
+    session_memory_store_ttl_seconds: int = Field(default=604800, alias="SESSION_MEMORY_STORE_TTL_SECONDS")
+
     @field_validator("api_prefix", "legacy_api_prefix", "internal_api_prefix", "tool_hub_internal_api_prefix", "rag_service_api_prefix")
     @classmethod
     def _validate_prefix(cls, value: str) -> str:
@@ -196,6 +229,16 @@ class Settings(BaseModel):
         "review_final_answer_max_chars",
         "llm_timeout_seconds",
         "max_tool_call_rounds",
+        "compact_min_threshold_tokens",
+        "compact_retain_recent_rounds",
+        "compact_max_output_tokens",
+        "compact_timeout_seconds",
+        "micro_compact_time_gap_minutes",
+        "micro_compact_size_threshold_chars",
+        "session_memory_min_tokens_to_init",
+        "session_memory_tokens_between_updates",
+        "session_memory_max_tokens_per_section",
+        "session_memory_store_ttl_seconds",
     )
     @classmethod
     def _validate_positive(cls, value: int) -> int:
@@ -411,6 +454,22 @@ def build_settings(
         "BUSINESS_TOOLS_REDIS_NAMESPACE",
         "TOOL_CALL_ENABLED",
         "MAX_TOOL_CALL_ROUNDS",
+        # Compaction
+        "COMPACT_ENABLED",
+        "COMPACT_MODEL",
+        "COMPACT_MIN_THRESHOLD_TOKENS",
+        "COMPACT_RETAIN_RECENT_ROUNDS",
+        "COMPACT_MAX_OUTPUT_TOKENS",
+        "COMPACT_TIMEOUT_SECONDS",
+        "COMPACT_STRATEGY",
+        "MICRO_COMPACT_ENABLED",
+        "MICRO_COMPACT_TIME_GAP_MINUTES",
+        "MICRO_COMPACT_SIZE_THRESHOLD_CHARS",
+        "SESSION_MEMORY_ENABLED",
+        "SESSION_MEMORY_MIN_TOKENS_TO_INIT",
+        "SESSION_MEMORY_TOKENS_BETWEEN_UPDATES",
+        "SESSION_MEMORY_MAX_TOKENS_PER_SECTION",
+        "SESSION_MEMORY_STORE_TTL_SECONDS",
     }
     for key in passthrough_keys:
         if key in env and env[key] not in {"", None}:

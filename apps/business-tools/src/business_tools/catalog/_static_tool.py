@@ -82,6 +82,43 @@ class StaticBusinessTool(BusinessTool):
             )
 
         builder = self._preview_builder if request.operation == "preview" else self._execute_builder
+
+        # ── PRE_TOOL_USE hook (business-tools layer) ──
+        try:
+            from business_tools.hooks import HookEvent, dispatch_hook
+            pre_decision = dispatch_hook(HookEvent.PRE_TOOL_USE, self.definition.name, request.payload)
+            if pre_decision.action == "block":
+                return ToolExecutionResult(
+                    tool_name=self.definition.name,
+                    operation=request.operation,
+                    status="hook-blocked",
+                    summary=f"工具 {self.definition.name} 被钩子拦截：{pre_decision.message}",
+                    result={},
+                    citations=[],
+                    audit_tags=[*audit_tags, "hook-blocked"],
+                    session_context_patch={},
+                    success=False,
+                    code=4990001,
+                    message=f"hook blocked: {pre_decision.message}",
+                    provider=self.definition.provider,
+                    idempotency_key=request.context.idempotency_key,
+                )
+            if pre_decision.action == "warn":
+                import logging
+                logging.getLogger(__name__).info(
+                    "PRE hook warning for %s: %s", self.definition.name, pre_decision.message,
+                )
+            if pre_decision.modified_payload is not None:
+                # Patch the request payload with the modified one
+                request = ToolInvocationRequest(
+                    tool_name=request.tool_name,
+                    operation=request.operation,
+                    payload=pre_decision.modified_payload,
+                    context=request.context,
+                )
+        except ImportError:
+            pass  # hooks module not available — skip
+
         summary, payload, citations = builder(request)
         compensation = _build_compensation(self.definition, request, payload)
         session_context_patch = _build_session_context_patch(self.definition, request, payload)
@@ -223,6 +260,39 @@ class StaticBusinessTool(BusinessTool):
             idempotency_key=request.context.idempotency_key,
             user_action_hint=preview_confirmation_hint,
         )
+
+        # ── POST_TOOL_USE hook (business-tools layer) ──
+        try:
+            from business_tools.hooks import HookEvent, dispatch_hook
+            result_payload = result.result if result.result else {}
+            post_decision = dispatch_hook(HookEvent.POST_TOOL_USE, self.definition.name, result_payload)
+            if post_decision.action == "block":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "POST hook blocked result for %s: %s", self.definition.name, post_decision.message,
+                )
+                return ToolExecutionResult(
+                    tool_name=self.definition.name,
+                    operation=request.operation,
+                    status="hook-blocked-post",
+                    summary=f"工具 {self.definition.name} 结果被钩子拦截：{post_decision.message}",
+                    result={},
+                    citations=citations,
+                    audit_tags=[*audit_tags, "hook-blocked-post"],
+                    session_context_patch=session_context_patch,
+                    success=False,
+                    code=4990002,
+                    message=f"post-hook blocked: {post_decision.message}",
+                    provider=self.definition.provider,
+                    idempotency_key=request.context.idempotency_key,
+                )
+            if post_decision.action == "warn":
+                import logging
+                logging.getLogger(__name__).info(
+                    "POST hook warning for %s: %s", self.definition.name, post_decision.message,
+                )
+        except ImportError:
+            pass  # hooks module not available — skip
         if request.operation == "execute" and self.definition.mode == "write" and request.context.idempotency_key:
             return get_idempotency_store().save(
                 self.definition.name,

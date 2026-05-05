@@ -58,6 +58,7 @@ class ConversationContextMerger:
         response: OrchestratorResponse,
         *,
         max_recent_messages: int,
+        compaction_summary: str | None = None,
     ) -> SessionContext:
         merged = ConversationContextMerger.merge_session_context(
             base_context,
@@ -70,6 +71,7 @@ class ConversationContextMerger:
             merged.history_summary,
             message_request.user_query,
             assistant_summary,
+            compaction_summary=compaction_summary,
         )
         merged.recent_messages = ConversationContextMerger._merge_recent_messages(
             merged.recent_messages,
@@ -155,7 +157,15 @@ class ConversationContextMerger:
         existing: str | None,
         user_query: str,
         assistant_summary: str,
+        *,
+        compaction_summary: str | None = None,
     ) -> str:
+        # If a compaction summary is available, use it directly instead of
+        # the old pipe-delimited approach.  The compaction summary already
+        # contains all the key information in a structured format.
+        if compaction_summary and compaction_summary.strip():
+            return compaction_summary.strip()[:2000]
+
         parts = [part.strip() for part in (existing or "").split(" | ") if part.strip()]
         parts.extend(
             [

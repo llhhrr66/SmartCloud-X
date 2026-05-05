@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { AdminProfile } from "../types";
 
-export type AdminView = "dashboard" | "knowledge" | "documents" | "imports" | "retrieval" | "agents" | "marketing" | "audit" | "llm-providers";
+export type AdminView = "dashboard" | "knowledge" | "documents" | "imports" | "retrieval" | "agents" | "marketing" | "audit" | "llm-providers" | "document-viewer";
 
 const navItems: Array<{ id: AdminView; label: string; icon: string; permission?: string }> = [
   { id: "dashboard", label: "运营总览", icon: "◉", permission: "admin:ops.read" },

@@ -124,6 +124,9 @@ class Settings(BaseModel):
     runtime_mode: Literal["shared-backend", "mixed", "local-fallback"] = "local-fallback"
     release_readiness_required_components: list[str] = Field(default_factory=list)
     local_fallback_components: list[str] = Field(default_factory=list)
+    # ── Hook system ──
+    tool_hooks_enabled: bool = Field(default=True, alias="TOOL_HOOKS_ENABLED")
+    tool_hooks_config_path: str = Field(default="", alias="TOOL_HOOKS_CONFIG_PATH")
 
     @field_validator(
         "api_prefix",
@@ -274,6 +277,8 @@ def build_settings(
         "BUSINESS_TOOLS_IDEMPOTENCY_STORE_PATH",
         "BUSINESS_TOOLS_QUERY_CACHE_STORE_PATH",
         "BUSINESS_TOOLS_REDIS_NAMESPACE",
+        "TOOL_HOOKS_ENABLED",
+        "TOOL_HOOKS_CONFIG_PATH",
     }
     for key in passthrough_keys:
         if key in env and env[key] not in {"", None}:

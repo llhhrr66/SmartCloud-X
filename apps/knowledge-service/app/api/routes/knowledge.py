@@ -62,6 +62,15 @@ def list_documents(
     return ApiEnvelope(data=documents, requestId=trace.request_id, trace=trace)
 
 
+@router.get("/documents/{doc_id}", response_model=ApiEnvelope)
+def get_document(request: Request, doc_id: str) -> ApiEnvelope[dict] | JSONResponse:
+    trace = build_trace_context(request)
+    document = get_repository().get_document(doc_id)
+    if document is None:
+        return error_response(trace, 404, "knowledge.document_not_found", f"Document {doc_id} not found.")
+    return ApiEnvelope(data=document, requestId=trace.request_id, trace=trace)
+
+
 @router.get("/chunks", response_model=ApiEnvelope)
 def list_chunks(
     request: Request,

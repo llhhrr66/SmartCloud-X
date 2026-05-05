@@ -251,6 +251,7 @@ class OrchestrationResponseBuilder:
                 message_request,
                 response,
                 max_recent_messages=20,
+                compaction_summary=response.compaction_summary,
             )
         if (
             message_request.user_profile.account_id is not None

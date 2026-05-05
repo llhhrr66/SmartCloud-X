@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app.core.business_tools_sdk import ToolDefinition, build_catalog
 from app.core.config import get_settings
 from app.models.orchestration import (
@@ -19,6 +21,10 @@ from app.models.orchestration import (
 )
 from app.services.agent_config_store import AgentConfigStore
 from app.services.tool_hub_client import ToolHubClient, ToolHubDiscoveryUnavailableError
+
+from .llm_router import LLMRouter
+
+logger = logging.getLogger(__name__)
 
 from .agent_registry import (
     AGENT_KEYWORDS,
@@ -63,6 +69,7 @@ class AgentRouter:
         self._settings = get_settings()
         self._agent_config_store = agent_config_store or AgentConfigStore()
         self._remote_tool_definitions: dict[str, ToolDefinition] | None = None
+        self._llm_router = LLMRouter()
 
     # ------------------------------------------------------------------
     # Public API
@@ -72,6 +79,16 @@ class AgentRouter:
         text = request.user_query.lower()
         explicit_tool_candidates = expand_tool_candidates(request.tool_candidates, self._tool_definitions())
         signals = build_signals(text)
+
+        # Try LLM-driven routing first; fall back to keyword signals on failure
+        _llm_routing = None
+        if self._settings.llm_ready():
+            _llm_routing = self._llm_router.route(request)
+            if _llm_routing is not None:
+                logger.info("LLM routing: primary=%s confidence=%.2f", _llm_routing["primary_agent"], _llm_routing["confidence"])
+                llm_signals = self._llm_router.to_signals(_llm_routing)
+                if llm_signals:
+                    signals = llm_signals
         primary = self._select_primary_agent(
             signals, request.preferred_agents, request.scene, explicit_tool_candidates, text=text
         )

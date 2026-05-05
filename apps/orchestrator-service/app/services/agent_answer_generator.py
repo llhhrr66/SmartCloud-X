@@ -4,10 +4,10 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse
 
 from app.core.config import Settings, get_settings
 from app.models.orchestration import ToolInvocation
+from app.services._compact_utils import normalize_openai_base_url
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ class AgentAnswerGenerator(Protocol):
         next_agent: str | None,
         fallback_answer: str | None,
         tool_calls: list[ToolInvocation],
+        compacted_history: str | None = None,
     ) -> str | None: ...
 
     def create_with_tools(
@@ -31,6 +32,7 @@ class AgentAnswerGenerator(Protocol):
         agent: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        compacted_history: str | None = None,
     ) -> Any: ...
 
 
@@ -50,28 +52,39 @@ class OpenAICompatibleAgentAnswerGenerator:
         next_agent: str | None,
         fallback_answer: str | None,
         tool_calls: list[ToolInvocation],
+        compacted_history: str | None = None,
     ) -> str | None:
         client = self._ensure_client()
         if client is None:
             return None
 
         fallback = fallback_answer or "请基于工具结果给出简洁、准确的中文答复。"
-        messages = [
+
+        messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": self._system_prompt_for(agent),
             },
-            {
-                "role": "user",
-                "content": self._build_user_content(
-                    user_query=user_query,
-                    status=status,
-                    next_agent=next_agent,
-                    fallback=fallback,
-                    tool_calls=tool_calls,
-                ),
-            },
         ]
+
+        # Inject compacted history as a system-level context message
+        if compacted_history and compacted_history.strip():
+            messages.append({
+                "role": "system",
+                "content": f"[对话历史压缩摘要]\n\n{compacted_history.strip()}",
+                "name": "compacted_history",
+            })
+
+        messages.append({
+            "role": "user",
+            "content": self._build_user_content(
+                user_query=user_query,
+                status=status,
+                next_agent=next_agent,
+                fallback=fallback,
+                tool_calls=tool_calls,
+            ),
+        })
 
         try:
             completion = client.chat.completions.create(
@@ -106,6 +119,7 @@ class OpenAICompatibleAgentAnswerGenerator:
         agent: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        compacted_history: str | None = None,
     ) -> Any:
         """Call LLM with ``tools=`` bound for function calling.
 
@@ -117,7 +131,17 @@ class OpenAICompatibleAgentAnswerGenerator:
             return None
 
         system_prompt = self._system_prompt_for(agent)
-        full_messages = [{"role": "system", "content": system_prompt}, *messages]
+        full_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+        # Inject compacted history as a system-level context message
+        if compacted_history and compacted_history.strip():
+            full_messages.append({
+                "role": "system",
+                "content": f"[对话历史压缩摘要]\n\n{compacted_history.strip()}",
+                "name": "compacted_history",
+            })
+
+        full_messages.extend(messages)
 
         try:
             completion = client.chat.completions.create(
@@ -173,25 +197,13 @@ class OpenAICompatibleAgentAnswerGenerator:
             "timeout": float(self._settings.llm_timeout_seconds),
             "max_retries": 1,
         }
-        normalized_base_url = self._normalized_base_url(base_url)
+        normalized_base_url = normalize_openai_base_url(base_url)
         if normalized_base_url:
             kwargs["base_url"] = normalized_base_url
 
         self._client = OpenAI(**kwargs)
         self._model = model
         return self._client
-
-    @staticmethod
-    def _normalized_base_url(base_url: str | None) -> str | None:
-        if base_url is None:
-            return None
-        normalized = base_url.strip().rstrip("/")
-        if not normalized:
-            return None
-        parsed = urlparse(normalized)
-        if parsed.path in {"", "/"}:
-            return f"{normalized}/v1"
-        return normalized
 
     def _system_prompt_for(self, agent: str) -> str:
         agent_dir = {

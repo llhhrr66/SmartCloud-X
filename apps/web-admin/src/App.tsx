@@ -13,12 +13,14 @@ import { AgentsPage } from "./pages/AgentsPage";
 import { MarketingPage } from "./pages/MarketingPage";
 import { AuditRuntimePage } from "./pages/AuditRuntimePage";
 import { LlmProvidersPage } from "./pages/LlmProvidersPage";
+import { DocumentViewerPage } from "./pages/DocumentViewerPage";
 
-const views: AdminView[] = ["dashboard", "knowledge", "documents", "imports", "retrieval", "agents", "marketing", "audit", "llm-providers"];
+const views: AdminView[] = ["dashboard", "knowledge", "documents", "imports", "retrieval", "agents", "marketing", "audit", "llm-providers", "document-viewer"];
 
 function readHash(): AdminView {
-  const candidate = window.location.hash.replace(/^#\/?/, "") as AdminView;
-  return views.includes(candidate) ? candidate : "dashboard";
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  const viewPart = raw.split(/[?&#]/)[0] as AdminView;
+  return views.includes(viewPart) ? viewPart : "dashboard";
 }
 
 function AppInner() {
@@ -47,6 +49,7 @@ function AppInner() {
       case "marketing": return <MarketingPage />;
       case "audit": return <AuditRuntimePage />;
       case "llm-providers": return <LlmProvidersPage />;
+      case "document-viewer": return <DocumentViewerPage />;
       default: return <DashboardPage />;
     }
   }, [active]);

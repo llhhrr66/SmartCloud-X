@@ -15,6 +15,20 @@ except Exception:
     Minio = None
 
 
+# Map mime types to file extensions for object naming
+_MIME_EXT_MAP: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+def _ext_for_mime(mime_type: str) -> str:
+    """Return the file extension for a given MIME type, defaulting to .png."""
+    return _MIME_EXT_MAP.get(mime_type, ".png")
+
+
 @dataclass
 class PosterArtifactStorage:
     """Wraps MinIO interactions for poster image artefacts.
@@ -68,7 +82,7 @@ class PosterArtifactStorage:
                 set_span_attributes(span, {"status": "error", "error_type": exc.__class__.__name__})
                 return {"ready": False, "configured": True, "detail": f"error:{exc.__class__.__name__}"}
 
-    def object_exists(self, task_id: str) -> bool | None:
+    def object_exists(self, task_id: str, mime_type: str = "image/png") -> bool | None:
         client, bucket = self._client()
         if client is None or bucket is None:
             return None
@@ -77,7 +91,8 @@ class PosterArtifactStorage:
             attributes={"operation": "minio_stat_object", "poster_task_id": task_id},
         ) as span:
             try:
-                client.stat_object(bucket, f"{task_id}.png")
+                ext = _ext_for_mime(mime_type)
+                client.stat_object(bucket, f"{task_id}{ext}")
                 _metrics.marketing_minio_operations_total.labels(operation="stat_object", status="success").inc()
                 set_span_attributes(span, {"status": "ok"})
             except Exception as exc:
@@ -88,16 +103,18 @@ class PosterArtifactStorage:
         return True
 
     def ensure_object_present(self, task_id: str, payload: bytes, mime_type: str = "image/png") -> str:
-        existing = self.object_exists(task_id)
+        existing = self.object_exists(task_id, mime_type)
         settings = get_settings()
-        fallback_url = f"{settings.poster_public_base_url.rstrip('/')}/{task_id}.png"
+        ext = _ext_for_mime(mime_type)
+        fallback_url = f"{settings.poster_public_base_url.rstrip('/')}/{task_id}{ext}"
         if existing is True:
             return fallback_url
         return self.store_bytes(task_id, payload, mime_type)
 
     def store_bytes(self, task_id: str, payload: bytes, mime_type: str = "image/png") -> str:
         settings = get_settings()
-        object_name = f"{task_id}.png"
+        ext = _ext_for_mime(mime_type)
+        object_name = f"{task_id}{ext}"
         public_url = f"{settings.poster_public_base_url.rstrip('/')}/{object_name}"
         client, bucket = self._client()
         if client is None or bucket is None:
@@ -129,7 +146,7 @@ class PosterArtifactStorage:
                 return public_url
         return public_url
 
-    def delete_object(self, task_id: str) -> bool | None:
+    def delete_object(self, task_id: str, mime_type: str = "image/png") -> bool | None:
         client, bucket = self._client()
         if client is None or bucket is None:
             return None
@@ -138,7 +155,8 @@ class PosterArtifactStorage:
             attributes={"operation": "minio_remove_object", "poster_task_id": task_id},
         ) as span:
             try:
-                client.remove_object(bucket, f"{task_id}.png")
+                ext = _ext_for_mime(mime_type)
+                client.remove_object(bucket, f"{task_id}{ext}")
                 _metrics.marketing_minio_operations_total.labels(operation="remove_object", status="success").inc()
                 set_span_attributes(span, {"status": "ok"})
                 return True

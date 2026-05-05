@@ -56,6 +56,12 @@ async def knowledge_imports_preview(request: Request, subject=Depends(require_ad
     return await request.app.state.gateway_services.http.proxy(request, "knowledge-service")
 
 
+@router.api_route("/api/knowledge/v1/documents/{doc_id}", methods=["GET"])
+async def knowledge_document_detail(request: Request, doc_id: str, subject=Depends(require_admin_subject)):
+    ensure_permission(subject, "admin:kb.read")
+    return await request.app.state.gateway_services.http.proxy(request, "knowledge-service")
+
+
 @router.api_route("/api/knowledge/v1/documents:ingest", methods=["POST"])
 async def knowledge_documents_ingest(request: Request, subject=Depends(require_admin_subject)):
     ensure_permission(subject, "admin:kb.write")

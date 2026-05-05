@@ -16,7 +16,7 @@ from app.models.orchestration import (
     UserProfile,
 )
 from app.services.agent_answer_generator import AgentAnswerGenerator
-from app.services.agent_registry import allowed_tools_for
+from app.services.agent_registry import allowed_tools_for, tool_permission_for
 from app.services.conversation_store import ConversationStore
 from app.services.tool_context import hydrate_payload_from_session_context
 from app.services.tool_hub_client import ToolHubClient
@@ -45,6 +45,12 @@ class LLMToolCallLoop:
         self._tool_hub_client = tool_hub_client
         self._catalog = catalog
         self._settings = settings or self._tool_hub_client.settings
+        # Reusable instances (avoid recreating each round)
+        from app.services.token_counter import TokenCounter
+        from app.services.compact import AutoCompactTrigger
+        self._counter = TokenCounter()
+        self._auto_compact_trigger = AutoCompactTrigger(settings=self._settings, token_counter=self._counter)
+        self._last_compact_summary: str | None = None
 
     def run(
         self,
@@ -53,6 +59,8 @@ class LLMToolCallLoop:
         request: MessageRequest,
         working_context: SessionContext,
         trace: TraceContext | None = None,
+        *,
+        compacted_history: str | None = None,
     ) -> tuple[list[ToolInvocation], str | None]:
         """Execute the tool-calling loop.
 
@@ -77,11 +85,57 @@ class LLMToolCallLoop:
         tool_calls: list[ToolInvocation] = []
         max_rounds = self._settings.max_tool_call_rounds
 
+        # Reset per-run state
+        self._last_compact_summary = None
+
+        # Micro-compact state
+        micro_enabled = self._settings.micro_compact_enabled
+
         for round_idx in range(max_rounds):
+            # At each round start, apply micro-compact to shrink old tool results
+            if micro_enabled and round_idx > 0:
+                from app.services.micro_compact import micro_compact_messages
+                messages = micro_compact_messages(messages)
+
+            # Auto-compact check: if messages have grown too large, compact them
+            if round_idx > 0 and self._settings.compact_enabled:
+                should, estimated, threshold = self._auto_compact_trigger.should_compact(messages)
+                if should:
+                    from app.services.compact import compact_conversation
+                    from app.models.compact import CompactionStrategy
+                    try:
+                        strategy = CompactionStrategy(self._settings.compact_strategy)
+                    except ValueError:
+                        strategy = CompactionStrategy.FULL
+                    try:
+                        compacted_msgs, compact_meta = compact_conversation(
+                            messages,
+                            strategy=strategy,
+                            settings=self._settings,
+                            token_counter=self._counter,
+                        )
+                        # Replace messages but keep the original user query at the front
+                        if compacted_msgs:
+                            # Ensure the first message is still the user query
+                            if compacted_msgs[0].get("role") != "user":
+                                messages = [{"role": "user", "content": user_query}, *compacted_msgs]
+                            else:
+                                messages = compacted_msgs
+                            self._auto_compact_trigger.record_success()
+                            # Store compaction summary for session context derivation
+                            if compact_meta.compact_summary:
+                                self._last_compact_summary = compact_meta.compact_summary
+                        else:
+                            self._auto_compact_trigger.record_failure()
+                    except Exception:
+                        logger.warning("auto-compact failed in round %d; continuing with original messages", round_idx + 1)
+                        self._auto_compact_trigger.record_failure()
+
             completion = self._answer_generator.create_with_tools(
                 agent=agent,
                 messages=messages,
                 tools=openai_tools,
+                compacted_history=compacted_history,
             )
             if completion is None:
                 logger.warning("LLM call failed in round %d; breaking loop", round_idx + 1)
@@ -132,11 +186,16 @@ class LLMToolCallLoop:
                 )
                 tool_calls.append(invocation)
 
-                messages.append({
+                # Build tool result message with timestamp for micro-compact
+                tool_msg: dict[str, Any] = {
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": tool_result_str,
-                })
+                }
+                # Add created_at for micro-compact time-gap detection
+                from datetime import UTC, datetime
+                tool_msg["created_at"] = datetime.now(UTC).isoformat()
+                messages.append(tool_msg)
 
                 # Apply session context patch if tool succeeded
                 if invocation.success and invocation.session_context_patch:
@@ -175,6 +234,26 @@ class LLMToolCallLoop:
         # Hydrate missing payload fields from session context
         if definition is not None:
             payload = hydrate_payload_from_session_context(payload, definition, working_context)
+
+        # ── Three-tier permission check (allow / ask / deny) ──
+        permission = tool_permission_for(agent, tool_name)
+        if permission == "deny":
+            invocation = ToolInvocation(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                operation=operation,
+                payload=payload,
+                status="permission-denied",
+                success=False,
+                summary=f"工具 {tool_name} 不允许当前 Agent 调用。",
+            )
+            result_str = json.dumps(
+                {"error": f"permission denied: tool '{tool_name}' not available for agent '{agent}'"},
+                ensure_ascii=False,
+            )
+            return invocation, result_str
+        if permission == "ask" and not payload.get("_confirmed"):
+            operation = "preview"  # Downgrade to preview unless confirmed
 
         # Determine operation: preview for high-risk tools unless already confirmed
         operation = "execute"

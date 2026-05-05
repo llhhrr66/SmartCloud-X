@@ -105,12 +105,13 @@ class Settings(BaseModel):
     trace_enabled: bool = Field(default_factory=lambda: os.getenv("SMARTCLOUD_TRACE_ENABLED", "false").strip().lower() == "true")
     otel_exporter_otlp_endpoint: str | None = Field(default_factory=lambda: _optional_env("OTEL_EXPORTER_OTLP_ENDPOINT"))
     copy_generator_provider: Literal["template", "llm"] = Field(default_factory=lambda: os.getenv("MARKETING_COPY_GENERATOR_PROVIDER", "template"))
-    poster_generator_provider: Literal["placeholder", "image-service"] = Field(default_factory=lambda: os.getenv("MARKETING_POSTER_GENERATOR_PROVIDER", "placeholder"))
+    poster_generator_provider: Literal["placeholder", "image-service", "openai-image"] = Field(default_factory=lambda: os.getenv("MARKETING_POSTER_GENERATOR_PROVIDER", "placeholder"))
     marketing_llm_api_url: str | None = Field(default_factory=lambda: _optional_env("MARKETING_LLM_API_URL"))
     marketing_llm_api_key: str | None = Field(default_factory=lambda: _optional_env("MARKETING_LLM_API_KEY"))
     marketing_llm_model: str | None = Field(default_factory=lambda: _optional_env("MARKETING_LLM_MODEL"))
     marketing_image_api_url: str | None = Field(default_factory=lambda: _optional_env("MARKETING_IMAGE_API_URL"))
     marketing_image_api_key: str | None = Field(default_factory=lambda: _optional_env("MARKETING_IMAGE_API_KEY"))
+    marketing_image_model: str = Field(default_factory=lambda: os.getenv("MARKETING_IMAGE_MODEL", "gpt-image-2"))
 
     model_config = {"arbitrary_types_allowed": True}
 

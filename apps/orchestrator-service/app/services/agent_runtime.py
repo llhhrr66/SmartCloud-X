@@ -79,11 +79,13 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
         start_task_index: int = 0,
         pause_on_agent_handoff: bool = False,
         incoming_handoff_from: AgentName | None = None,
+        compacted_history: str | None = None,
     ) -> list[AgentExecutionResult]:
         executions: list[AgentExecutionResult] = []
         if start_task_index >= len(route.tasks):
             return executions
         working_context = request.session_context.model_copy(deep=True)
+        self._last_compact_summary: str | None = None
         for absolute_index in range(start_task_index, len(route.tasks)):
             task = route.tasks[absolute_index]
             if cancel_check is not None:
@@ -99,8 +101,24 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
                     request=request,
                     working_context=working_context,
                     trace=trace,
+                    compacted_history=compacted_history,
                 )
                 timed_out = False
+                # Propagate compaction summary from the loop to the runtime level
+                if llm_loop._last_compact_summary:
+                    self._last_compact_summary = llm_loop._last_compact_summary
+                # Calibrate token counter from LLM usage if available
+                if llm_loop._answer_generator and hasattr(llm_loop._answer_generator, "_last_usage"):
+                    usage = llm_loop._answer_generator._last_usage  # type: ignore[attr-defined]
+                    if usage and hasattr(usage, "prompt_tokens") and usage.prompt_tokens:
+                        from app.services.token_counter import TokenCounter
+                        # Use the shared counter instance for calibration
+                        if not hasattr(self, "_token_counter"):
+                            self._token_counter = TokenCounter()
+                        est = self._token_counter.estimate_messages([
+                            {"role": "user", "content": request.user_query},
+                        ])
+                        self._token_counter.calibrate(est, usage.prompt_tokens)
             else:
                 tool_plan = [item for item in route.tool_plan if item.assigned_agent == task.agent]
                 tool_calls, timed_out = self._execute_tool_plan(
@@ -180,6 +198,7 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
                 status=status,
                 next_agent=effective_next_agent,
                 fallback_answer=fallback_answer,
+                compacted_history=compacted_history,
             )
             execution = AgentExecutionResult(
                 agent=task.agent,
@@ -331,6 +350,7 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
         status: str,
         next_agent: str | None,
         fallback_answer: str | None,
+        compacted_history: str | None = None,
     ) -> str | None:
         try:
             generated = self._agent_answer_generator.generate(
@@ -340,6 +360,7 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
                 next_agent=next_agent,
                 fallback_answer=fallback_answer,
                 tool_calls=tool_calls,
+                compacted_history=compacted_history,
             )
         except Exception:
             return fallback_answer
@@ -479,3 +500,79 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
         if any(tool_call.success for tool_call in tool_calls):
             return 0.82
         return 0.6
+
+    # ------------------------------------------------------------------
+    # Sub-agent spawning
+    # ------------------------------------------------------------------
+
+    def spawn_subagent(
+        self,
+        *,
+        objective: str,
+        tools: list[str],
+        system_prompt: str | None = None,
+        max_rounds: int = 3,
+        agent: AgentName | None = None,
+        request: MessageRequest | None = None,
+        trace: TraceContext | None = None,
+    ) -> "WorkerResult":
+        """Spawn a sub-agent with restricted tools to accomplish a sub-task.
+
+        Constraints:
+        - Sub-agent tools must be a subset of the parent agent's allowed_tools
+        - max_rounds capped at 5
+        - Sub-agents cannot spawn further sub-agents (no nesting)
+
+        Returns a WorkerResult with actual token usage and tool invocation counts.
+        """
+        from app.coordinator.workers import WorkerAgent, WorkerResult
+        from app.services.agent_registry import allowed_tools_for
+
+        # Determine the current agent context
+        current_agent = agent or "product_tech_agent"
+
+        # Validate tool subset constraint
+        parent_tools = set(allowed_tools_for(current_agent))
+        invalid = set(tools) - parent_tools
+        if invalid:
+            raise ValueError(
+                f"Subagent tools not in parent scope: {invalid}. "
+                f"Parent agent '{current_agent}' allows: {parent_tools}"
+            )
+
+        # Cap max_rounds
+        max_rounds = min(max_rounds, 5)
+
+        worker = WorkerAgent(
+            role="subagent",
+            tools=tools,
+            settings=self._settings,
+            max_rounds=max_rounds,
+        )
+
+        # Build context for the worker
+        context: dict[str, Any] = {
+            "purpose": objective,
+            "agent": current_agent,
+            "scene": request.scene if request else "customer_service",
+            "user_id": request.user_profile.user_id if request else None,
+            "trace": trace,
+        }
+        if system_prompt:
+            context["spec"] = system_prompt
+
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # We're inside an async context — schedule the coroutine
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, worker.run(prompt=objective, context=context))
+                return future.result(timeout=120)
+        else:
+            return asyncio.run(worker.run(prompt=objective, context=context))

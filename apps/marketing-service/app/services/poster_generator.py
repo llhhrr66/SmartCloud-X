@@ -68,4 +68,7 @@ def get_poster_generator() -> PosterGeneratorProvider:
     settings = get_settings()
     if settings.poster_generator_provider == 'image-service':
         return ImageServicePosterGenerator()
+    if settings.poster_generator_provider == 'openai-image':
+        from app.services.openai_image_generator import OpenAIImagePosterGenerator
+        return OpenAIImagePosterGenerator()
     return PlaceholderPosterGenerator()

@@ -24,13 +24,19 @@ from app.models.rag import (
     RetrievalSource,
     SourceBreakdown,
 )
+from app.services.hybrid_retrieval import (
+    BM25Scorer,
+    HybridRetrievalConfig,
+    tokenize_for_bm25,
+    weighted_score_fusion,
+)
 from app.services.query_rewriter import QueryRewriter, tokenize
 
 DOMAIN_KEYWORDS = {
     "billing": ["账单", "发票", "billing"],
     "icp": ["备案", "icp", "实名"],
-    "product": ["gpu", "服务器", "云主机", "实例", "cdn", "域名", "ssl", "安全组"],
-    "marketing": ["营销", "活动", "海报"],
+    "product": ["gpu", "云服务器", "轻量服务器", "实例", "cdn", "域名", "ssl", "安全组"],
+    "marketing": ["营销", "活动", "优惠"],
     "research": ["调研", "报告", "research"],
 }
 
@@ -83,6 +89,30 @@ class RetrievalService:
         self.query_rewriter = query_rewriter
         self.settings = get_settings()
         self.context_builder = ContextBuilder(self.settings.max_context_tokens)
+        self._bm25_scorer: BM25Scorer | None = None
+        self._bm25_corpus_ids: list[str] = []
+
+    def _build_bm25_index(self, candidates: list[KnowledgeSearchCandidate]) -> None:
+        corpus: list[list[str]] = []
+        ids: list[str] = []
+        for c in candidates:
+            corpus.append(tokenize_for_bm25(c.chunk.content))
+            ids.append(c.chunk.id)
+        self._bm25_scorer = BM25Scorer()
+        self._bm25_scorer.fit(corpus)
+        self._bm25_corpus_ids = ids
+
+    def _bm25_score_candidates(
+        self, candidates: list[KnowledgeSearchCandidate], query_terms: list[str]
+    ) -> list[tuple[str, float]]:
+        if self._bm25_scorer is None:
+            return [(c.chunk.id, 0.0) for c in candidates]
+        scored: list[tuple[str, float]] = []
+        for c in candidates:
+            doc_tokens = tokenize_for_bm25(c.chunk.content)
+            s = self._bm25_scorer.score(doc_tokens, query_terms)
+            scored.append((c.chunk.id, s))
+        return scored
 
     def rewrite_query(self, request_or_query: RetrieveRequest | str) -> QueryRewriteResult:
         if isinstance(request_or_query, RetrieveRequest):
@@ -125,6 +155,91 @@ class RetrievalService:
         rewrite, candidates = await self.search_candidates(request, search_client, trace_headers, cache_service=cache_service)
         return self.build_response(request, candidates, rewrite.rewritten_query)
 
+    async def hybrid_retrieve(
+        self,
+        request: RetrieveRequest,
+        search_client,
+        trace_headers: dict[str, str] | None = None,
+        cache_service=None,
+        semantic_weight: float = 0.6,
+    ) -> RetrieveResponse:
+        """Hybrid retrieval: semantic search + BM25 keyword scoring fused via weighted sum."""
+        rewrite, candidates = await self.search_candidates(
+            request, search_client, trace_headers, cache_service=cache_service
+        )
+        if len(candidates) <= 1:
+            return self.build_response(
+                request, candidates, rewrite.rewritten_query, backend_used="hybrid"
+            )
+
+        # Build BM25 index and score
+        self._build_bm25_index(candidates)
+        query_terms = tokenize_for_bm25(rewrite.rewritten_query)
+        bm25_scored = self._bm25_score_candidates(candidates, query_terms)
+
+        # Semantic scores from the vector search
+        semantic_scored = [(c.chunk.id, c.score) for c in candidates]
+
+        # Weighted fusion
+        fused = weighted_score_fusion(
+            semantic_scored, bm25_scored, semantic_weight=semantic_weight
+        )
+
+        # Build score lookup
+        fused_map = dict(fused)
+
+        # Rerank candidates by fused score
+        query_terms = tokenize(rewrite.rewritten_query)
+        ranked = sorted(
+            candidates,
+            key=lambda item: fused_map.get(item.chunk.id, 0.0),
+            reverse=True,
+        )
+
+        citations = []
+        for item in ranked:
+            score = round(fused_map.get(item.chunk.id, 0.0), 4)
+            if score < self.settings.min_rerank_score:
+                continue
+            citations.append(
+                RetrievalCitation(
+                    citationId=_build_citation_id(item.chunk.id, "hybrid"),
+                    chunkId=item.chunk.id,
+                    sourceId=item.chunk.source_id,
+                    sourceName=item.source_name,
+                    documentId=item.chunk.document_id,
+                    documentTitle=item.chunk.document_title,
+                    snippet=self._snippet(item.chunk.content),
+                    score=score,
+                    backendUsed="hybrid",
+                    reasoning=item.match_reason,
+                )
+            )
+            if len(citations) >= request.top_k:
+                break
+
+        notes: list[str] = []
+        if not citations:
+            notes.append("未找到匹配知识，建议补充知识库文档或放宽筛选条件")
+            EMPTY_RETRIEVALS_TOTAL.inc()
+        elif citations[0].score < 0.45:
+            notes.append("当前检索结果置信度较低，建议在后台校准知识库标签")
+
+        context = self.context_builder.build(citations)
+        sources = [self._build_retrieval_source(c) for c in citations]
+
+        return RetrieveResponse(
+            query=request.query,
+            rewrittenQuery=rewrite.rewritten_query,
+            citations=citations,
+            coverageNotes=notes,
+            degraded=False,
+            degradationNote=None,
+            backendUsed="hybrid",
+            sources=sources,
+            context=context,
+        )
+
     def build_response(self, request: RetrieveRequest, candidates: list[KnowledgeSearchCandidate], rewritten_query: str, degraded: bool = False, degradation_note: str | None = None, include_context: bool = False, backend_used: str = "local-keyword") -> RetrieveResponse:
         query_terms = tokenize(rewritten_query)
         ranked = sorted(candidates, key=lambda item: self._rerank_score(item, query_terms), reverse=True)
@@ -153,10 +268,10 @@ class RetrievalService:
         if degradation_note:
             notes.append(degradation_note)
         if not citations:
-            notes.append("未检索到匹配知识，请先补充知识库文档或放宽过滤条件。")
+            notes.append("未找到匹配知识，建议补充知识库文档或放宽筛选条件")
             EMPTY_RETRIEVALS_TOTAL.inc()
         elif citations[0].score < 0.45:
-            notes.append("当前命中结果存在弱相关项，建议在后台补充更精准的知识标题与标签。")
+            notes.append("当前检索结果置信度较低，建议在后台校准知识库标签")
         if degraded:
             DEGRADED_RETRIEVALS_TOTAL.inc()
         context = self.context_builder.build(citations) if include_context else None

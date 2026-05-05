@@ -16,7 +16,7 @@ _settings = get_settings()
 
 
 class PosterGenerationTask(Task):
-    autoretry_for = (RuntimeError,)
+    autoretry_for = (RuntimeError, OSError)
     retry_kwargs = {"max_retries": 3}
     retry_backoff = True
     retry_jitter = False
@@ -29,11 +29,15 @@ def _sync_marketing_asset(task) -> None:
     settings = get_settings()
     if not settings.mongodb_uri:
         return
-    runtime = asyncio.run(MarketingMongoRuntime.connect(settings))
-    try:
-        asyncio.run(runtime.upsert_asset(task))
-    finally:
-        runtime.close()
+
+    async def _do():
+        runtime = await MarketingMongoRuntime.connect(settings)
+        try:
+            await runtime.upsert_asset(task)
+        finally:
+            await runtime.client.close()
+
+    asyncio.run(_do())
 
 
 @celery_app.task(bind=True, base=PosterGenerationTask, name="marketing.generate_poster_task")

@@ -6,6 +6,7 @@ import uuid
 from fastapi import FastAPI, Request
 
 from app.api.routes.health import router as health_router
+from app.api.routes.mcp_lifecycle import mcp_lifecycle_router
 from app.api.routes.tools import internal_router as internal_tools_router
 from app.api.routes.tools import mcp_router, router as tools_router
 from app.core.config import get_settings
@@ -26,6 +27,7 @@ app.include_router(tools_router, prefix=settings.api_prefix)
 app.include_router(tools_router, prefix=settings.legacy_api_prefix, include_in_schema=False)
 app.include_router(internal_tools_router, prefix=settings.internal_api_prefix, include_in_schema=False)
 app.include_router(mcp_router, prefix=settings.mcp_prefix, include_in_schema=False)
+app.include_router(mcp_lifecycle_router, prefix=settings.mcp_prefix, include_in_schema=False)
 
 
 @app.middleware("http")

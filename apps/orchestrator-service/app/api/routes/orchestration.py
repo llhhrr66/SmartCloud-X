@@ -36,6 +36,7 @@ from app.models.orchestration import (
 from app.services.agent_config_store import AgentConfigStore
 from app.services.agent_runtime import AgentRuntime
 from app.services.conversation_store import ConversationStore, ConversationStoreError
+from app.services.rag_client import RagClient
 from app.services.router import AgentRouter
 from app.services.review import ResponseReviewService
 from app.services.run_control import (
@@ -93,6 +94,19 @@ _response_builder = OrchestrationResponseBuilder(
     conversation_store=_conversation_store,
     sse_event_store=_sse_event_store,
 )
+_rag_client = RagClient()
+
+# --- Session memory store (Redis-backed) ---
+_session_memory_store = None
+try:
+    from app.services.session_memory_store import SessionMemoryStore
+    _session_memory_store = SessionMemoryStore(
+        redis_url=_settings.redis_url,
+        redis_namespace="smartcloud:orchestrator:session-memory",
+        ttl_seconds=_settings.session_memory_store_ttl_seconds,
+    )
+except Exception:
+    pass
 
 
 # ----------------------------------------------------------------------
@@ -120,6 +134,63 @@ def _cancel_check_for(conversation_id: str, message_id: str):
     return _check
 
 
+def _trigger_session_memory_extraction(
+    conversation_id: str,
+    message_request: MessageRequest,
+    response: OrchestratorResponse,
+) -> None:
+    """Fire-and-forget session memory extraction in a background thread."""
+    if not _settings.session_memory_enabled:
+        return
+    if _session_memory_store is None:
+        return
+
+    try:
+        import asyncio
+        from app.services.session_memory import SessionMemoryExtractor
+        from app.services.token_counter import TokenCounter
+
+        counter = TokenCounter()
+        extractor = SessionMemoryExtractor(
+            settings=_settings,
+            token_counter=counter,
+        )
+
+        # Build messages list from request/response for token estimation
+        messages = [
+            {"role": "user", "content": message_request.user_query},
+        ]
+        for ex in response.executions:
+            if ex.reasoning_summary:
+                messages.append({"role": "assistant", "content": f"[推理] {ex.reasoning_summary}"})
+            for tc in ex.tool_calls:
+                tc_summary = tc.summary or ""
+                tc_payload = str(tc.payload)[:500] if tc.payload else ""
+                messages.append({"role": "tool", "content": f"{tc.tool_name}: {tc_summary} {tc_payload}"})
+            if ex.final_answer:
+                messages.append({"role": "assistant", "content": ex.final_answer})
+
+        existing = _session_memory_store.get(conversation_id)
+        if not extractor.should_extract(existing, messages):
+            return
+
+        def _extract_and_store():
+            try:
+                record = extractor.extract_memory(conversation_id, messages, existing)
+                if record is not None:
+                    _session_memory_store.put(record)
+                    logger.info("session memory extracted for %s (v%d)", conversation_id, record.version)
+                    # Also calibrate token counter if LLM returned usage
+            except Exception as exc:
+                logger.warning("background session memory extraction failed: %s", exc)
+
+        import threading
+        thread = threading.Thread(target=_extract_and_store, daemon=True)
+        thread.start()
+    except Exception as exc:
+        logger.warning("session memory extraction setup failed: %s", exc)
+
+
 def _run_orchestration(
     route_request: RouteRequest,
     message_request: MessageRequest,
@@ -127,6 +198,92 @@ def _run_orchestration(
     *,
     cancel_check=None,
 ) -> OrchestratorResponse:
+    # L1 FAQ cache fast-path: if the query matches an FAQ entry, return
+    # the cached answer directly — skip routing, tool calls, and RAG.
+    faq_hit = _rag_client.faq_match(
+        message_request.user_query,
+        trace=trace,
+        tenant_id=route_request.user_profile.tenant_id,
+    )
+    if faq_hit is not None:
+        from app.models.orchestration import AgentExecutionResult, FaqMetadata, FaqDocumentRef, IntentSummary, RetrievalResult
+        faq_answer = faq_hit.get("answer", "")
+        token_saved = faq_hit.get("tokenSaved", 0)
+        match_reason = faq_hit.get("matchReason", "faq_exact_match")
+
+        # Build structured FAQ metadata for frontend rendering
+        doc_refs = [
+            FaqDocumentRef(docId=r["docId"], title=r["title"])
+            for r in (faq_hit.get("documentRefs") or [])
+            if "docId" in r and "title" in r
+        ]
+        faq_metadata = FaqMetadata(
+            category=faq_hit.get("category"),
+            prerequisites=faq_hit.get("prerequisites") or [],
+            documentRefs=doc_refs,
+            relatedTopics=faq_hit.get("relatedTopics") or [],
+            matchReason=match_reason,
+            tokenSaved=token_saved,
+        )
+
+        faq_execution = AgentExecutionResult(
+            agent="product_tech_agent",
+            status="success",
+            reasoning_summary=f"L1 FAQ 命中（{match_reason}），节省约 {token_saved} tokens",
+            tool_calls=[],
+            citations=[],
+            confidence=0.95,
+            final_answer=faq_answer,
+            handoff_received_from=None,
+            next_agent=None,
+            action_required=None,
+            risk_flags=[],
+            trace_tags=["L1_FAQ_CACHE", "faq_exact_match"],
+            handoff_reason=None,
+            handoff_payload={},
+            faq_metadata=faq_metadata,
+        )
+        faq_route = RouteDecision(
+            primary_agent="product_tech_agent",
+            supporting_agents=[],
+            requires_retrieval=False,
+            requires_tools=False,
+            needs_human_handoff=False,
+            intent=IntentSummary(domain="faq", scene="customer_service", urgency="low"),
+            tasks=[],
+            handoff_plan=[],
+            tool_plan=[],
+            checkpoints=[],
+            summary=f"L1 FAQ 缓存命中: {message_request.user_query}",
+        )
+        response = OrchestratorResponse(
+            conversation_id=route_request.conversation_id,
+            route=faq_route,
+            executions=[faq_execution],
+            final_response_summary=faq_answer,
+            next_action="respond-with-agent-summary",
+            pending_actions=[],
+            pending_user_actions=[],
+            state_snapshot=None,
+            review=None,
+            trace=trace,
+        )
+        response.review = _review_service.review(faq_route, [faq_execution], faq_answer)
+        return response
+
+    # Retrieve session memory for compacted_history injection
+    compacted_history: str | None = None
+    if _settings.session_memory_enabled and _session_memory_store is not None:
+        try:
+            memory_record = _session_memory_store.get(route_request.conversation_id)
+            if memory_record is not None and memory_record.sections:
+                # Format session memory sections as compacted history text
+                from app.services.session_memory import SessionMemoryExtractor
+                extractor = SessionMemoryExtractor(settings=_settings)
+                compacted_history = extractor._format_sections(memory_record.sections)
+        except Exception:
+            pass  # Non-critical; continue without compacted history
+
     route = _router.route(route_request)
     executions = _runtime.execute(
         route,
@@ -134,8 +291,13 @@ def _run_orchestration(
         trace,
         cancel_check=cancel_check,
         pause_on_agent_handoff=True,
+        compacted_history=compacted_history,
     )
     final_summary = executions[-1].final_answer if executions else route.summary
+
+    # Propagate compaction summary from runtime (if auto-compact happened)
+    compaction_summary = getattr(_runtime, "_last_compact_summary", None)
+
     pending_agent_handoff = _response_builder.build_pending_agent_handoff(
         route,
         message_request,
@@ -163,6 +325,7 @@ def _run_orchestration(
         ),
         review=None,
         trace=trace,
+        compaction_summary=compaction_summary,
     )
     next_action, pending_actions = resolve_next_action(response)
     response.next_action = next_action
@@ -247,6 +410,19 @@ def _execute_message(
     if trace is not None:
         trace.conversation_id = conversation.conversation_id
         message_request.trace = trace
+
+    # --- Compaction checkpoint: micro-compact recent messages before orchestration ---
+    if _settings.micro_compact_enabled:
+        from app.services.micro_compact import micro_compact_messages
+        ctx = message_request.session_context
+        if ctx and ctx.recent_messages:
+            compacted_recent = micro_compact_messages(
+                ctx.recent_messages,
+                time_gap_minutes=_settings.micro_compact_time_gap_minutes,
+                size_threshold_chars=_settings.micro_compact_size_threshold_chars,
+            )
+            ctx.recent_messages = compacted_recent
+
     route_request = route_request_from_message_request(conversation.conversation_id, message_request)
     assistant_message_id = f"asst_{message_id}"
     active_run = _run_control.start(conversation.conversation_id, message_id)
@@ -267,6 +443,14 @@ def _execute_message(
             trace=trace,
         )
         persisted_response.state_snapshot = _build_state_snapshot(conversation.conversation_id)
+
+        # --- Background session memory extraction ---
+        _trigger_session_memory_extraction(
+            conversation_id=conversation.conversation_id,
+            message_request=message_request,
+            response=persisted_response,
+        )
+
         return conversation, message_id, assistant_message_id, persisted_response
     except OrchestrationCancelled as exc:
         _conversation_store.store_cancelled_exchange(

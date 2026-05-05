@@ -312,6 +312,36 @@ class RetrievalResult(BaseModel):
     raw_meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class FaqDocumentRef(BaseModel):
+    docId: str
+    title: str
+
+
+class FaqMetadata(BaseModel):
+    """Structured metadata for L1 FAQ cache hits.
+
+    When an FAQ entry matches, this carries category, prerequisites,
+    document references (linkable to knowledge-service document viewer),
+    and related topics so the frontend can render a rich structured answer.
+    """
+    category: str | None = None
+    prerequisites: list[str] = Field(default_factory=list)
+    documentRefs: list[FaqDocumentRef] = Field(default_factory=list)
+    relatedTopics: list[str] = Field(default_factory=list)
+    matchReason: str | None = None
+    tokenSaved: int = 0
+
+
+class PermissionCheckRecord(BaseModel):
+    """Record of a tool permission check for audit purposes."""
+    tool_name: str
+    agent: AgentName
+    permission: Literal["allow", "ask", "deny"]
+    effective_operation: Literal["preview", "execute"] = "preview"
+    confirmed: bool = False
+    reason: str = ""
+
+
 class AgentExecutionResult(BaseModel):
     agent: AgentName
     status: Literal["success", "handoff", "need_user_input", "failed"] = "success"
@@ -328,6 +358,12 @@ class AgentExecutionResult(BaseModel):
     trace_tags: list[str] = Field(default_factory=list)
     handoff_reason: str | None = None
     handoff_payload: dict[str, Any] = Field(default_factory=dict)
+    faq_metadata: FaqMetadata | None = None
+    # Token usage from LLM calls
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    # Permission check audit trail
+    permission_checks: list[PermissionCheckRecord] = Field(default_factory=list)
 
 
 class PendingAgentHandoff(BaseModel):
@@ -547,6 +583,8 @@ class OrchestratorResponse(BaseModel):
     state_snapshot: SessionStateSnapshot | None = None
     review: ResponseReview | None = None
     trace: TraceContext | None = None
+    # Compaction summary from auto-compact, for session context derivation
+    compaction_summary: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):

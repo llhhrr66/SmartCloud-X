@@ -6,9 +6,11 @@ import type {
   AuditRecord,
   DashboardSummary,
   DocumentDetail,
+  FaqMetadata,
   HealthPayload,
   KnowledgeBaseRecord,
   KnowledgeChunkRecord,
+  KnowledgeDocumentContent,
   KnowledgeDocumentRecord,
   LegacySource,
   MarketingCampaign,
@@ -235,6 +237,19 @@ export const adminApi = {
 
   documentChunks(docId: string) {
     return request<PageResult<KnowledgeChunkRecord>>(`/api/v1/admin/knowledge-documents/${encodeURIComponent(docId)}/chunks?page=1&page_size=100`);
+  },
+
+  /** Fetch full document content (including content field) from knowledge-service. */
+  fetchDocumentContent(docId: string) {
+    return request<KnowledgeDocumentContent>(`/api/knowledge/v1/documents/${encodeURIComponent(docId)}`);
+  },
+
+  /** L1 FAQ cache match — returns structured answer or miss. */
+  faqMatch(query: string) {
+    return request<{ matched: boolean; answer?: string | null; matchReason?: string | null; tokenSaved?: number; category?: string | null; prerequisites?: string[]; documentRefs?: Array<{ docId: string; title: string }>; relatedTopics?: string[] }>("/api/rag/v1/faq/match", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
   },
 
   reindexDocument(docId: string, confirmToken: string, operatorReason: string) {

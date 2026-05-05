@@ -21,12 +21,25 @@ except ImportError:
 
 
 @dataclass
+class FaqDocumentRef:
+    doc_id: str
+    title: str
+
+    def to_dict(self) -> dict:
+        return {"docId": self.doc_id, "title": self.title}
+
+
+@dataclass
 class FaqEntry:
     question: str
     aliases: list[str]
     answer: str
     token_estimate: int = 0
     confidence: float = 1.0
+    category: str = "general"  # general | operations | billing | product | compliance
+    document_refs: list[FaqDocumentRef] | None = None  # knowledge-service doc references
+    prerequisites: list[str] | None = None  # prerequisite conditions
+    related_topics: list[str] | None = None  # related FAQ question keys
 
 
 @dataclass
@@ -39,7 +52,7 @@ class FaqMatchResult:
 def _normalize(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^\w\s\u4e00-\u9fff]", "", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", "", text)
     return text
 
 
@@ -100,6 +113,10 @@ class FaqCacheService:
                     "answer": entry.answer,
                     "token_estimate": entry.token_estimate,
                     "confidence": entry.confidence,
+                    "category": entry.category,
+                    "document_refs": [r.to_dict() for r in (entry.document_refs or [])],
+                    "prerequisites": entry.prerequisites or [],
+                    "related_topics": entry.related_topics or [],
                 }
                 for entry in self._entries.values()
             ]
@@ -130,17 +147,35 @@ class FaqCacheService:
             payload = self._redis_client.get(f"{self.settings.faq_cache_namespace}:q:{normalized_query}")
             if payload:
                 data = json.loads(payload)
-                return FaqEntry(**data)
+                return self._parse_faq_entry(data)
             for key in self._redis_client.scan_iter(match=f"{self.settings.faq_cache_namespace}:q:*"):
                 raw = self._redis_client.get(key)
                 if raw:
                     data = json.loads(raw)
-                    entry = FaqEntry(**data)
+                    entry = self._parse_faq_entry(data)
                     if any(_normalize(alias) == normalized_query for alias in entry.aliases):
                         return entry
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _parse_faq_entry(data: dict) -> FaqEntry:
+        doc_refs = None
+        raw_refs = data.get("document_refs")
+        if raw_refs:
+            doc_refs = [FaqDocumentRef(doc_id=r["docId"], title=r["title"]) for r in raw_refs if "docId" in r and "title" in r]
+        return FaqEntry(
+            question=data.get("question", ""),
+            aliases=data.get("aliases", []),
+            answer=data.get("answer", ""),
+            token_estimate=data.get("token_estimate", 0),
+            confidence=data.get("confidence", 1.0),
+            category=data.get("category", "general"),
+            document_refs=doc_refs,
+            prerequisites=data.get("prerequisites"),
+            related_topics=data.get("related_topics"),
+        )
 
     def _load_bootstrap(self) -> None:
         default_faqs = [
@@ -193,6 +228,10 @@ class FaqCacheService:
                     "answer": entry.answer,
                     "token_estimate": entry.token_estimate,
                     "confidence": entry.confidence,
+                    "category": entry.category,
+                    "document_refs": [r.to_dict() for r in (entry.document_refs or [])],
+                    "prerequisites": entry.prerequisites or [],
+                    "related_topics": entry.related_topics or [],
                 },
                 ensure_ascii=False,
             )

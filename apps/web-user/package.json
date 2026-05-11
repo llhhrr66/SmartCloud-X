@@ -14,6 +14,7 @@
     "docker:build": "docker build -f Dockerfile ../.. -t smartcloud-x-web-user:local"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "@tanstack/react-query": "^5.99.2",
     "axios": "^1.15.2",
     "clsx": "^2.1.1",
@@ -24,6 +25,7 @@
     "react-hot-toast": "^2.6.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^6.22.3",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0",
     "zustand": "^5.0.12"
   },
@@ -32,9 +34,9 @@
     "@tailwindcss/vite": "^4.2.4",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "tailwindcss": "^4.2.4",
-    "typescript": "^5.4.5",
-    "vite": "^5.2.8"
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
   }
 }

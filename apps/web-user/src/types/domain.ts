@@ -45,6 +45,8 @@ export type {
   CreateResearchTaskRequest,
   CreateTicketRequest,
   CurrentUser,
+  FaqDocumentRef,
+  FaqEventPayload,
   FileRecord,
   FileLifecycleStatus,
   FileScanStatus,

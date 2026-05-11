@@ -903,6 +903,7 @@ export function ChatPage(): JSX.Element {
                   streamingAgent={streamState.agent}
                   streamingCitations={streamState.citations}
                   streamingToolCalls={streamState.toolCalls}
+                  streamingDocumentRefs={streamState.documentRefs}
                   onCitationSelect={handleSelectCitation}
                 />
               )}

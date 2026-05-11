@@ -1061,6 +1061,26 @@ export function mapChatStreamEvents(raw: RawSseEvent): ChatStreamEvent[] {
 
       return withRetryHint(events, raw.retry);
     }
+    case 'faq':
+      return withRetryHint([
+        {
+          event: 'faq',
+          data: {
+            category: getOptionalString(record, ['category']),
+            prerequisites: Array.isArray(record.prerequisites) ? record.prerequisites : [],
+            documentRefs: Array.isArray(record.documentRefs)
+              ? record.documentRefs.map((item: Record<string, unknown>) => ({
+                  docId: getString(item, ['docId', 'doc_id'], ''),
+                  title: getString(item, ['title'], ''),
+                  url: getOptionalString(item, ['url'])
+                }))
+              : [],
+            relatedTopics: Array.isArray(record.relatedTopics) ? record.relatedTopics : [],
+            matchReason: getOptionalString(record, ['matchReason', 'match_reason']),
+            tokenSaved: getOptionalNumber(record, ['tokenSaved', 'token_saved'])
+          }
+        }
+      ], raw.retry);
     case 'ping':
     case 'heartbeat':
       return withRetryHint([{ event: 'ping', data: {} }], raw.retry);

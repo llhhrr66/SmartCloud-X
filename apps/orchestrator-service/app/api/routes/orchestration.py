@@ -213,7 +213,7 @@ def _run_orchestration(
 
         # Build structured FAQ metadata for frontend rendering
         doc_refs = [
-            FaqDocumentRef(docId=r["docId"], title=r["title"])
+            FaqDocumentRef(docId=r["docId"], title=r["title"], url=r.get("url"))
             for r in (faq_hit.get("documentRefs") or [])
             if "docId" in r and "title" in r
         ]
@@ -547,6 +547,12 @@ def internal_chat(request: Request, payload: InternalChatRequest):
         retrieval_required=payload.chat_request.retrieval_required,
         trace=trace,
     )
+    # Merge persisted conversation history into the request context
+    persisted_ctx = _conversation_store.get_context(conversation.conversation_id)
+    if persisted_ctx is not None:
+        message_request.session_context = merge_persisted_session_context(
+            persisted_ctx, message_request.session_context,
+        )
     try:
         conversation, message_id, assistant_message_id, persisted_response = _execute_message(
             conversation.conversation_id, message_request, trace, strict_session=True

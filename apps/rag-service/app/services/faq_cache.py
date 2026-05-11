@@ -9,7 +9,9 @@ from time import monotonic
 
 from app.core.config import get_settings
 from app.core.metrics import (
+    FAQ_BM25_HITS_TOTAL,
     FAQ_CACHE_ENTRIES,
+    FAQ_TFIDF_HITS_TOTAL,
     SMART_CACHE_REQUESTS_TOTAL,
     SMART_CACHE_TOKEN_SAVED_TOTAL,
 )
@@ -24,9 +26,13 @@ except ImportError:
 class FaqDocumentRef:
     doc_id: str
     title: str
+    url: str | None = None
 
     def to_dict(self) -> dict:
-        return {"docId": self.doc_id, "title": self.title}
+        result = {"docId": self.doc_id, "title": self.title}
+        if self.url:
+            result["url"] = self.url
+        return result
 
 
 @dataclass
@@ -56,6 +62,20 @@ def _normalize(text: str) -> str:
     return text
 
 
+def _jieba_tokenize(text: str) -> list[str]:
+    """Segment Chinese text with jieba, filtering single-char tokens."""
+    import jieba
+
+    tokens = jieba.lcut(text)
+    return [t.strip() for t in tokens if len(t.strip()) > 1]
+
+
+def _build_entry_text(entry: FaqEntry) -> str:
+    """Combine question + aliases into a single text for indexing."""
+    parts = [entry.question] + entry.aliases
+    return " ".join(parts)
+
+
 class FaqCacheService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -63,6 +83,16 @@ class FaqCacheService:
         self._entries: dict[str, FaqEntry] = {}
         self._redis_client = self._build_redis_client()
         self._load_bootstrap()
+        # BM25 state
+        self._bm25_scorer: object | None = None  # BM25Scorer instance
+        self._bm25_corpus: list[list[str]] = []
+        self._bm25_entries: list[FaqEntry] = []
+        # TF-IDF state
+        self._tfidf_vectorizer: object | None = None
+        self._tfidf_matrix: object | None = None
+        self._tfidf_entries: list[FaqEntry] = []
+        # Build initial indices
+        self._rebuild_indices()
 
     def match(self, query: str) -> FaqMatchResult | None:
         if not self.settings.faq_cache_enabled:
@@ -70,22 +100,49 @@ class FaqCacheService:
             return None
 
         normalized = _normalize(query)
+
+        # Layer 1: Exact normalized match
         entry = self._match_local(normalized)
         if entry is None:
             entry = self._match_redis(normalized)
+        if entry is not None:
+            SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="hit").inc()
+            token_saved = entry.token_estimate or max(len(entry.answer) // 2, 50)
+            SMART_CACHE_TOKEN_SAVED_TOTAL.inc(token_saved)
+            return FaqMatchResult(
+                entry=entry,
+                match_reason="faq_exact_match",
+                token_saved_estimate=token_saved,
+            )
 
-        if entry is None:
-            SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="miss").inc()
-            return None
+        # Layer 2: BM25 keyword match
+        entry, score = self._match_bm25(query)
+        if entry is not None:
+            SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="hit").inc()
+            FAQ_BM25_HITS_TOTAL.inc()
+            token_saved = entry.token_estimate or max(len(entry.answer) // 2, 50)
+            SMART_CACHE_TOKEN_SAVED_TOTAL.inc(token_saved)
+            return FaqMatchResult(
+                entry=entry,
+                match_reason=f"faq_bm25_match(score={score:.2f})",
+                token_saved_estimate=token_saved,
+            )
 
-        SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="hit").inc()
-        token_saved = entry.token_estimate or max(len(entry.answer) // 2, 50)
-        SMART_CACHE_TOKEN_SAVED_TOTAL.inc(token_saved)
-        return FaqMatchResult(
-            entry=entry,
-            match_reason="faq_exact_match",
-            token_saved_estimate=token_saved,
-        )
+        # Layer 3: TF-IDF cosine similarity match
+        entry, sim = self._match_tfidf(query)
+        if entry is not None:
+            SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="hit").inc()
+            FAQ_TFIDF_HITS_TOTAL.inc()
+            token_saved = entry.token_estimate or max(len(entry.answer) // 2, 50)
+            SMART_CACHE_TOKEN_SAVED_TOTAL.inc(token_saved)
+            return FaqMatchResult(
+                entry=entry,
+                match_reason=f"faq_tfidf_match(sim={sim:.3f})",
+                token_saved_estimate=token_saved,
+            )
+
+        SMART_CACHE_REQUESTS_TOTAL.labels(layer="L1_FAQ", result="miss").inc()
+        return None
 
     def add_entry(self, entry: FaqEntry) -> None:
         with self._lock:
@@ -93,6 +150,18 @@ class FaqCacheService:
             self._entries[key] = entry
             self._sync_to_redis(key, entry)
             FAQ_CACHE_ENTRIES.set(len(self._entries))
+            self._rebuild_indices()
+
+    def upsert_entry(self, entry: FaqEntry) -> None:
+        """Add an entry and let it replace older aliases that point at the same topic."""
+        with self._lock:
+            keys = {_normalize(entry.question)}
+            keys.update(_normalize(alias) for alias in entry.aliases)
+            for key in keys:
+                self._entries[key] = entry
+                self._sync_to_redis(key, entry)
+            FAQ_CACHE_ENTRIES.set(len(self._entries))
+            self._rebuild_indices()
 
     def remove_entry(self, question: str) -> bool:
         key = _normalize(question)
@@ -101,6 +170,7 @@ class FaqCacheService:
             if removed:
                 self._delete_from_redis(key)
                 FAQ_CACHE_ENTRIES.set(len(self._entries))
+                self._rebuild_indices()
                 return True
             return False
 
@@ -128,6 +198,10 @@ class FaqCacheService:
             "entries": len(self._entries),
             "namespace": self.settings.faq_cache_namespace,
             "ttl_seconds": self.settings.faq_cache_ttl_seconds,
+            "bm25_enabled": self.settings.faq_bm25_enabled,
+            "bm25_threshold": self.settings.faq_bm25_threshold,
+            "tfidf_enabled": self.settings.faq_tfidf_enabled,
+            "tfidf_threshold": self.settings.faq_tfidf_threshold,
         }
 
     def _match_local(self, normalized_query: str) -> FaqEntry | None:
@@ -159,12 +233,86 @@ class FaqCacheService:
             pass
         return None
 
+    def _match_bm25(self, query: str) -> tuple[FaqEntry | None, float]:
+        """Layer 2: BM25 keyword match using jieba tokenization."""
+        if not self.settings.faq_bm25_enabled or self._bm25_scorer is None:
+            return None, 0.0
+        query_terms = _jieba_tokenize(query)
+        if not query_terms:
+            return None, 0.0
+        best_score = 0.0
+        best_entry = None
+        for i, doc_terms in enumerate(self._bm25_corpus):
+            s = self._bm25_scorer.score(doc_terms, query_terms)
+            if s > best_score:
+                best_score = s
+                best_entry = self._bm25_entries[i]
+        if best_score >= self.settings.faq_bm25_threshold and best_entry is not None:
+            return best_entry, best_score
+        return None, best_score
+
+    def _match_tfidf(self, query: str) -> tuple[FaqEntry | None, float]:
+        """Layer 3: TF-IDF cosine similarity match."""
+        if not self.settings.faq_tfidf_enabled or self._tfidf_vectorizer is None:
+            return None, 0.0
+        import numpy as np
+
+        query_vec = self._tfidf_vectorizer.transform([query])
+        sims = (self._tfidf_matrix @ query_vec.T).toarray().ravel()
+        best_idx = int(np.argmax(sims))
+        best_sim = float(sims[best_idx])
+        if best_sim >= self.settings.faq_tfidf_threshold:
+            return self._tfidf_entries[best_idx], best_sim
+        return None, best_sim
+
+    def _rebuild_indices(self) -> None:
+        """Rebuild BM25 corpus and TF-IDF matrix from current entries."""
+        # Deduplicate entries (multiple keys can point to same FaqEntry)
+        seen_ids: set[int] = set()
+        unique_entries: list[FaqEntry] = []
+        for entry in self._entries.values():
+            eid = id(entry)
+            if eid not in seen_ids:
+                seen_ids.add(eid)
+                unique_entries.append(entry)
+
+        if not unique_entries:
+            self._bm25_scorer = None
+            self._bm25_corpus = []
+            self._bm25_entries = []
+            self._tfidf_vectorizer = None
+            self._tfidf_matrix = None
+            self._tfidf_entries = []
+            return
+
+        # Build texts for indexing
+        texts = [_build_entry_text(e) for e in unique_entries]
+
+        # BM25: tokenize and fit
+        from app.services.hybrid_retrieval import BM25Scorer
+
+        corpus = [_jieba_tokenize(t) for t in texts]
+        scorer = BM25Scorer()
+        scorer.fit(corpus)
+        self._bm25_scorer = scorer
+        self._bm25_corpus = corpus
+        self._bm25_entries = list(unique_entries)
+
+        # TF-IDF: vectorize and fit
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        vectorizer = TfidfVectorizer(tokenizer=_jieba_tokenize, token_pattern=None)
+        matrix = vectorizer.fit_transform(texts)
+        self._tfidf_vectorizer = vectorizer
+        self._tfidf_matrix = matrix
+        self._tfidf_entries = list(unique_entries)
+
     @staticmethod
     def _parse_faq_entry(data: dict) -> FaqEntry:
         doc_refs = None
         raw_refs = data.get("document_refs")
         if raw_refs:
-            doc_refs = [FaqDocumentRef(doc_id=r["docId"], title=r["title"]) for r in raw_refs if "docId" in r and "title" in r]
+            doc_refs = [FaqDocumentRef(doc_id=r["docId"], title=r["title"], url=r.get("url")) for r in raw_refs if "docId" in r and "title" in r]
         return FaqEntry(
             question=data.get("question", ""),
             aliases=data.get("aliases", []),

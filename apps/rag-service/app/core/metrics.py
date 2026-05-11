@@ -105,6 +105,16 @@ FAQ_CACHE_ENTRIES = _get_or_create_metric(
     "faq_cache_entries",
     "Current number of FAQ cache entries.",
 )
+FAQ_BM25_HITS_TOTAL = _get_or_create_metric(
+    Counter,
+    "faq_bm25_hits_total",
+    "BM25 FAQ match hits.",
+)
+FAQ_TFIDF_HITS_TOTAL = _get_or_create_metric(
+    Counter,
+    "faq_tfidf_hits_total",
+    "TF-IDF FAQ match hits.",
+)
 
 
 def update_cache_hit_ratio(hits: float, misses: float) -> None:

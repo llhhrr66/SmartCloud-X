@@ -63,6 +63,46 @@ async def add_standard_response_headers(request: Request, call_next):
 configure_tracing(app, settings)
 
 
+@app.on_event("startup")
+async def _load_faq_cache_on_startup() -> None:
+    """Load the full FAQ catalog into cache when the service starts."""
+    import logging
+
+    logger = logging.getLogger("app.startup")
+    try:
+        from app.scripts.bootstrap_faq import build_faqs
+        from app.services.faq_cache import get_faq_cache
+
+        cache = get_faq_cache()
+        faqs = build_faqs()
+        for faq in faqs:
+            cache.add_entry(faq)
+        logger.info("FAQ cache loaded with %d entries on startup", len(faqs))
+    except Exception:
+        logger.exception("Failed to load FAQ cache on startup")
+
+    if not settings.faq_bootstrap_knowledge_documents:
+        return
+
+    try:
+        from app.scripts.bootstrap_faq import build_faq_from_document
+        from app.services.faq_cache import get_faq_cache
+        from app.services.knowledge_client import KnowledgeServiceClient
+
+        cache = get_faq_cache()
+        documents = await KnowledgeServiceClient().list_documents()
+        loaded = 0
+        for document in documents:
+            faq = build_faq_from_document(document)
+            if faq is None:
+                continue
+            cache.upsert_entry(faq)
+            loaded += 1
+        logger.info("Knowledge documents loaded into FAQ cache: %d", loaded)
+    except Exception:
+        logger.exception("Failed to load knowledge documents into FAQ cache")
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_request_validation_error(request: Request, exc: RequestValidationError):
     if not request.url.path.startswith("/api/v1/admin/"):

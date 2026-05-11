@@ -193,7 +193,7 @@ async def faq_match(payload: FaqMatchQuery, request: Request) -> ApiEnvelope[dic
             "category": entry.category,
             "prerequisites": entry.prerequisites or [],
             "relatedTopics": entry.related_topics or [],
-            "documentRefs": [{"docId": r.doc_id, "title": r.title} for r in (entry.document_refs or [])],
+            "documentRefs": [{"docId": r.doc_id, "title": r.title, **({"url": r.url} if r.url else {})} for r in (entry.document_refs or [])],
         }
         return ApiEnvelope(
             data=response_data,

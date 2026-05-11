@@ -7,8 +7,133 @@ from __future__ import annotations
 
 import json
 import sys
+from urllib.parse import quote
 
 from app.services.faq_cache import FaqDocumentRef, FaqEntry, get_faq_cache
+
+
+def build_faq_from_document(document: dict) -> FaqEntry | None:
+    title = str(document.get("title") or "").strip()
+    content = str(document.get("content") or "").strip()
+    doc_id = str(document.get("id") or "").strip()
+    if not title or not content or not doc_id:
+        return None
+
+    aliases = [
+        title,
+        title.replace("云服务器", "服务器"),
+        title.replace("云服务器", "云主机"),
+        f"如何{title}" if not title.startswith("如何") else title[2:],
+        f"怎么{title}" if not title.startswith("怎么") else title[2:],
+        title.replace("实例", "示例"),
+        title.replace("云服务器实例", "服务器示例"),
+        f"{title}教程",
+        f"{title}步骤",
+    ]
+    tags = document.get("tags") if isinstance(document.get("tags"), list) else []
+    aliases.extend(str(tag) for tag in tags if str(tag).strip())
+
+    answer = _compose_document_answer(title, content)
+    if title == "如何创建云服务器实例":
+        answer = _cloud_instance_creation_answer()
+    doc_url = f"/document-viewer?docId={quote(doc_id)}&title={quote(title)}"
+    answer = f"{answer}\n\n**参考文档：** [{title}]({doc_url})"
+    return FaqEntry(
+        question=title,
+        aliases=list(dict.fromkeys(item for item in aliases if item and item != title)),
+        answer=answer,
+        token_estimate=max(len(content) // 2, 120),
+        confidence=1.0,
+        category=_category_from_tags(tags),
+        prerequisites=_extract_section_items(content, "前置条件"),
+        related_topics=[],
+        document_refs=[FaqDocumentRef(doc_id=doc_id, title=title, url=doc_url)],
+    )
+
+
+def _compose_document_answer(title: str, content: str) -> str:
+    text = content.strip()
+    if text.startswith(title):
+        text = text[len(title):].lstrip("\n #")
+    if len(text) > 2400:
+        text = text[:2400].rstrip() + "\n\n更多细节请打开底部参考文档查看完整内容。"
+    return f"{title}\n\n{text}"
+
+
+def _cloud_instance_creation_answer() -> str:
+    return (
+        "创建云服务器实例的步骤如下：\n\n"
+        "**1. 进入 ECS 控制台**\n"
+        "- 登录 SmartCloud 控制台\n"
+        "- 点击顶部导航栏的「产品与服务」\n"
+        "- 选择「云服务器 ECS」\n"
+        "- 点击「创建实例」按钮\n\n"
+        "**2. 选择实例配置**\n"
+        "- 选择地域和可用区：建议选择离用户最近的地域，生产环境推荐多可用区部署\n"
+        "- 选择实例规格：\n"
+        "  - 通用型：适合中小型应用、Web 服务器\n"
+        "  - 计算型：适合 CPU 密集型应用\n"
+        "  - 内存型：适合内存密集型应用、数据库\n"
+        "  - 推荐配置：小型应用 2 核 4GB，中型应用 4 核 8GB，大型应用 8 核 16GB 或更高\n"
+        "- 选择镜像：\n"
+        "  - 公共镜像：官方操作系统，例如 CentOS、Ubuntu、Windows 等\n"
+        "  - 自定义镜像：基于已有实例创建，适合复制已有环境\n"
+        "  - 市场镜像：第三方预装软件镜像，适合快速部署应用\n\n"
+        "**3. 配置网络**\n"
+        "- 选择网络类型：专有网络 VPC（推荐）或经典网络\n"
+        "- 配置安全组（虚拟防火墙）：\n"
+        "  - 默认禁止所有入站流量，需要手动添加规则\n"
+        "  - 常用规则：SSH 22 端口、HTTP 80 端口、HTTPS 443 端口\n"
+        "  - 生产环境建议限制 SSH 来源 IP，不要直接对全网开放\n\n"
+        "**4. 配置存储**\n"
+        "- 系统盘：建议使用 SSD 云盘，容量 40GB 以上；GPU 镜像建议 100GB 以上\n"
+        "- 数据盘（可选）：按需添加，支持在线扩容和快照备份\n"
+        "- 建议将业务数据、日志、模型文件等放在数据盘，避免和系统盘混用\n\n"
+        "**5. 设置登录方式**\n"
+        "- 密钥对登录（推荐）：更安全，适用于 Linux 系统\n"
+        "- 密码登录：设置符合复杂度要求的密码\n"
+        "- Windows 实例可通过远程桌面 RDP 登录\n\n"
+        "**6. 确认并创建**\n"
+        "- 检查地域、规格、镜像、网络、安全组、云盘和计费方式\n"
+        "- 确认订单并完成支付\n"
+        "- 等待实例创建完成，通常需要 1-3 分钟\n"
+        "- 实例状态变为「运行中」后，即可远程连接并开始使用\n\n"
+        "**前置条件：**\n"
+        "- 已注册 SmartCloud 账号并完成实名认证\n"
+        "- 账户余额充足或已绑定支付方式\n"
+        "- 已了解所需实例规格和配置\n"
+        "- 如面向中国大陆公众提供服务，请提前确认 ICP 备案和地域要求"
+    )
+
+
+def _extract_section_items(content: str, heading: str) -> list[str]:
+    lines = content.splitlines()
+    items: list[str] = []
+    in_section = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        normalized = line.strip("#：:")
+        if normalized == heading:
+            in_section = True
+            continue
+        if in_section and line and not line.startswith("-") and not line[:1].isdigit():
+            break
+        if in_section and line.startswith("-"):
+            items.append(line.lstrip("- ").strip())
+    return items
+
+
+def _category_from_tags(tags: list) -> str:
+    lowered = {str(tag).lower() for tag in tags}
+    if {"billing", "refund", "invoice", "pricing"} & lowered:
+        return "billing"
+    if {"icp", "compliance"} & lowered:
+        return "compliance"
+    if {"marketing", "campaign"} & lowered:
+        return "operations"
+    if {"operations", "troubleshooting", "security"} & lowered:
+        return "operations"
+    return "product"
 
 
 def build_faqs() -> list[FaqEntry]:
@@ -107,9 +232,14 @@ def build_faqs() -> list[FaqEntry]:
                 "- gn8.2xlarge：32核 256G + H100×2，¥49,500/月\n"
                 "- gn8.4xlarge：64核 512G + H100×4，¥99,000/月\n"
                 "- gn8.8xlarge：128核 1024G + H100×8，¥198,000/月\n\n"
-                "L40S 适合 7B-70B 量化模型推理，A10 适合 PoC 验证，H100 适合大规模训练。"
+                "L40S 适合 7B-70B 量化模型推理，A10 适合 PoC 验证，H100 适合大规模训练。\n\n"
+                "**参考文档：** [GPU 云主机部署检查清单](/document-viewer?docId=doc-3b827aafcdff&title=GPU%20%E4%BA%91%E4%B8%BB%E6%9C%BA%E9%83%A8%E7%BD%B2%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95)"
             ),
             token_estimate=350,
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-3b827aafcdff", title="GPU 云主机部署检查清单", url="/document-viewer?docId=doc-3b827aafcdff&title=GPU%20%E4%BA%91%E4%B8%BB%E6%9C%BA%E9%83%A8%E7%BD%B2%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95"),
+                FaqDocumentRef(doc_id="doc-06b6fb231fd3", title="GPU Release Checklist", url="/document-viewer?docId=doc-06b6fb231fd3&title=GPU%20Release%20Checklist"),
+            ],
         ),
         FaqEntry(
             question="最便宜的云服务器多少钱",
@@ -166,9 +296,14 @@ def build_faqs() -> list[FaqEntry]:
                 "| gn8.xlarge (H100×1) | ¥24,750 | — | H100 |\n"
                 "| gn8.4xlarge (H100×4) | ¥99,000 | ¥83,160 | H100 |\n"
                 "| gn8.8xlarge (H100×8) | ¥198,000 | ¥166,320 | H100 |\n\n"
-                "当前 GPU 新客首购享 7 折优惠，可与包年折扣叠加。"
+                "当前 GPU 新客首购享 7 折优惠，可与包年折扣叠加。\n\n"
+                "**参考文档：** [GPU Release Checklist](/document-viewer?docId=doc-06b6fb231fd3&title=GPU%20Release%20Checklist) · [GPU 发布检查清单](/document-viewer?docId=doc-2e00bc4bbfb6&title=GPU%20%E5%8F%91%E5%B8%83%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95)"
             ),
             token_estimate=250,
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-06b6fb231fd3", title="GPU Release Checklist", url="/document-viewer?docId=doc-06b6fb231fd3&title=GPU%20Release%20Checklist"),
+                FaqDocumentRef(doc_id="doc-2e00bc4bbfb6", title="GPU 发布检查清单", url="/document-viewer?docId=doc-2e00bc4bbfb6&title=GPU%20%E5%8F%91%E5%B8%83%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95"),
+            ],
         ),
 
         # ── 产品对比/选型 ───────────────────────────────────────────
@@ -193,9 +328,14 @@ def build_faqs() -> list[FaqEntry]:
                 "**中等规模训练（7B-70B 模型）**\n- GI4 + L40S：¥21,000/月起，L40S 推理和训练兼顾\n\n"
                 "**大规模训练（70B+ 模型）**\n- GN8 + H100：¥24,750/月起，NVLink 高速互联，8×H100 可达 198k/月\n\n"
                 "推荐搭配：1 台 GPU 做训练 + 2 台通用型 ECS 做数据预处理/控制节点，混合套餐享 8 折。\n\n"
-                "AI 创业团队可申请 ¥10,000 算力补贴。"
+                "AI 创业团队可申请 ¥10,000 算力补贴。\n\n"
+                "**参考文档：** [GPU 云主机部署检查清单](/document-viewer?docId=doc-3b827aafcdff&title=GPU%20%E4%BA%91%E4%B8%BB%E6%9C%BA%E9%83%A8%E7%BD%B2%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95) · [GPU 发布检查清单](/document-viewer?docId=doc-2e00bc4bbfb6&title=GPU%20%E5%8F%91%E5%B8%83%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95)"
             ),
             token_estimate=250,
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-3b827aafcdff", title="GPU 云主机部署检查清单", url="/document-viewer?docId=doc-3b827aafcdff&title=GPU%20%E4%BA%91%E4%B8%BB%E6%9C%BA%E9%83%A8%E7%BD%B2%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95"),
+                FaqDocumentRef(doc_id="doc-2e00bc4bbfb6", title="GPU 发布检查清单", url="/document-viewer?docId=doc-2e00bc4bbfb6&title=GPU%20%E5%8F%91%E5%B8%83%E6%A3%80%E6%9F%A5%E6%B8%85%E5%8D%95"),
+            ],
         ),
         FaqEntry(
             question="建网站用什么服务器",
@@ -273,9 +413,14 @@ def build_faqs() -> list[FaqEntry]:
                 "3. 提交后进入审核，通常 5-20 个工作日\n"
                 "4. 审核通过后获得 ICP 备案号，需在网站底部展示\n\n"
                 "注意事项：\n- 域名需已完成实名认证\n- 服务器需在大陆地域（上海/北京/广州）\n- 备案期间网站不可访问\n\n"
-                "如需帮助可在控制台直接提交 ICP 申请。"
+                "如需帮助可在控制台直接提交 ICP 申请。\n\n"
+                "**参考文档：** [ICP 备案交接说明](/document-viewer?docId=doc-cfedf30701b9&title=ICP%20%E5%A4%87%E6%A1%88%E4%BA%A4%E6%8E%A5%E8%AF%B4%E6%98%8E) · [ICP备案资料准备说明](/document-viewer?docId=doc-d57a0b6774e1&title=ICP%E5%A4%87%E6%A1%88%E8%B5%84%E6%96%99%E5%87%86%E5%A4%87%E8%AF%B4%E6%98%8E)"
             ),
             token_estimate=200,
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-cfedf30701b9", title="ICP 备案交接说明", url="/document-viewer?docId=doc-cfedf30701b9&title=ICP%20%E5%A4%87%E6%A1%88%E4%BA%A4%E6%8E%A5%E8%AF%B4%E6%98%8E"),
+                FaqDocumentRef(doc_id="doc-d57a0b6774e1", title="ICP备案资料准备说明", url="/document-viewer?docId=doc-d57a0b6774e1&title=ICP%E5%A4%87%E6%A1%88%E8%B5%84%E6%96%99%E5%87%86%E5%A4%87%E8%AF%B4%E6%98%8E"),
+            ],
         ),
 
         # ── 运维/技术 ───────────────────────────────────────────────
@@ -343,9 +488,13 @@ def build_faqs() -> list[FaqEntry]:
                 "2. 找到需要开票的订单，点击「申请发票」\n"
                 "3. 填写发票抬头（个人/企业）和税号\n"
                 "4. 提交后，电子发票将在 1-3 个工作日内发送至您的邮箱\n\n"
-                "如需增值税专用发票，请联系客服提供企业资质。"
+                "如需增值税专用发票，请联系客服提供企业资质。\n\n"
+                "**参考文档：** [账单与发票处理基线](/document-viewer?docId=doc-bd52914b7ccb&title=%E8%B4%A6%E5%8D%95%E4%B8%8E%E5%8F%91%E7%A5%A8%E5%A4%84%E7%90%86%E5%9F%BA%E7%BA%BF)"
             ),
             token_estimate=120,
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-bd52914b7ccb", title="账单与发票处理基线", url="/document-viewer?docId=doc-bd52914b7ccb&title=%E8%B4%A6%E5%8D%95%E4%B8%8E%E5%8F%91%E7%A5%A8%E5%A4%84%E7%90%86%E5%9F%BA%E7%BA%BF"),
+            ],
         ),
         FaqEntry(
             question="如何退款",
@@ -399,7 +548,17 @@ def build_faqs() -> list[FaqEntry]:
         ),
         FaqEntry(
             question="如何创建云服务器实例",
-            aliases=["创建ECS", "创建云服务器", "新建实例", "创建服务器", "开机器", "创建实例"],
+            aliases=[
+                "创建ECS",
+                "创建云服务器",
+                "新建实例",
+                "创建服务器",
+                "创建服务器实例",
+                "如何创建服务器实例",
+                "如何创建服务器示例",
+                "开机器",
+                "创建实例",
+            ],
             answer=(
                 "创建云服务器实例步骤：\n\n"
                 "1. 登录 SmartCloud 控制台，进入「云服务器」页面\n"
@@ -412,15 +571,16 @@ def build_faqs() -> list[FaqEntry]:
                 "8. 设置登录方式：密钥对或密码\n"
                 "9. 确认配置和费用，点击「确认创建」\n"
                 "10. 等待实例状态变为「运行中」，即可远程连接使用\n\n"
-                "创建完成后建议：设置安全组规则、配置自动快照策略、绑定 SLB 实现高可用。"
+                "创建完成后建议：设置安全组规则、配置自动快照策略、绑定 SLB 实现高可用。\n\n"
+                "**参考文档：** [如何创建云服务器实例](/document-viewer?docId=doc-910a1aca4b50&title=%E5%A6%82%E4%BD%95%E5%88%9B%E5%BB%BA%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E5%AE%9E%E4%BE%8B)"
             ),
             token_estimate=280,
             category="operations",
-            document_refs=[
-                FaqDocumentRef(doc_id="doc-910a1aca4b50", title="如何创建云服务器实例"),
-            ],
             prerequisites=["已注册 SmartCloud 账户并完成实名认证", "账户余额充足或已开通按量付费"],
             related_topics=["最便宜的云服务器多少钱", "你们有哪些云服务器", "怎么重置服务器密码", "数据盘怎么挂载"],
+            document_refs=[
+                FaqDocumentRef(doc_id="doc-910a1aca4b50", title="如何创建云服务器实例", url="/document-viewer?docId=doc-910a1aca4b50&title=%E5%A6%82%E4%BD%95%E5%88%9B%E5%BB%BA%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E5%AE%9E%E4%BE%8B"),
+            ],
         ),
 
         FaqEntry(

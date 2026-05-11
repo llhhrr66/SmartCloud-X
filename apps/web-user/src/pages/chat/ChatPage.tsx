@@ -6,6 +6,7 @@ import {
   Wallet, Code, Globe, Megaphone, MessageSquareQuote,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/Button";
 import { Empty, Loading } from "@/components/ui/Empty";
 import { Avatar } from "@/components/ui/Avatar";
@@ -18,7 +19,7 @@ import { notifyError, notifySuccess } from "@/lib/errors";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { NewConversationModal } from "./NewConversationModal";
-import type { ChatCompletionRequest, ChatMessage, ConversationSummary } from "@smartcloud-x/frontend-sdk/web-user";
+import type { ChatCompletionRequest, ChatMessage, ConversationSummary, FaqDocumentRef } from "@smartcloud-x/frontend-sdk/web-user";
 import { getAgentMeta } from "./agentMeta";
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -188,6 +189,21 @@ export default function ChatPage() {
     try {
       for await (const ev of chatApi.streamCompletion(req)) {
         applyStreamEvent(ev);
+      }
+      const finalStream = useChatStore.getState().streaming;
+      if (finalStream.content.trim()) {
+        appendMessage(convId, {
+          id: `a-${messageId}`,
+          messageId: `a-${messageId}`,
+          conversationId: convId,
+          role: "assistant",
+          messageType: "text",
+          content: finalStream.content,
+          status: "completed",
+          createdAt: new Date().toISOString(),
+          agentName: finalStream.agent,
+          documentRefs: finalStream.documentRefs?.length ? finalStream.documentRefs : undefined,
+        });
       }
       finishStreaming("done");
     } catch (e) {
@@ -504,7 +520,7 @@ function MessageStream({
   return (
     <div ref={containerRef} className="mx-auto flex max-w-3xl flex-col gap-5">
       {messages.map((m) => (
-        <MessageBubble key={m.id} role={m.role} content={m.content} agentName={m.agentName} userName={userName} />
+        <MessageBubble key={m.id} role={m.role} content={m.content} agentName={m.agentName} userName={userName} documentRefs={m.documentRefs} />
       ))}
       {streaming.status === "running" && (
         <MessageBubble
@@ -513,6 +529,7 @@ function MessageStream({
           agentName={streaming.agent}
           userName={userName}
           streaming
+          documentRefs={streaming.documentRefs}
         />
       )}
     </div>
@@ -578,13 +595,14 @@ function ConversationIntro({
 }
 
 function MessageBubble({
-  role, content, agentName, userName, streaming,
+  role, content, agentName, userName, streaming, documentRefs,
 }: {
   role: string;
   content: string;
   agentName?: string;
   userName: string;
   streaming?: boolean;
+  documentRefs?: import("@smartcloud-x/frontend-sdk/web-user").FaqDocumentRef[];
 }) {
   const isUser = role === "user";
   const displayContent = isUser ? content : normalizeAssistantDisplayContent(content, agentName);
@@ -610,7 +628,42 @@ function MessageBubble({
             <div className="whitespace-pre-wrap text-sm leading-6">{displayContent}</div>
           ) : (
             <div className="markdown text-sm">
-              <ReactMarkdown>{displayContent || "…"}</ReactMarkdown>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node: _node, ...props }) => (
+                    <a {...props} target="_blank" rel="noreferrer" />
+                  ),
+                  table: ({ node: _node, ...props }) => (
+                    <div className="my-3 overflow-x-auto rounded-lg border border-slate-200">
+                      <table {...props} className="min-w-full text-sm" />
+                    </div>
+                  ),
+                  th: ({ node: _node, ...props }) => (
+                    <th {...props} className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs font-semibold text-slate-600" />
+                  ),
+                  td: ({ node: _node, ...props }) => (
+                    <td {...props} className="border-b border-slate-100 px-3 py-2 text-slate-700" />
+                  ),
+                }}
+              >
+                {(displayContent || "…")}
+              </ReactMarkdown>
+              {documentRefs?.length ? (
+                <div className="mt-3 border-t border-slate-100 pt-2">
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">参考文档</span>
+                  <div className="mt-1 flex flex-col gap-1">
+                    {documentRefs.map((ref) => {
+                      const href = ref.url ?? `/document-viewer?docId=${encodeURIComponent(ref.docId)}&title=${encodeURIComponent(ref.title)}`;
+                      return (
+                        <a key={ref.docId} href={href} target="_blank" rel="noreferrer" className="text-xs text-brand-600 hover:underline">
+                          {ref.title}
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </div>

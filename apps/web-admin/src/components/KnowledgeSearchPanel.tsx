@@ -6,6 +6,11 @@ type KnowledgeSearchPanelProps = {
 };
 
 export function KnowledgeSearchPanel({ payload, loading }: KnowledgeSearchPanelProps) {
+  const queryTokens = payload?.queryTokens ?? [];
+  const sourceBreakdown = payload?.sourceBreakdown ?? [];
+  const tagBreakdown = payload?.tagBreakdown ?? [];
+  const results = payload?.results ?? [];
+
   return (
     <section className="result-box">
       <div className="section-header compact">
@@ -20,8 +25,8 @@ export function KnowledgeSearchPanel({ payload, loading }: KnowledgeSearchPanelP
 
       <p className="service-note">Query tokens</p>
       <div className="badge-list">
-        {payload?.queryTokens.length ? (
-          payload.queryTokens.map((term) => (
+        {queryTokens.length ? (
+          queryTokens.map((term) => (
             <span className="badge" key={term}>
               {term}
             </span>
@@ -35,8 +40,8 @@ export function KnowledgeSearchPanel({ payload, loading }: KnowledgeSearchPanelP
         <div>
           <p className="service-note">Matching sources</p>
           <div className="overview-source-list">
-            {payload?.sourceBreakdown.length ? (
-              payload.sourceBreakdown.map((source) => (
+            {sourceBreakdown.length ? (
+              sourceBreakdown.map((source) => (
                 <article className="overview-source-card" key={source.sourceId}>
                   <strong>{source.sourceName}</strong>
                   <span>{source.resultCount} hits</span>
@@ -51,8 +56,8 @@ export function KnowledgeSearchPanel({ payload, loading }: KnowledgeSearchPanelP
         <div>
           <p className="service-note">Matching tags</p>
           <div className="badge-list">
-            {payload?.tagBreakdown.length ? (
-              payload.tagBreakdown.map((bucket) => (
+            {tagBreakdown.length ? (
+              tagBreakdown.map((bucket) => (
                 <span className="badge badge-secondary" key={bucket.label}>
                   {bucket.label} · {bucket.count}
                 </span>
@@ -75,8 +80,8 @@ export function KnowledgeSearchPanel({ payload, loading }: KnowledgeSearchPanelP
             </tr>
           </thead>
           <tbody>
-            {payload?.results.length ? (
-              payload.results.map((result) => (
+            {results.length ? (
+              results.map((result) => (
                 <tr key={result.chunk.id}>
                   <td>
                     <strong>{result.chunk.documentTitle}</strong>

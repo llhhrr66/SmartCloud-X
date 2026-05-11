@@ -315,6 +315,7 @@ class RetrievalResult(BaseModel):
 class FaqDocumentRef(BaseModel):
     docId: str
     title: str
+    url: str | None = None
 
 
 class FaqMetadata(BaseModel):
@@ -550,6 +551,7 @@ class StreamEventRecord(BaseModel):
         "tool_result",
         "delta",
         "citation",
+        "faq",
         "done",
         "message.error",
     ]

@@ -31,21 +31,21 @@ export function ActivityFeed({ ingestions, sources, documents }: ActivityFeedPro
       ) : (
         <div className="activity-list">
           {ingestions.map((job) => (
-            <article className="activity-item" key={job.id}>
+            <article className="activity-item" key={job.id ?? job.job_id}>
               <div className="activity-header">
                 <div>
-                  <strong>{sourceNameFor(job.sourceId)}</strong>
-                  <p className="service-note">Document: {documentTitleFor(job.documentId)}</p>
+                  <strong>{sourceNameFor(job.sourceId ?? job.source_id ?? "unknown-source")}</strong>
+                  <p className="service-note">Document: {documentTitleFor(job.documentId ?? job.document_id ?? "unknown-document")}</p>
                 </div>
                 <span className="pill">
-                  {job.status} · {job.chunksCreated} chunks
+                  {job.status} · {job.chunksCreated ?? job.chunks_created ?? 0} chunks
                 </span>
               </div>
               <p className="service-note">
-                {new Date(job.completedAt).toLocaleString()} · {job.documentsReceived} document received
+                {new Date(job.completedAt ?? job.completed_at ?? job.created_at).toLocaleString()} · {job.documentsReceived ?? job.documents_received ?? 0} document received
               </p>
-              {job.warnings.length > 0 ? (
-                <p className="warning-note">{job.warnings.join(", ")}</p>
+              {(job.warnings ?? []).length > 0 ? (
+                <p className="warning-note">{(job.warnings ?? []).join(", ")}</p>
               ) : null}
             </article>
           ))}

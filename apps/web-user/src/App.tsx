@@ -10,6 +10,7 @@ import { AccountPage } from './pages/AccountPage';
 import { BillingPage } from './pages/BillingPage';
 import { ChatPage } from './pages/ChatPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { DocumentViewerPage } from './pages/DocumentViewerPage';
 import { IcpPage } from './pages/IcpPage';
 import { LoginPage } from './pages/LoginPage';
 import { MarketingPage } from './pages/MarketingPage';
@@ -103,6 +104,7 @@ function AppRoutes(): JSX.Element {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/document-viewer" element={<DocumentViewerPage />} />
       <Route element={<ProtectedLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/profile" element={<AccountPage />} />

@@ -138,6 +138,7 @@ export interface ChatMessage {
   status: MessageStatus;
   citations?: Citation[];
   toolCalls?: ToolCallRecord[];
+  documentRefs?: FaqDocumentRef[];
   finishReason?: string;
   updatedAt?: string;
 }
@@ -187,6 +188,21 @@ export interface RetrievalSource {
   chunkId: string;
   score: number;
   title: string;
+}
+
+export interface FaqDocumentRef {
+  docId: string;
+  title: string;
+  url?: string;
+}
+
+export interface FaqEventPayload {
+  category?: string | null;
+  prerequisites?: string[];
+  documentRefs?: FaqDocumentRef[];
+  relatedTopics?: string[];
+  matchReason?: string | null;
+  tokenSaved?: number;
 }
 
 export interface ChatMetaPayload {
@@ -265,6 +281,7 @@ export type ChatStreamEvent =
   | SharedChatStreamEvent<'retrieval', ChatRetrievalPayload>
   | SharedChatStreamEvent<'delta', ChatDeltaPayload>
   | SharedChatStreamEvent<'citation', ChatCitationPayload>
+  | SharedChatStreamEvent<'faq', FaqEventPayload>
   | SharedChatStreamEvent<'done', ChatDonePayload>
   | SharedChatStreamEvent<'error', ChatErrorPayload>
   | SharedChatStreamEvent<'action_required', ChatActionRequiredPayload>

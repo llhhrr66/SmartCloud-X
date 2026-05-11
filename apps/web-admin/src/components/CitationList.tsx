@@ -30,13 +30,13 @@ export function CitationList({ citations, coverageNotes, degraded }: CitationLis
           {citations.map((citation) => (
             <article className="citation-card" key={citation.chunkId}>
               <div className="citation-topline">
-                <strong>{citation.documentTitle}</strong>
-                <span>{citation.score.toFixed(2)}</span>
+                <strong>{citation.documentTitle ?? citation.title ?? citation.chunkId ?? "Untitled citation"}</strong>
+                <span>{(citation.score ?? 0).toFixed(2)}</span>
               </div>
               <p className="service-note">
-                {citation.sourceName} · {citation.reasoning}
+                {citation.sourceName ?? "-"} · {citation.reasoning ?? "-"}
               </p>
-              <p>{citation.snippet}</p>
+              <p>{citation.snippet ?? citation.content ?? "-"}</p>
             </article>
           ))}
         </div>

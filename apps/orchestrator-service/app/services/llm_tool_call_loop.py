@@ -79,9 +79,23 @@ class LLMToolCallLoop:
             logger.warning("no tools available for %s; skipping LLM tool loop", agent)
             return [], None
 
-        messages: list[dict[str, Any]] = [
-            {"role": "user", "content": user_query},
-        ]
+        # Build initial messages list with conversation history
+        messages: list[dict[str, Any]] = []
+
+        # Inject recent conversation history so the LLM has context
+        recent = getattr(working_context, "recent_messages", None) or []
+        # Limit to the last 20 messages (10 turns) to avoid blowing the context window
+        for hist_msg in recent[-20:]:
+            role = hist_msg.get("role", "user")
+            content = hist_msg.get("content", "")
+            if not content:
+                continue
+            # Only include user and assistant messages (skip tool/system)
+            if role in ("user", "assistant"):
+                messages.append({"role": role, "content": str(content)})
+
+        messages.append({"role": "user", "content": user_query})
+
         tool_calls: list[ToolInvocation] = []
         max_rounds = self._settings.max_tool_call_rounds
 

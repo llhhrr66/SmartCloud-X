@@ -481,8 +481,8 @@ services:
 
   web-admin:
     build:
-      context: ../../apps/web-admin
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: apps/web-admin/Dockerfile
       args:
         VITE_KNOWLEDGE_SERVICE_BASE_URL: ${VITE_KNOWLEDGE_SERVICE_BASE_URL:-http://localhost:8031/api/knowledge/v1}
         VITE_RAG_SERVICE_BASE_URL: ${VITE_RAG_SERVICE_BASE_URL:-http://localhost:8040/api/rag/v1}

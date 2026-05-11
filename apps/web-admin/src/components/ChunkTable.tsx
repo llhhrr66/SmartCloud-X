@@ -59,9 +59,9 @@ export function ChunkTable({ chunks, selectedDocument, loading }: ChunkTableProp
                   <td>{chunk.ordinal}</td>
                   <td>
                     <strong>{chunk.documentTitle}</strong>
-                    <div className="table-note">{chunk.content.slice(0, 180)}...</div>
+                    <div className="table-note">{(chunk.content ?? chunk.content_preview ?? "").slice(0, 180)}...</div>
                   </td>
-                  <td>{chunk.keywords.join(", ") || "-"}</td>
+                  <td>{(chunk.keywords ?? []).join(", ") || "-"}</td>
                   <td>{chunk.tags.join(", ") || "-"}</td>
                   <td>{chunk.tokenEstimate}</td>
                 </tr>

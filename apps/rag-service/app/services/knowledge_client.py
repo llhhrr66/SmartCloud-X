@@ -66,3 +66,27 @@ class KnowledgeServiceClient:
             if span is not None:
                 span.set_attribute("smartcloud.upstream.result_count", len(parsed.results))
             return parsed.results
+
+    async def list_documents(self, headers: dict[str, str] | None = None) -> list[dict]:
+        """Return all knowledge-service documents for FAQ cache bootstrap."""
+        outbound_headers = inject_current_context(dict(headers or {}))
+        async with httpx.AsyncClient(
+            timeout=self.settings.request_timeout_ms / 1000,
+            trust_env=False,
+        ) as client:
+            response = await client.get(
+                f"{self.settings.knowledge_service_base_url.rstrip('/')}"
+                f"{self.settings.knowledge_service_api_prefix}/documents",
+                headers=outbound_headers,
+            )
+            response.raise_for_status()
+        try:
+            envelope = response.json()
+        except ValueError as exc:
+            raise KnowledgeServiceProtocolError("knowledge-service returned invalid JSON") from exc
+        if not isinstance(envelope, dict):
+            raise KnowledgeServiceProtocolError("knowledge-service returned a non-object envelope")
+        data = envelope.get("data")
+        if not isinstance(data, list):
+            raise KnowledgeServiceProtocolError("knowledge-service documents payload is not a list")
+        return [item for item in data if isinstance(item, dict)]

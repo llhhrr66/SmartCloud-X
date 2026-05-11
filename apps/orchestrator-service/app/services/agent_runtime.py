@@ -119,7 +119,15 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
                             {"role": "user", "content": request.user_query},
                         ])
                         self._token_counter.calibrate(est, usage.prompt_tokens)
+                # The llm_loop already has full conversation context in its messages,
+                # so use its answer directly instead of making a second LLM call
+                # that would lose the conversation history.
+                if llm_answer:
+                    use_llm_answer = True
+                else:
+                    use_llm_answer = False
             else:
+                use_llm_answer = False
                 tool_plan = [item for item in route.tool_plan if item.assigned_agent == task.agent]
                 tool_calls, timed_out = self._execute_tool_plan(
                     tool_plan,
@@ -191,15 +199,21 @@ class AgentRuntime(_AgentToolExecutionMixin, _AgentRetrievalMixin):
             fallback_answer = render_baseline_final_answer(
                 task.agent, request.user_query, tool_calls, status, effective_next_agent
             )
-            final_answer = self._render_final_answer(
-                agent=task.agent,
-                user_query=request.user_query,
-                tool_calls=tool_calls,
-                status=status,
-                next_agent=effective_next_agent,
-                fallback_answer=fallback_answer,
-                compacted_history=compacted_history,
-            )
+            if use_llm_answer:
+                # The LLM tool call loop already produced a final answer with
+                # full conversation history context — use it directly instead
+                # of making a second LLM call that would lose that context.
+                final_answer = llm_answer
+            else:
+                final_answer = self._render_final_answer(
+                    agent=task.agent,
+                    user_query=request.user_query,
+                    tool_calls=tool_calls,
+                    status=status,
+                    next_agent=effective_next_agent,
+                    fallback_answer=fallback_answer,
+                    compacted_history=compacted_history,
+                )
             execution = AgentExecutionResult(
                 agent=task.agent,
                 status=status,

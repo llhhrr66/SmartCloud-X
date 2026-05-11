@@ -98,6 +98,8 @@ def build_sse_event_records(
             )
         if execution.final_answer:
             _append("delta", {"content": execution.final_answer})
+        if execution.faq_metadata is not None:
+            _append("faq", execution.faq_metadata.model_dump(mode="json"))
         fresh_citations = _build_fresh_citation_entries(execution, emitted_citation_ids)
         if fresh_citations:
             emitted_citation_ids.extend(entry["id"] for entry in fresh_citations)

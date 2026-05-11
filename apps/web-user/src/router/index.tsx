@@ -6,6 +6,7 @@ import { Loading } from "@/components/ui/Empty";
 
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
 const ForgotPasswordPage = lazy(() => import("@/pages/auth/ForgotPasswordPage"));
+const DocumentViewerPage = lazy(() => import("@/pages/DocumentViewerPage").then((module) => ({ default: module.DocumentViewerPage })));
 
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const ChatPage = lazy(() => import("@/pages/chat/ChatPage"));
@@ -53,6 +54,10 @@ export const router = createBrowserRouter([
   {
     path: "/forgot-password",
     element: <RedirectIfAuthed>{wrap(<ForgotPasswordPage />)}</RedirectIfAuthed>,
+  },
+  {
+    path: "/document-viewer",
+    element: wrap(<DocumentViewerPage />),
   },
   {
     path: "/",

@@ -63,7 +63,10 @@ export interface KnowledgeBaseRecord {
 }
 
 export interface KnowledgeDocumentRecord {
+  id?: string;
   doc_id: string;
+  sourceId?: string;
+  source_id?: string;
   kb_id: string;
   title: string;
   status: string;
@@ -79,16 +82,29 @@ export interface KnowledgeDocumentRecord {
   indexed_at?: string | null;
 }
 
+export type DocumentRecord = KnowledgeDocumentRecord;
+
 export interface KnowledgeChunkRecord {
+  id?: string;
   chunk_id: string;
+  documentId?: string;
+  document_id?: string;
+  documentTitle?: string;
+  document_title?: string;
+  ordinal?: number;
   doc_id: string;
   position: number;
+  content?: string;
   content_preview: string;
+  tokenEstimate?: number;
   token_count: number;
+  keywords?: string[];
   score?: number | null;
   tags: string[];
   updated_at?: string | null;
 }
+
+export type ChunkRecord = KnowledgeChunkRecord;
 
 export interface DocumentDetail {
   document: KnowledgeDocumentRecord;
@@ -102,17 +118,33 @@ export interface DocumentDetail {
 }
 
 export interface AdminJob {
+  id?: string;
   job_id: string;
+  sourceId?: string;
+  source_id?: string;
+  documentId?: string;
+  document_id?: string;
   type: string;
   status: string;
   progress: number;
+  documentsReceived?: number;
+  documents_received?: number;
+  chunksCreated?: number;
+  chunks_created?: number;
+  warnings?: string[];
   created_at: string;
+  completedAt?: string | null;
+  completed_at?: string | null;
   params?: Record<string, unknown> | null;
   result_file_id?: string | null;
   error_code?: string | null;
   error_message?: string | null;
   finished_at?: string | null;
 }
+
+export type AdminAsyncJob = AdminJob;
+export type IngestionJob = AdminJob;
+export type AdminDocumentRecord = KnowledgeDocumentRecord;
 
 export interface UploadRecord {
   upload_id: string;
@@ -133,6 +165,14 @@ export interface UploadRecord {
 
 export interface SearchPreviewResult {
   query: string;
+  queryTokens?: string[];
+  sourceBreakdown?: Array<{
+    sourceId: string;
+    sourceName: string;
+    resultCount: number;
+    bestScore: number;
+  }>;
+  tagBreakdown?: Array<{ label: string; count: number }>;
   rewritten_query?: string | null;
   total: number;
   degraded: boolean;
@@ -146,7 +186,19 @@ export interface SearchPreviewResult {
     source_type?: string | null;
     tags: string[];
   }>;
+  results?: Array<{
+    chunk: {
+      id: string;
+      documentTitle: string;
+      content: string;
+    };
+    sourceName: string;
+    score: number;
+    matchReason: string;
+  }>;
 }
+
+export type KnowledgeSearchPayload = SearchPreviewResult;
 
 export interface RetrievalDiagnosticResult {
   query?: string;
@@ -197,21 +249,90 @@ export interface AuditRecord {
   created_at: string;
 }
 
+export type AdminAuditRecord = AuditRecord;
+
 export interface HealthPayload {
   service?: string;
   status?: string;
   ready?: boolean;
   warnings?: string[];
+  counts?: Record<string, string | number>;
+  knowledgeServiceBaseUrl?: string;
+  knowledgeServiceApiPrefix?: string;
+  requestTimeoutMs?: string | number;
+  dataPath?: string;
+  starterCatalogPath?: string;
+  auditPath?: string;
+  importRoot?: string;
+  maxImportFiles?: string | number;
+  corsAllowedOrigins?: string[];
+  upstream?: {
+    status?: string;
+    reachable?: boolean;
+    ready?: boolean;
+    latencyMs?: number;
+    error?: string;
+  };
+  readinessChecks?: Array<{
+    name: string;
+    status: string;
+    detail: string;
+  }>;
   [key: string]: unknown;
 }
 
 export interface RuntimeSnapshot {
   overview?: Record<string, unknown>;
-  integrations?: Record<string, unknown>;
+  integrations?: {
+    pendingEvents?: number;
+    outboxPath?: string;
+    rawMirrorRoot?: string;
+    eventCounters?: Record<string, number>;
+    rawStorage: ConnectorStatus;
+    metadataStore: ConnectorStatus;
+    vectorStore: ConnectorStatus;
+    bm25Store: ConnectorStatus;
+    cache: ConnectorStatus;
+    taskQueue: ConnectorStatus;
+    recentEvents: RuntimeEvent[];
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
+export interface ConnectorStatus {
+  backend: string;
+  configured: boolean;
+  target?: string;
+  endpoint?: string;
+}
+
+export interface RuntimeEvent {
+  eventId: string;
+  operation: string;
+  docId: string;
+  status: string;
+  queueName: string;
+  chunkCount: number;
+  createdAt: string;
+  processorId?: string;
+  attemptCount?: number;
+  lastError?: string;
+  vectorTarget?: string | null;
+  bm25Target?: string | null;
+  rawObject: {
+    storageKind: string;
+  };
+  connectorResults?: Array<{
+    connector: string;
+    status: string;
+  }>;
+}
+
+export type KnowledgeRuntimeSnapshot = RuntimeSnapshot;
+
 export interface LegacySource {
+  id?: string;
   sourceId?: string;
   source_id?: string;
   name: string;
@@ -220,6 +341,8 @@ export interface LegacySource {
   tags?: string[];
   [key: string]: unknown;
 }
+
+export type SourceRecord = LegacySource;
 
 /** Full document content from knowledge-service, used by the document viewer. */
 export interface KnowledgeDocumentContent {
@@ -247,6 +370,7 @@ export interface KnowledgeDocumentContent {
 export interface FaqDocumentRef {
   docId: string;
   title: string;
+  url?: string;
 }
 
 /** Structured FAQ metadata returned alongside an L1 FAQ cache hit. */
@@ -258,3 +382,74 @@ export interface FaqMetadata {
   matchReason?: string | null;
   tokenSaved?: number;
 }
+
+export type KnowledgeOverview = {
+  counts: Record<string, number>;
+  averageChunksPerDocument: number;
+  latestIngestionAt?: string | null;
+  sourcesByKind: Array<{ label: string; count: number }>;
+  topTags: Array<{ label: string; count: number }>;
+  documentLanguages: Array<{ label: string; count: number }>;
+  largestSources: Array<{
+    sourceId: string;
+    sourceName: string;
+    kind: string;
+    documentCount: number;
+    chunkCount: number;
+    updatedAt?: string;
+    tags?: string[];
+  }>;
+  recentIngestions?: unknown[];
+};
+
+export type FileImportPreviewItem = {
+  path: string;
+  title: string;
+  extension: string;
+  sizeBytes: number;
+  importable: boolean;
+  note?: string | null;
+};
+
+export type FileImportPreviewPayload = {
+  importRoot: string;
+  directory: string;
+  glob: string;
+  matchedFiles: number;
+  importableFiles: number;
+  items: FileImportPreviewItem[];
+};
+
+export type FileImportPayload = {
+  importRoot: string;
+  directory: string;
+  glob: string;
+  source: LegacySource;
+  processedFiles: number;
+  importedFiles: number;
+  reusedFiles: number;
+  failedFiles: number;
+  results: Array<{
+    path: string;
+    title: string;
+    status: string;
+    documentId?: string | null;
+    chunksCreated?: number;
+    warning?: string | null;
+    error?: string | null;
+  }>;
+};
+
+export type RetrievalCitation = {
+  title?: string;
+  documentTitle?: string;
+  chunkId?: string;
+  sourceName?: string;
+  score?: number;
+  content?: string;
+  snippet?: string;
+  reasoning?: string;
+  [key: string]: unknown;
+};
+
+export type AdminDocumentDetailPayload = DocumentDetail;

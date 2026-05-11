@@ -127,8 +127,23 @@ class Settings(BaseModel):
     faq_cache_min_confidence: float = Field(
         default_factory=lambda: float(os.getenv("SMARTCLOUD_FAQ_CACHE_MIN_CONFIDENCE", "0.8"))
     )
+    faq_bm25_enabled: bool = Field(
+        default_factory=lambda: _parse_bool_env("SMARTCLOUD_FAQ_BM25_ENABLED", True)
+    )
+    faq_bm25_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("SMARTCLOUD_FAQ_BM25_THRESHOLD", "2.5"))
+    )
+    faq_tfidf_enabled: bool = Field(
+        default_factory=lambda: _parse_bool_env("SMARTCLOUD_FAQ_TFIDF_ENABLED", True)
+    )
+    faq_tfidf_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("SMARTCLOUD_FAQ_TFIDF_THRESHOLD", "0.45"))
+    )
     faq_bootstrap_file: str | None = Field(
         default_factory=lambda: os.getenv("SMARTCLOUD_FAQ_BOOTSTRAP_FILE")
+    )
+    faq_bootstrap_knowledge_documents: bool = Field(
+        default_factory=lambda: _parse_bool_env("SMARTCLOUD_FAQ_BOOTSTRAP_KNOWLEDGE_DOCUMENTS", True)
     )
     trace_enabled: bool = Field(default_factory=_default_trace_enabled)
     otlp_endpoint: str | None = Field(default_factory=_default_otlp_endpoint)

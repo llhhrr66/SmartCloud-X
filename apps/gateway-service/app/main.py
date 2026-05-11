@@ -17,6 +17,7 @@ from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
 from app.api.routes.marketing import router as marketing_router
 from app.api.routes.owner_local import router as owner_local_router
+from app.api.routes.public_knowledge import router as public_knowledge_router
 from app.api.routes.agent_sse import router as agent_sse_router
 from app.core.config import GatewaySettings
 from app.core.upstreams import UpstreamDefinition, build_upstream_registry
@@ -144,6 +145,7 @@ def create_app(
     app.include_router(admin_router)
     app.include_router(business_router)
     app.include_router(owner_local_router)
+    app.include_router(public_knowledge_router)
     app.include_router(agent_sse_router)
     return app
 

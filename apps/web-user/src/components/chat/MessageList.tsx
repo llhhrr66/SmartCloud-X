@@ -1,4 +1,4 @@
-import type { ChatMessage, Citation, ToolCallRecord } from '../../types/domain';
+import type { ChatMessage, Citation, FaqDocumentRef, ToolCallRecord } from '../../types/domain';
 import { formatDateTime, toolStatusLabel } from '../../lib/format';
 import { Badge } from '../Badge';
 
@@ -9,6 +9,7 @@ interface MessageListProps {
   streamingAgent?: string;
   streamingCitations: Citation[];
   streamingToolCalls: ToolCallRecord[];
+  streamingDocumentRefs: FaqDocumentRef[];
   onCitationSelect?: (citation: Citation) => void;
 }
 
@@ -42,6 +43,33 @@ function renderToolCalls(toolCalls?: ToolCallRecord[]): JSX.Element | null {
   );
 }
 
+function renderDocumentRefs(documentRefs?: FaqDocumentRef[]): JSX.Element | null {
+  if (!documentRefs?.length) {
+    return null;
+  }
+
+  return (
+    <div className="message__document-refs">
+      <span className="message__document-refs-label">参考文档</span>
+      {documentRefs.map((ref) => {
+        const href = ref.url ?? `/#/document-viewer?docId=${encodeURIComponent(ref.docId)}&title=${encodeURIComponent(ref.title)}`;
+        return (
+          <a
+            key={ref.docId}
+            className="message__document-ref"
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Badge tone="success">文档</Badge>
+            <span>{ref.title}</span>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 function renderCitations(citations?: Citation[], onCitationSelect?: (citation: Citation) => void): JSX.Element | null {
   if (!citations?.length) {
     return null;
@@ -71,6 +99,7 @@ export function MessageList({
   streamingAgent,
   streamingCitations,
   streamingToolCalls,
+  streamingDocumentRefs,
   onCitationSelect
 }: MessageListProps): JSX.Element {
   const displayMessages = [...messages];
@@ -87,7 +116,8 @@ export function MessageList({
       agentName: streamingAgent,
       status: 'running',
       citations: streamingCitations,
-      toolCalls: streamingToolCalls
+      toolCalls: streamingToolCalls,
+      documentRefs: streamingDocumentRefs
     });
   }
 
@@ -115,6 +145,7 @@ export function MessageList({
             <p>{message.content}</p>
             {message.status === 'running' ? <Badge tone="info">生成中</Badge> : null}
             {renderToolCalls(message.toolCalls)}
+            {renderDocumentRefs(message.documentRefs)}
             {renderCitations(message.citations, onCitationSelect)}
           </div>
         </article>
